@@ -1,4 +1,4 @@
-// Panic-only debug console over the PL011 UART (06-kernel-ddd.md Section 14): polled, not a service — the real console is a user driver.
+// Panic-only debug console over the PL011 UART (06-kernel-ddd.md Section 14): polled, not a service - the real console is a user driver.
 
 const board = @import("../arch/board/virt.zig");
 
@@ -40,7 +40,7 @@ pub fn debug_print(text: []const u8) void {
 
 }
 
-/// Print a 64-bit value as `0x`-prefixed, zero-padded hex — the one number format the fault diagnostics need.
+/// Print a 64-bit value as `0x`-prefixed, zero-padded hex - the one number format the fault diagnostics need.
 pub fn debug_print_hex(value: u64) void {
 
     const digits = "0123456789abcdef";

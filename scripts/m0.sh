@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# M0 test: boot under QEMU and check the "Done when" over serial — banner, then a deliberate fault diagnostic, then halt.
+# M0 test: boot under QEMU and check the "Done when" over serial - banner, then a deliberate fault diagnostic, then halt.
 
 set -euo pipefail
 

@@ -1,4 +1,4 @@
-// The kernel panic path (06-kernel-ddd.md Section 14): print a diagnostic over the debug console and stop the machine — no recovery.
+// The kernel panic path (06-kernel-ddd.md Section 14): print a diagnostic over the debug console and stop the machine - no recovery.
 
 const console = @import("console.zig");
 const arch = @import("../arch/arch.zig");

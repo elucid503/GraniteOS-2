@@ -1,4 +1,4 @@
-// aarch64 MMU enable: the M0 "initial mapping" (06-kernel-ddd.md Section 3/Section 5) — identity over the low 4 GiB, MMU on.
+// aarch64 MMU enable: the M0 "initial mapping" (06-kernel-ddd.md Section 3/Section 5) - identity over the low 4 GiB, MMU on.
 
 const entries_per_table = 512;
 
