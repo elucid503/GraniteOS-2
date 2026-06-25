@@ -1,4 +1,4 @@
-# GraniteOS
+# GraniteOS 2
 
 A from-scratch **microkernel** rewrite of GraniteOS for ARM64 (and, later,
 x86_64). The kernel keeps only address spaces, threads & scheduling, IPC,
