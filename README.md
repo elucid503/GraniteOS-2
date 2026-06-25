@@ -3,7 +3,7 @@
 A from-scratch **microkernel** rewrite of GraniteOS for ARM64 (and, later,
 x86_64). The kernel keeps only address spaces, threads & scheduling, IPC,
 interrupt dispatch, and capabilities; the filesystem and device drivers become
-user-space servers. See [`_docs/`](_docs) for the full design.
+user-space servers.
 
 ## Requirements
 
