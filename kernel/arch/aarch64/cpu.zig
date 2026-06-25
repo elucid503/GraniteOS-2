@@ -1,0 +1,68 @@
+// aarch64 CPU control: identity, barriers, and the low-power wait (the slice of 06-kernel-ddd.md Section 5 M0 needs).
+
+const build_options = @import("build_options");
+
+pub fn core_id() u32 {
+
+    const mpidr = asm volatile ("mrs %[out], mpidr_el1"
+
+        : [out] "=r" (-> u64),
+
+    );
+
+    return @truncate(mpidr & 0xff);
+
+}
+
+pub fn wait_for_event() void {
+
+    asm volatile ("wfe");
+
+}
+
+pub fn enable_interrupts() void {
+
+    asm volatile ("msr daifclr, #2");
+
+}
+
+pub fn disable_interrupts() void {
+
+    asm volatile ("msr daifset, #2");
+
+}
+
+/// Mask all interrupts and stop this core for good; the test build instead asks QEMU to exit so the check terminates.
+pub fn halt() noreturn {
+
+    if (build_options.@"test") {
+
+        semihosting_exit(0);
+
+    }
+
+    asm volatile ("msr daifset, #0xf");
+
+    while (true) {
+
+        asm volatile ("wfe");
+
+    }
+
+}
+
+// Angel SYS_EXIT semihosting call: with `-semihosting`, QEMU exits (0x2_0026 is the required ApplicationExit reason).
+fn semihosting_exit(code: u64) noreturn {
+
+    var block = [2]u64{ 0x2_0026, code };
+
+    asm volatile ("hlt #0xf000"
+        :
+        : [operation] "{x0}" (@as(u64, 0x18)),
+          [parameter] "{x1}" (&block),
+        : .{ .memory = true }
+    );
+
+    unreachable;
+
+}
