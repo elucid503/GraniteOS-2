@@ -4,7 +4,7 @@ const mmu = @import("mmu.zig");
 
 export fn kernel_boot(dtb: u64) callconv(.c) noreturn {
 
-    mmu.enable_initial_mapping();
+    mmu.enable_boot_mapping(dtb);
 
     @import("root").main(dtb);
 

@@ -87,6 +87,22 @@ pub fn build(b: *std.Build) void {
 
     });
 
+    // Host unit tests for the arch-independent core (06-kernel-ddd.md cross-cutting: zig test runs on the host, QEMU is for integration).
+
+    const host_tests = b.addTest(.{
+
+        .root_module = b.createModule(.{
+
+            .root_source_file = b.path("kernel/tests.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+
+        }),
+
+    });
+
+    b.step("test", "Run the host unit tests for the kernel core").dependOn(&b.addRunArtifact(host_tests).step);
+
 }
 
 const QemuStep = struct {

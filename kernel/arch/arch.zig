@@ -2,31 +2,41 @@
 
 const builtin = @import("builtin");
 
-pub const PhysAddr = usize;
-pub const VirtAddr = usize;
+const types = @import("../types.zig");
 
-const impl = switch (builtin.cpu.arch) {
+comptime {
 
-    .aarch64 => @import("aarch64/cpu.zig"),
-    else => @compileError("GraniteOS: unsupported architecture"),
+    if (builtin.cpu.arch != .aarch64) @compileError("GraniteOS: unsupported architecture");
 
-};
+}
 
-pub const core_id = impl.core_id;
-pub const wait_for_event = impl.wait_for_event;
-pub const enable_interrupts = impl.enable_interrupts;
-pub const disable_interrupts = impl.disable_interrupts;
-pub const halt = impl.halt;
+const cpu = @import("aarch64/cpu.zig");
+const mmu = @import("aarch64/mmu.zig");
+
+pub const PhysAddr = types.PhysAddr;
+pub const VirtAddr = types.VirtAddr;
+pub const Permissions = mmu.Permissions;
+
+pub const core_id = cpu.core_id;
+pub const wait_for_event = cpu.wait_for_event;
+pub const enable_interrupts = cpu.enable_interrupts;
+pub const disable_interrupts = cpu.disable_interrupts;
+pub const halt = cpu.halt;
+
+pub const new_table = mmu.new_table;
+pub const map_page = mmu.map_page;
+pub const unmap_page = mmu.unmap_page;
+pub const translate = mmu.translate;
+pub const activate_space = mmu.activate_space;
+pub const flush_tlb_page = mmu.flush_tlb_page;
+pub const free_table = mmu.free_table;
+pub const map_ram = mmu.map_ram;
 
 // Loads in the boot bridge and trap entry so their exported symbols (`kernel_boot`, `kernel_trap`) link against the assembly.
 
 comptime {
 
-    if (builtin.cpu.arch == .aarch64) {
-
-        _ = @import("aarch64/boot.zig");
-        _ = @import("aarch64/trap.zig");
-
-    }
+    _ = @import("aarch64/boot.zig");
+    _ = @import("aarch64/trap.zig");
 
 }
