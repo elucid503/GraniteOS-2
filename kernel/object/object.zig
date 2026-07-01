@@ -1,9 +1,19 @@
-// Common object header (06-kernel-ddd.md Section 7.1): kind + refcount driving the close-only lifecycle; M1 uses only the memory kinds.
+// Common object header (06-kernel-ddd.md Section 7.1): kind + refcount driving the close-only lifecycle.
 
 pub const Kind = enum(u8) {
 
+    process,
+    thread,
     address_space,
     region,
+
+    endpoint,
+    notification,
+    interrupt,
+
+    memory_authority,
+    interrupt_authority,
+    device_authority,
 
 };
 
@@ -27,6 +37,54 @@ pub const Object = struct {
     }
 
 };
+
+// The kind-erased free path: routes a dead object back to its type's slab (used by the handle table's close).
+
+const Process = @import("process.zig").Process;
+const Thread = @import("thread.zig").Thread;
+const AddressSpace = @import("../memory/address_space.zig").AddressSpace;
+const Region = @import("../memory/region.zig").Region;
+
+pub fn TypeOf(comptime kind: Kind) type {
+
+    return switch (kind) {
+
+        .process => Process,
+        .thread => Thread,
+        .address_space => AddressSpace,
+        .region => Region,
+
+        else => @compileError("object kind not built yet"),
+
+    };
+
+}
+
+pub fn destroy(object: *Object) void {
+
+    switch (object.kind) {
+
+        .process => container(Process, object).destroy(),
+        .thread => container(Thread, object).destroy(),
+        .address_space => container(AddressSpace, object).destroy(),
+        .region => container(Region, object).destroy(),
+
+        // The remaining kinds arrive with M3+.
+
+        else => unreachable,
+
+    }
+
+}
+
+// Recover the containing object; headers always sit in slab-allocated objects, so the cast holds.
+
+pub fn container(comptime T: type, object: *Object) *T {
+
+    const parent: *align(@alignOf(Object)) T = @fieldParentPtr("header", object);
+    return @alignCast(parent);
+
+}
 
 const testing = @import("std").testing;
 

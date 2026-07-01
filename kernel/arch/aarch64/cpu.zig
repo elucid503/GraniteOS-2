@@ -20,15 +20,36 @@ pub fn wait_for_event() void {
 
 }
 
+// The prior IRQ-mask state, so nested disable/restore pairs compose (06-kernel-ddd.md Section 5).
+
+pub const InterruptState = usize;
+
 pub fn enable_interrupts() void {
 
     asm volatile ("msr daifclr, #2");
 
 }
 
-pub fn disable_interrupts() void {
+pub fn disable_interrupts() InterruptState {
+
+    const daif = asm volatile ("mrs %[out], daif"
+
+        : [out] "=r" (-> u64),
+
+    );
 
     asm volatile ("msr daifset, #2");
+
+    return daif;
+
+}
+
+pub fn restore_interrupts(state: InterruptState) void {
+
+    asm volatile ("msr daif, %[value]"
+        :
+        : [value] "r" (state),
+    );
 
 }
 

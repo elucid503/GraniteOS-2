@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # M1 test: boot under QEMU and check the "Done when" over serial - the machine is discovered from the DTB and the
 # alloc/map/free stress loop completes with no leaks. The host unit tests are run separately by `zig build test`.
 

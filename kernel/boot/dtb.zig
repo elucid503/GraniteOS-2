@@ -1,17 +1,20 @@
-// Flattened device-tree reader (06-kernel-ddd.md Section 3): the runtime source of truth for the memory banks and core count.
+// Flattened device-tree reader (06-kernel-ddd.md Section 3): the runtime source of truth for the memory banks, the core count, and the interrupt-controller windows.
 
 const std = @import("std");
 
 const frames = @import("../memory/frames.zig");
 
+const types = @import("../types.zig");
 const Error = @import("../error.zig").Error;
 
 pub const MemoryRange = frames.MemoryRange;
+pub const IntctrlWindows = types.IntctrlWindows;
 
 pub const Machine = struct {
 
     memory: []const MemoryRange,
     core_count: usize,
+    intctrl: ?IntctrlWindows,
 
 };
 
@@ -49,9 +52,14 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
     var names: [max_depth][]const u8 = undefined;
     names[0] = "";
 
+    // A node's `reg` may precede or follow its `compatible`, so remember where it was and decode on node exit.
+    var reg_offset: [max_depth]?usize = undefined;
+    var is_gic: [max_depth]bool = undefined;
+
     var depth: usize = 0;
     var memory_count: usize = 0;
     var core_count: usize = 0;
+    var intctrl: ?IntctrlWindows = null;
 
     var position: usize = struct_offset;
 
@@ -71,6 +79,8 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
                 address_cells[depth] = address_cells[depth - 1];
                 size_cells[depth] = size_cells[depth - 1];
                 names[depth] = name;
+                reg_offset[depth] = null;
+                is_gic[depth] = false;
 
                 if (starts_with(name, "cpu@") and equals(names[depth - 1], "cpus")) {
 
@@ -81,6 +91,16 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
             },
 
             token_end_node => {
+
+                if (is_gic[depth] and intctrl == null) {
+
+                    if (reg_offset[depth]) |offset| {
+
+                        intctrl = read_intctrl(dtb, offset, address_cells[depth - 1], size_cells[depth - 1]);
+
+                    }
+
+                }
 
                 depth -= 1;
 
@@ -107,6 +127,14 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
 
                     memory_count += read_memory(dtb, value, length, address_cells[depth - 1], size_cells[depth - 1], memory_out[memory_count..]);
 
+                } else if (equals(property, "reg")) {
+
+                    reg_offset[depth] = value;
+
+                } else if (equals(property, "compatible") and compatible_lists(dtb, value, length, "arm,cortex-a15-gic")) {
+
+                    is_gic[depth] = true;
+
                 }
 
             },
@@ -120,7 +148,42 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
 
     }
 
-    return .{ .memory = memory_out[0..memory_count], .core_count = core_count };
+    return .{ .memory = memory_out[0..memory_count], .core_count = core_count, .intctrl = intctrl };
+
+}
+
+// A GICv2 `reg` lists (address, size) per window: distributor first, CPU interface second.
+
+fn read_intctrl(dtb: usize, offset: usize, addr_cells: u32, size_cells: u32) ?IntctrlWindows {
+
+    const entry_words = addr_cells + size_cells;
+
+    if (entry_words == 0) return null;
+
+    const distributor = read_cells(dtb, offset, addr_cells);
+    const cpu_interface = read_cells(dtb, offset + entry_words * 4, addr_cells);
+
+    return .{ .distributor = @intCast(distributor), .cpu_interface = @intCast(cpu_interface) };
+
+}
+
+// `compatible` is a list of nul-terminated strings; report whether any of them is `wanted`.
+
+fn compatible_lists(dtb: usize, value: usize, length: u32, wanted: []const u8) bool {
+
+    var offset: usize = 0;
+
+    while (offset < length) {
+
+        const entry = cstring(dtb, value + offset);
+
+        if (equals(entry, wanted)) return true;
+
+        offset += entry.len + 1;
+
+    }
+
+    return false;
 
 }
 
@@ -224,6 +287,18 @@ test "parses the QEMU virt memory bank and core count" {
     try testing.expectEqual(@as(usize, 1), machine.memory.len);
     try testing.expectEqual(@as(usize, 0x4000_0000), machine.memory[0].base);
     try testing.expectEqual(@as(usize, 0x1000_0000), machine.memory[0].length);
+
+}
+
+test "discovers the GICv2 windows" {
+
+    var memory: [8]MemoryRange = undefined;
+    const machine = try parse(@intFromPtr(fixture), &memory);
+
+    const intctrl = machine.intctrl.?;
+
+    try testing.expectEqual(@as(usize, 0x0800_0000), intctrl.distributor);
+    try testing.expectEqual(@as(usize, 0x0801_0000), intctrl.cpu_interface);
 
 }
 

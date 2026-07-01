@@ -2,3 +2,12 @@
 
 pub const PhysAddr = usize;
 pub const VirtAddr = usize;
+
+// Where the DTB says the interrupt controller lives; the arch layer falls back to board constants when absent.
+
+pub const IntctrlWindows = struct {
+
+    distributor: PhysAddr,
+    cpu_interface: PhysAddr,
+
+};

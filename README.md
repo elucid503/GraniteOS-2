@@ -20,9 +20,11 @@ zig build test # run the host unit tests for the arch-independent core
 ```
 
 `zig build qemu` boots, discovers the machine from the device tree, brings up the
-memory foundation, runs a leak-free alloc/map/free stress loop, then idles; quit
-QEMU with `Ctrl-A` then `x`. `scripts/m1.sh` runs that boot unattended and checks
-the milestone's exit criteria over serial.
+memory foundation (with a leak-free alloc/map/free stress loop), then starts the
+interrupt controller, timer, and scheduler and proves two kernel threads
+time-slice, demote, boost, and yield; quit QEMU with `Ctrl-A` then `x`.
+`scripts/m1.sh` and `scripts/m2.sh` run that boot unattended and check each
+milestone's exit criteria over serial.
 
 ## Layout
 
@@ -34,25 +36,30 @@ arch directory itself is Zig-only.
 build.zig                 kernel + flatten tool + QEMU run steps
 tools/flatten.zig         host tool: ELF -> load-faithful flat image
 kernel/
-  main.zig                post-arch entry; machine discovery; M1 stress demo
+  main.zig                post-arch entry; machine discovery; M1/M2 demos
   config.zig              compile-time tunables
   error.zig               shared Error set + ABI mapping
   types.zig               arch-free address types
   tests.zig               host unit-test aggregator
   arch/
     arch.zig              the architecture boundary
+    host.zig              host-test stand-in for the boundary
     aarch64/
       asm/
         start.S           early boot: EL1, stack, BSS, vectors, MMU enable
         vectors.S         exception vector table
+        switch.S          context switch + fresh-thread trampoline
         linker.ld         image layout
       boot.zig            bridge from start.S into Zig
       mmu.zig             seed map, MMU enable, page-table surface
-      trap.zig            trap entry (diagnose + halt)
-      cpu.zig             core id, barriers, halt
-    board/virt.zig        board fallback constants (panic UART base)
+      trap.zig            trap entry: IRQ -> scheduler tick; else diagnose + halt
+      cpu.zig             core id, barriers, interrupt mask, halt
+      context.zig         thread context: init + switch surface
+      gic.zig             GICv2 distributor + CPU interface
+      timer.zig           ARM generic timer: monotonic time + deadline
+    board/virt.zig        board fallback constants (UART, GIC windows)
   boot/
-    dtb.zig               device-tree parse: memory banks + core count
+    dtb.zig               device-tree parse: memory, cores, intctrl windows
   memory/
     frames.zig            buddy physical-frame allocator
     slab.zig              per-type object caches
@@ -60,6 +67,14 @@ kernel/
     address_space.zig     AddressSpace: page tables, map/unmap/activate
   object/
     object.zig            common object header (kind + refcount)
+    process.zig           Process: AddressSpace + HandleTable + threads
+    thread.zig            Thread: context, state, scheduling
+  cap/
+    handle.zig            Handle {index, generation}
+    handle_table.zig      per-process handle table
+  sched/
+    runqueue.zig          intrusive per-core queues
+    scheduler.zig         MLFQ + driver class, tick, demote/boost, yield
   debug/
     console.zig           panic-only PL011 UART
     panic.zig             panic diagnostic + halt

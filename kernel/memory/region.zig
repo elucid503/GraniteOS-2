@@ -26,7 +26,7 @@ pub const Region = struct {
     copy_on_write: bool,
     device: bool,
 
-    /// A RAM region large enough to hold `length` bytes (06-kernel-ddd.md Section 6.4; authority gating is deferred to M2).
+    /// A RAM region large enough to hold `length` bytes (06-kernel-ddd.md Section 6.4; authority gating arrives with M3).
     pub fn create(length: usize) Error!*Region {
 
         const pages = (length + page_size - 1) / page_size;

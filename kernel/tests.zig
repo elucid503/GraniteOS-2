@@ -7,5 +7,9 @@ test {
     _ = @import("memory/region.zig");
     _ = @import("object/object.zig");
     _ = @import("boot/dtb.zig");
+    _ = @import("cap/handle.zig");
+    _ = @import("cap/handle_table.zig");
+    _ = @import("sched/runqueue.zig");
+    _ = @import("sched/scheduler.zig");
 
 }

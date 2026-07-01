@@ -1,4 +1,4 @@
-// Kernel entry (06-kernel-ddd.md Section 3): M1 discovers the machine from the DTB, takes ownership of RAM, and proves alloc/map/free leak-free.
+// Kernel entry (06-kernel-ddd.md Section 3): discover the machine, take ownership of RAM (M1), then bring up the interrupt controller, timer, objects, and scheduler, and prove two kernel threads time-slice, demote, boost, and yield (M2).
 
 const std = @import("std");
 
@@ -11,9 +11,14 @@ const dtb = @import("boot/dtb.zig");
 const frames = @import("memory/frames.zig");
 const region = @import("memory/region.zig");
 const address_space = @import("memory/address_space.zig");
+const process_module = @import("object/process.zig");
+const thread_module = @import("object/thread.zig");
+const scheduler = @import("sched/scheduler.zig");
 
 const Region = region.Region;
 const AddressSpace = address_space.AddressSpace;
+const Process = process_module.Process;
+const Thread = thread_module.Thread;
 
 // Route language-level panics through the kernel panic path.
 pub const panic = std.debug.FullPanic(panic_path.at);
@@ -38,6 +43,7 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
     report_machine(machine);
 
     // Make every discovered RAM bank reachable by its physical address, then take ownership of all of it bar what we occupy.
+
     arch.map_ram(machine.memory);
     frames.init(machine.memory, &reserved(dtb_address));
     region.init();
@@ -46,7 +52,90 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
     report_frames();
     stress();
 
-    console.debug_print("M1: memory foundation up; idling.\n");
+    console.debug_print("M1: memory foundation up.\n");
+
+    arch.intctrl_init_primary(machine.intctrl);
+    arch.timer_init();
+
+    process_module.init();
+    thread_module.init();
+    scheduler.init();
+
+    start_demo_threads();
+
+    console.debug_print("M2: scheduler up; two threads admitted.\n");
+    scheduler.idle();
+
+}
+
+// The M2 exit criterion: two kernel-mode threads time-slice under the timer, demote and boost correctly, and yield works. Thread A runs the checks against thread B, a plain spinner.
+
+var demo_counter: u64 = 0;
+var demo_checker: *Thread = undefined;
+
+fn start_demo_threads() void {
+
+    const space = AddressSpace.create() catch oom();
+    const kernel_process = Process.create(space) catch oom();
+
+    const spinner = Thread.create(kernel_process, @intFromPtr(&spin)) catch oom();
+    demo_checker = Thread.create(kernel_process, @intFromPtr(&run_checks)) catch oom();
+
+    spinner.start();
+    demo_checker.start();
+
+}
+
+fn spin(_: u64) callconv(.c) void {
+
+    const counter: *volatile u64 = &demo_counter;
+
+    while (true) {
+
+        counter.* +%= 1;
+
+    }
+
+}
+
+fn run_checks(_: u64) callconv(.c) void {
+
+    const counter: *volatile u64 = &demo_counter;
+    const level: *volatile u8 = &demo_checker.scheduling.level;
+
+    // Time-slicing: the spinner never yields, so its progress proves preemption reached us both.
+
+    const preempted = counter.*;
+
+    while (counter.* < preempted + 100_000) {}
+
+    console.debug_print("M2: time-slice OK\n");
+
+    // Yield: hand over the core and confirm the spinner ran while we were off it.
+
+    const before_yield = counter.*;
+
+    while (counter.* == before_yield) {
+
+        scheduler.yield();
+
+    }
+
+    console.debug_print("M2: yield OK\n");
+
+    // Demotion: burning whole quanta must walk us down to the bottom level.
+
+    while (level.* != config.scheduling_levels - 1) {}
+
+    console.debug_print("M2: demote OK\n");
+
+    // Boost: the periodic anti-starvation boost must lift us back to level 0.
+
+    while (level.* != 0) {}
+
+    console.debug_print("M2: boost OK\n");
+
+    console.debug_print("M2: OK objects and scheduler up\n");
     arch.halt();
 
 }

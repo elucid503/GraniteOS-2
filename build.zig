@@ -36,6 +36,7 @@ pub fn build(b: *std.Build) void {
     kernel_module.addImport("build_options", options.createModule());
     kernel_module.addAssemblyFile(b.path("kernel/arch/aarch64/asm/start.S"));
     kernel_module.addAssemblyFile(b.path("kernel/arch/aarch64/asm/vectors.S"));
+    kernel_module.addAssemblyFile(b.path("kernel/arch/aarch64/asm/switch.S"));
 
     const kernel = b.addExecutable(.{
 
