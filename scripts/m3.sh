@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # M3 test: boot under QEMU and check the "Done when" over serial - two user-mode processes complete a call/reply
 # round-trip over a badged endpoint, the receiver sees the correct badge, a Region handle passes across the message,
 # and an IPC micro-benchmark records the round-trip cost. The host unit tests (IPC transfer, handle table, scheduler)

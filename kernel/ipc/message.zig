@@ -1,5 +1,4 @@
-// The IPC message envelope (06-kernel-ddd.md Section 9; 03-syscall-abi.md): a small fixed struct that lives in the
-// caller's memory. Bulk data never rides here - it travels as a Region handle in a slot (05-server-protocol.md).
+// The IPC message envelope (06-kernel-ddd.md Section 9; 03-syscall-abi.md): a small fixed struct that lives in the caller's memory.
 
 const config = @import("../config.zig");
 
@@ -19,11 +18,9 @@ pub const Message = extern struct {
     data: [config.message_data_words]u64,
     handles: [config.message_handle_slots]HandleSlot,
 
-    // On a received request the kernel writes the one-shot reply handle here; unused (zero) otherwise.
-    reply: Handle,
+    reply: Handle, // On a received request the kernel writes the one-shot reply handle here; unused (zero) otherwise.
 
-    // How many leading handle slots actually carry a handle. Kept in the envelope so the kernel copies only what is set.
-    handle_count: u32,
+    handle_count: u32, // How many leading handle slots actually carry a handle. Kept in the envelope so the kernel copies only what is set.
 
     pub const zeroed: Message = std.mem.zeroes(Message);
 

@@ -20,7 +20,6 @@ pub const TrapFrame = extern struct {
 };
 
 /// The register frame `svc_common` lays on the stack for an EL0 system call; field order must match the assembly.
-/// The syscall number arrives in x8, arguments in x0..x5, and the result is written back into x0.
 pub const SyscallFrame = extern struct {
 
     registers: [31]u64, // x0..x30
@@ -31,7 +30,6 @@ pub const SyscallFrame = extern struct {
 };
 
 // Kernel IRQ flow (06-kernel-ddd.md Section 7.4): claim, quiet the source, end-of-interrupt, then act.
-// The timer never becomes an `Interrupt` object - it goes straight to the scheduler, which may switch contexts here; the end-of-interrupt must land first so the next tick can be delivered.
 
 export fn kernel_irq() callconv(.c) void {
 
@@ -51,9 +49,7 @@ export fn kernel_irq() callconv(.c) void {
 
 }
 
-// EL0 system-call entry (06-kernel-ddd.md Section 12): hand the saved frame to the arch-independent dispatch, which
-// unpacks the verb and arguments and writes the result back into the frame. Interrupts are masked by the svc trap, so
-// a syscall runs to a blocking point or to completion without preemption; a blocking call switches away inside here.
+// EL0 system-call entry (06-kernel-ddd.md Section 12): hand the saved frame to the arch-independent dispatch, which unpacks the verb and arguments and writes the result back into the frame.
 
 export fn kernel_syscall(frame: *SyscallFrame) callconv(.c) void {
 

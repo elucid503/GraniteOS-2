@@ -1,6 +1,4 @@
-// Thread (06-kernel-ddd.md Section 7.2): a schedulable flow inside a Process. Kernel threads run at EL1 on their
-// kernel stack; user threads run at EL0 on a separate mapped stack and trap back onto that same kernel stack.
-// The IPC fields carry a synchronous request/reply across a rendezvous (Section 9). Multi-wait/donation are M5/M8.
+// Thread (06-kernel-ddd.md Section 7.2): a schedulable flow inside a Process.
 
 const std = @import("std");
 
@@ -56,10 +54,7 @@ pub const Thread = struct {
     stack_base: PhysAddr,
     next_in_process: ?*Thread,
 
-    // IPC (Section 9). A blocking send/call/receive stages its envelope here, in kernel memory, and remembers the
-    // user virtual address it must be copied back to on wake. `send_badge` is the badge the sender's endpoint handle
-    // carried, reported to the receiver; `is_call` distinguishes a queued caller from a plain sender; `awaiting_reply`
-    // marks a caller parked for its one-shot reply. `notify_bits` delivers a notification's bits to a woken waiter.
+    // IPC (Section 9). A blocking send/call/receive stages its envelope here.
 
     staged: Message,
     message_buffer: VirtAddr,
@@ -81,8 +76,7 @@ pub const Thread = struct {
 
     }
 
-    /// A suspended user thread (EL0). It runs on `user_stack_top` in `process`'s address space and traps onto its own
-    /// kernel stack; `arg` lands in the entry's first argument (03-syscall-abi.md: the init message pointer).
+    /// A suspended user thread (EL0). It runs on `user_stack_top` in `process`'s address space and traps onto its own kernel stack.
     pub fn create_user(process: *Process, entry: VirtAddr, user_stack_top: VirtAddr, arg: u64) Error!*Thread {
 
         const thread = try alloc(process);

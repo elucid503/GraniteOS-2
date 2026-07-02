@@ -1,5 +1,4 @@
 // aarch64 thread context (06-kernel-ddd.md Section 5): the callee-saved frame `switch.S` saves and restores.
-// Caller-saved registers need no slot here: a switch always happens at a call boundary, so the AAPCS already parked them (on the stack for a voluntary switch, in the IRQ frame for a preemption).
 
 const types = @import("../../types.zig");
 
@@ -20,7 +19,6 @@ pub const Context = extern struct {
 pub extern fn switch_context(save_into: *Context, restore_from: *const Context) void;
 
 // First landing points of a fresh thread, in `asm/switch.S`: reap any exited predecessor, then enter the thread.
-// The kernel trampoline stays at EL1; the user trampoline drops to EL0 via `eret`.
 
 extern fn thread_trampoline() void;
 extern fn user_trampoline() void;
@@ -44,8 +42,7 @@ pub fn init_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, arg:
 
 }
 
-/// Arrange for a fresh user thread's first switch-in to `eret` to `entry` at EL0 on `user_stack`, while its kernel
-/// `stack` becomes SP_EL1 for the traps it takes. `arg` lands in x0 (the init-message pointer, 03-syscall-abi.md).
+/// Arrange for a fresh user thread's first switch-in to `eret` to `entry` at EL0 on `user_stack`.
 pub fn init_user_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, user_stack: VirtAddr, arg: u64) void {
 
     ctx.* = .{

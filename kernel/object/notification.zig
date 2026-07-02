@@ -1,5 +1,4 @@
-// Notification (06-kernel-ddd.md Section 7.3): an asynchronous wakeup carrying a word of flag bits. `notify` ORs bits
-// and wakes a waiter; `wait` returns and clears the accumulated bits. Binding to a thread for multi-wait is M5.
+// Notification (06-kernel-ddd.md Section 7.3): an asynchronous wakeup carrying a word of flag bits. `notify` ORs bits and wakes a waiter; `wait` returns and clears the accumulated bits.
 
 const slab = @import("../memory/slab.zig");
 const object = @import("object.zig");

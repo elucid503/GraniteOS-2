@@ -20,8 +20,7 @@ pub fn wait_for_event() void {
 
 }
 
-/// Make freshly written instructions visible to the fetch path (after copying user code into a mapped page). Coarse
-/// but correct: flush the whole instruction cache and re-synchronise; per-range maintenance is a later refinement.
+/// Make freshly written instructions visible to the fetch path (after copying user code into a mapped page).
 pub fn sync_instruction_cache() void {
 
     asm volatile (

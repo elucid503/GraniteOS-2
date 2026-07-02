@@ -1,11 +1,4 @@
-// IPC transfer (06-kernel-ddd.md Section 9): the synchronous rendezvous behind send/receive/call/reply. It works
-// entirely on kernel-staged messages (`Thread.staged`) and the two processes' handle tables; the syscall layer copies
-// the tiny envelope in from and out to user memory around these calls, which keeps this spine host-testable.
-//
-// `call` takes the direct hand-off fast path: with a server already waiting in receive, the kernel switches straight
-// to it on this core (scheduler.hand_off) rather than routing through a run queue. A one-shot reply handle - a handle
-// to the caller thread, installed in the server's table - is how the server later answers exactly that caller.
-// `Gone`/endpoint-break on server death is deferred to M5.
+// IPC transfer (06-kernel-ddd.md Section 9): the synchronous rendezvous behind send/receive/call/reply.
 
 const object = @import("../object/object.zig");
 const scheduler = @import("../sched/scheduler.zig");
@@ -112,10 +105,7 @@ pub fn reply(from: *Thread, reply_handle: Handle) Error!void {
 
 }
 
-// Copy the staged envelope from `source` to `dest`: the inline data words verbatim, and each handle slot transferred
-// between the two tables per its move/copy flag. When `is_call`, mint the one-shot reply handle (a handle to the
-// source caller thread) in the destination table and record it in the destination's reply slot.
-
+// Copy the staged envelope from `source` to `dest`: the inline data words verbatim, and each handle slot transferred between the two tables per its move/copy flag.
 fn deliver(source: *Thread, dest: *Thread, is_call: bool) Error!void {
 
     dest.staged.data = source.staged.data;

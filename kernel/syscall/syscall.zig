@@ -1,6 +1,4 @@
-// Syscall dispatch (06-kernel-ddd.md Section 12; 03-syscall-abi.md): the one entry from the EL0 trap path. Each verb
-// unpacks its registers, resolves handles against the current process's table, invokes the object method, and encodes
-// the result via error.to_abi. The kernel surface is frozen at these 17 verbs; the OS grows as servers, not calls.
+// Syscall dispatch (06-kernel-ddd.md Section 12; 03-syscall-abi.md): the one entry from the EL0 trap path.
 
 const arch = @import("../arch/arch.zig");
 const config = @import("../config.zig");
@@ -104,7 +102,7 @@ fn run(frame: *SyscallFrame) Error!u64 {
 
 }
 
-// --- Lifecycle ---
+// Lifecycle
 
 fn create(kind_raw: u64, arg_a: u64, arg_b: u64) Error!u64 {
 
@@ -163,8 +161,7 @@ fn spawn(space_raw: u64, entry: u64, stack: u64, grant_ptr: u64, grant_count: u6
 
 fn close(raw: u64) Error!u64 {
 
-    // Exit falls out of the refcount model (03-syscall-abi.md): closing self ends the thread. Full process teardown
-    // with `Gone` wakeups is M5; a single-threaded M3 process ends the same way as its thread.
+    // Exit falls out of the refcount model (03-syscall-abi.md): closing self ends the thread.
 
     if (raw == handle_module.self_thread or raw == handle_module.self_process) scheduler.exit_current();
 
@@ -203,7 +200,7 @@ fn configure(thread_raw: u64, attribute: u64, value: u64) Error!u64 {
 
 }
 
-// --- Memory ---
+// Memory
 
 fn map(space_raw: u64, region_raw: u64, address: u64, permissions: u64) Error!u64 {
 
@@ -228,7 +225,7 @@ fn unmap(space_raw: u64, address: u64) Error!u64 {
 
 }
 
-// --- IPC ---
+// IPC
 
 fn send(endpoint_raw: u64, message_ptr: u64) Error!u64 {
 
@@ -316,7 +313,7 @@ fn wait(notification_raw: u64) Error!u64 {
 
 }
 
-// --- Handles ---
+// Handles
 
 fn copy(handle_raw: u64, badge: u64) Error!u64 {
 
@@ -324,7 +321,7 @@ fn copy(handle_raw: u64, badge: u64) Error!u64 {
 
 }
 
-// --- Current context ---
+// Context
 
 fn current_thread() *Thread {
 
@@ -338,7 +335,7 @@ fn current_process() *Process {
 
 }
 
-// --- Handle and sentinel decoding ---
+// Handles
 
 const max_grants = 16;
 
@@ -385,10 +382,9 @@ fn decode_permissions(bits: u64) arch.Permissions {
 
 }
 
-// --- User-memory copies ---
+// User-memory copies
 
-// The envelope is copied through the process's page tables (arch.translate), so it works with any TTBR0 loaded and
-// tolerates a buffer that straddles a page boundary (a Message on the user stack need not be page-aligned).
+// The envelope is copied through the process's page tables (arch.translate), so it works with any TTBR0 loaded and tolerates a buffer that straddles a page boundary (a Message on the user stack need not be page-aligned).
 
 fn read_message(into: *Thread, message_ptr: VirtAddr) Error!void {
 

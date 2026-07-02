@@ -1,17 +1,4 @@
-// The M3 user-mode programs (03-syscall-abi.md; 08-roadmap.md M3). Two tiny EL0 clients that prove the syscall and
-// IPC spine end to end: a client `call`s a server over a badged endpoint, passing a Region handle; the server maps
-// that region, reads a magic word the client wrote, and replies with the magic and the badge it observed.
-//
-// They are hand-written, position-independent assembly with no data references or literal pools, placed in the
-// `.user_text` section. The kernel copies that whole section verbatim into a fresh Region and maps it into each
-// process at an arbitrary user VA (config.user_space_base); because every reference here is register/immediate or a
-// PC-relative branch within the blob, the copy runs correctly wherever it lands - no loader or relocations (M4/M6).
-//
-// Calling convention (03-syscall-abi.md): number in x8, arguments x0..x5, result in x0. Sentinels: SELF_SPACE =
-// 0xffff_fffd, SELF_THREAD = 0xffff_fffe. Verb numbers match syscall.Number. Each program receives a pointer to its
-// bootinfo block in x0 (the layouts below), from which it reads its handles and parameters.
-
-// Kept in sync with the assembly and the kernel overseer (main.zig).
+// Temporary test programs.
 
 pub const client_badge: u64 = 0x00C0_FFEE;
 pub const magic: u64 = 0xCAFE_F00D;
@@ -42,8 +29,7 @@ pub const ServerBootinfo = extern struct {
 
 };
 
-// The client: map the shared region, write the magic, then time `iterations` call/reply round-trips, each passing the
-// region handle. Record status, observed badge, echoed magic, and elapsed nanoseconds, signal `done`, and exit.
+// The client maps the shared region, writes the magic, then times the `iterations` call/reply round-trips.
 
 pub fn user_client() linksection(".user_text") callconv(.naked) void {
 
@@ -121,7 +107,6 @@ pub fn user_client() linksection(".user_text") callconv(.naked) void {
 }
 
 // The server loop: receive a request, map the passed region, read the magic, and reply with status/magic/badge.
-// It unmaps and closes the received handle each round so its address space and handle table do not grow.
 
 pub fn user_server() linksection(".user_text") callconv(.naked) void {
 

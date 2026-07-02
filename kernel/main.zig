@@ -26,8 +26,8 @@ const Endpoint = endpoint_module.Endpoint;
 const Notification = notification_module.Notification;
 const Handle = @import("cap/handle.zig").Handle;
 
-// The M3 user-program blob, bounded by the linker (arch/aarch64/asm/linker.ld); copied into each process and mapped
-// at EL0 (config.user_space_base). It is position-independent, so it runs correctly at whatever user VA it lands.
+// The M3 user-program blob, bounded by the linker (arch/aarch64/asm/linker.ld); copied into each process and mapped  at EL0 (config.user_space_base).
+
 extern const __user_text_start: u8;
 extern const __user_text_end: u8;
 
@@ -37,6 +37,7 @@ pub const panic = std.debug.FullPanic(panic_path.at);
 const page_size = config.page_size;
 
 // The kernel image extent, reserved from the frame allocator so it never hands out memory we are running from.
+
 extern const __kernel_start: u8;
 extern const __kernel_end: u8;
 
@@ -81,8 +82,7 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
 
 }
 
-// The M2 exit criterion: two kernel-mode threads time-slice under the timer, demote and boost correctly, and yield
-// works. The checker runs the checks against a plain spinner, then retires the spinner and drives the M3 demo.
+// The M2 exit criterion: two kernel-mode threads time-slice under the timer, demote and boost correctly, and yield works.
 
 var demo_counter: u64 = 0;
 var stop_spinner: bool = false;
@@ -172,9 +172,7 @@ fn run_checks(_: u64) callconv(.c) void {
 
 }
 
-// --- M3: two user-mode processes complete a call/reply round-trip over a badged endpoint, passing a Region handle,
-// and an IPC micro-benchmark records the round-trip cost (08-roadmap.md M3 "Done when"). The kernel overseer builds
-// the two processes directly (the ELF loader and boot hand-off are M4/M6), then blocks until the client signals done.
+// M3: two user-mode processes complete a call/reply round-trip over a badged endpoint, passing a Region handle, and an IPC micro-benchmark records the round-trip cost (08-roadmap.md M3 "Done when").
 
 const user_code_base = config.user_space_base; // 0x80_0000_0000
 const user_stack_base = config.user_space_base + 0x1000_0000;

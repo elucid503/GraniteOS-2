@@ -1,5 +1,4 @@
-// Process (06-kernel-ddd.md Section 7.2): the resource container - one AddressSpace, a HandleTable, and its threads.
-// The memory-authority budget (hierarchical-lite, Section 11) arrives with M4.
+// Process (06-kernel-ddd.md Section 7.2): the resource container - one AddressSpace, a HandleTable, and its threads. The memory-authority budget (hierarchical-lite, Section 11) arrives with M4.
 
 const config = @import("../config.zig");
 const slab = @import("../memory/slab.zig");
