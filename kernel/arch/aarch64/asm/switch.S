@@ -25,12 +25,14 @@ switch_context:
 
     ret
 
-// A fresh thread's first switch-in lands here (context.init_thread_context put the entry in x19, the argument in x20). Preemption switched in with IRQs masked, so unmask before entering the thread.
+// A fresh kernel thread's first switch-in lands here (context.init_thread_context put the entry in x19, the argument
+// in x20). Reap any thread that exited to make room, unmask IRQs, then enter the thread at EL1.
 
 .global thread_trampoline
 
 thread_trampoline:
 
+    bl      kernel_after_switch
     msr     daifclr, #2
     mov     x0, x20
     blr     x19
@@ -45,3 +47,18 @@ thread_trampoline:
 
     wfe
     b       1b
+
+// A fresh user thread's first switch-in lands here (context.init_user_thread_context put the entry in x19, the user
+// stack in x20, the argument in x21). Reap any exited predecessor, then drop to EL0 via eret: SP_EL1 is already the
+// thread's kernel stack (loaded by switch_context), SP_EL0 becomes the user stack, and SPSR = EL0t with IRQs unmasked.
+
+.global user_trampoline
+
+user_trampoline:
+
+    bl      kernel_after_switch
+    msr     sp_el0, x20
+    msr     elr_el1, x19
+    msr     spsr_el1, xzr
+    mov     x0, x21
+    eret

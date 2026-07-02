@@ -171,11 +171,17 @@ pub const Permissions = packed struct(u8) {
 const page_descriptor: u64 = descriptor_valid | (1 << 1);
 const output_mask: u64 = 0x0000_ffff_ffff_f000;
 
-/// Allocate a zeroed frame to serve as a fresh top-level (level-0) table.
+/// Allocate a fresh top-level (level-0) table for a user address space. Slot 0 is shared with the kernel's own
+/// level-0 entry, so the kernel's identity/device/RAM mappings (all privileged, EL0 has no access) remain reachable
+/// at EL1 once this root is loaded in TTBR0; user mappings go above 512 GiB (slot 1+), clear of that shared block.
 pub fn new_table() Error!PhysAddr {
 
     const frame = try frames.alloc();
     zero_table(frame);
+
+    const root: *[entries_per_table]u64 = @ptrFromInt(frame);
+    root[0] = level0_table[0];
+
     return frame;
 
 }
@@ -294,10 +300,23 @@ pub fn map_ram(ranges: []const frames.MemoryRange) void {
 
 }
 
-/// Free every table frame in a page-table tree (the leaf page frames belong to Regions and are left alone).
+/// Free every table frame a user root owns (the leaf page frames belong to Regions and are left alone). Slot 0 is the
+/// shared kernel entry (new_table) and its subtree is the kernel's, never this space's, so it is skipped.
 pub fn free_table(root: PhysAddr) void {
 
-    free_table_level(root, 0);
+    const entries: *const [entries_per_table]u64 = @ptrFromInt(root);
+
+    for (entries[1..]) |entry| {
+
+        if (entry & descriptor_valid != 0 and entry & descriptor_table != 0) {
+
+            free_table_level(entry & output_mask, 1);
+
+        }
+
+    }
+
+    frames.free(root);
 
 }
 
@@ -333,7 +352,16 @@ fn table_index(va: VirtAddr, level: usize) usize {
 fn zero_table(frame: PhysAddr) void {
 
     const table: *[entries_per_table]u64 = @ptrFromInt(frame);
-    @memset(table, 0);
+
+    // The pointer-array memset path faulted when clearing recycled kernel stack pages.
+
+    var index: usize = 0;
+
+    while (index < entries_per_table) : (index += 1) {
+
+        table[index] = 0;
+
+    }
 
 }
 

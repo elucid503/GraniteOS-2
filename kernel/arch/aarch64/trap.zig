@@ -5,6 +5,7 @@ const panic = @import("../../debug/panic.zig");
 const gic = @import("gic.zig");
 const timer = @import("timer.zig");
 const scheduler = @import("../../sched/scheduler.zig");
+const syscall = @import("../../syscall/syscall.zig");
 
 /// The register frame `trap_common` lays on the stack; field order and the trailing pad word must match the assembly.
 pub const TrapFrame = extern struct {
@@ -15,6 +16,17 @@ pub const TrapFrame = extern struct {
     spsr: u64,
     esr: u64, // exception syndrome
     far: u64, // faulting virtual address
+
+};
+
+/// The register frame `svc_common` lays on the stack for an EL0 system call; field order must match the assembly.
+/// The syscall number arrives in x8, arguments in x0..x5, and the result is written back into x0.
+pub const SyscallFrame = extern struct {
+
+    registers: [31]u64, // x0..x30
+    elr: u64, // instruction after the svc
+    spsr: u64,
+    reserved: u64,
 
 };
 
@@ -36,6 +48,16 @@ export fn kernel_irq() callconv(.c) void {
         gic.complete(irq);
 
     }
+
+}
+
+// EL0 system-call entry (06-kernel-ddd.md Section 12): hand the saved frame to the arch-independent dispatch, which
+// unpacks the verb and arguments and writes the result back into the frame. Interrupts are masked by the svc trap, so
+// a syscall runs to a blocking point or to completion without preemption; a blocking call switches away inside here.
+
+export fn kernel_syscall(frame: *SyscallFrame) callconv(.c) void {
+
+    syscall.dispatch(frame);
 
 }
 

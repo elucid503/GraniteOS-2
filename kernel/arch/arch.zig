@@ -33,6 +33,7 @@ pub const wait_for_event = cpu.wait_for_event;
 pub const enable_interrupts = cpu.enable_interrupts;
 pub const disable_interrupts = cpu.disable_interrupts;
 pub const restore_interrupts = cpu.restore_interrupts;
+pub const sync_instruction_cache = cpu.sync_instruction_cache;
 pub const halt = cpu.halt;
 
 // Thread context.
@@ -41,6 +42,7 @@ pub const Context = context.Context;
 
 pub const switch_context = context.switch_context;
 pub const init_thread_context = context.init_thread_context;
+pub const init_user_thread_context = context.init_user_thread_context;
 
 // MMU.
 

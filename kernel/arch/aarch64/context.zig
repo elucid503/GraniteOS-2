@@ -19,11 +19,13 @@ pub const Context = extern struct {
 /// Save the current callee-saved state into `save_into` and resume `restore_from`; implemented in `asm/switch.S`.
 pub extern fn switch_context(save_into: *Context, restore_from: *const Context) void;
 
-// First landing point of a fresh thread, in `asm/switch.S`: unmask IRQs, move the argument into place, call the entry.
+// First landing points of a fresh thread, in `asm/switch.S`: reap any exited predecessor, then enter the thread.
+// The kernel trampoline stays at EL1; the user trampoline drops to EL0 via `eret`.
 
 extern fn thread_trampoline() void;
+extern fn user_trampoline() void;
 
-/// Arrange for a fresh thread's first switch-in to enter `entry` with `arg`, on its own `stack`.
+/// Arrange for a fresh kernel thread's first switch-in to enter `entry` with `arg`, on its own kernel `stack` (EL1).
 pub fn init_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, arg: u64) void {
 
     ctx.* = .{
@@ -39,5 +41,26 @@ pub fn init_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, arg:
 
     ctx.x19_to_x28[0] = entry;
     ctx.x19_to_x28[1] = arg;
+
+}
+
+/// Arrange for a fresh user thread's first switch-in to `eret` to `entry` at EL0 on `user_stack`, while its kernel
+/// `stack` becomes SP_EL1 for the traps it takes. `arg` lands in x0 (the init-message pointer, 03-syscall-abi.md).
+pub fn init_user_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, user_stack: VirtAddr, arg: u64) void {
+
+    ctx.* = .{
+
+        .sp = stack & ~@as(u64, 0xf),
+        .x19_to_x28 = [_]u64{0} ** 10,
+        .x29 = 0,
+        .x30 = @intFromPtr(&user_trampoline),
+
+    };
+
+    // The user trampoline finds the entry in x19, the user stack in x20, and the argument in x21.
+
+    ctx.x19_to_x28[0] = entry;
+    ctx.x19_to_x28[1] = user_stack & ~@as(u64, 0xf);
+    ctx.x19_to_x28[2] = arg;
 
 }

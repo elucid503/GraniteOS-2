@@ -1,5 +1,7 @@
-// Process (06-kernel-ddd.md Section 7.2): the resource container - one AddressSpace, a HandleTable, and its threads. `spawn` and the memory-authority budget arrive with M3.
+// Process (06-kernel-ddd.md Section 7.2): the resource container - one AddressSpace, a HandleTable, and its threads.
+// The memory-authority budget (hierarchical-lite, Section 11) arrives with M4.
 
+const config = @import("../config.zig");
 const slab = @import("../memory/slab.zig");
 const object = @import("object.zig");
 
@@ -7,6 +9,8 @@ const AddressSpace = @import("../memory/address_space.zig").AddressSpace;
 const HandleTable = @import("../cap/handle_table.zig").HandleTable;
 const Thread = @import("thread.zig").Thread;
 const Error = @import("../error.zig").Error;
+
+const VirtAddr = @import("../types.zig").VirtAddr;
 
 var cache: slab.Cache(Process) = .{};
 
@@ -34,6 +38,28 @@ pub const Process = struct {
         try process.handles.init();
 
         space.header.retain();
+
+        return process;
+
+    }
+
+    /// The capability-passing replacement for fork+exec (03-syscall-abi.md spawn): build a process over a prepared
+    /// `space`, pre-load its handle table with the `grants`, then create and start its first user thread at `entry`.
+    /// `arg` reaches that thread as its first argument (the init-message pointer). Callers hand raw object pointers;
+    /// the syscall layer resolves the grant *handles* from the parent's table before calling in.
+    pub fn spawn(space: *AddressSpace, entry: VirtAddr, user_stack: VirtAddr, grants: []const *object.Object, arg: u64) Error!*Process {
+
+        const process = try create(space);
+        errdefer process.destroy();
+
+        for (grants) |granted| {
+
+            _ = try process.handles.insert(granted);
+
+        }
+
+        const thread = try Thread.create_user(process, entry, user_stack, arg);
+        thread.start();
 
         return process;
 

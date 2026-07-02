@@ -19,3 +19,14 @@ pub const max_cores: usize = 64;
 // Kernel stack size for every thread, in pages (16 KiB).
 
 pub const thread_stack_pages: usize = 4;
+
+// IPC message envelope (06-kernel-ddd.md Section 1, Section 9): inline data words + handle slots + one reply slot.
+
+pub const message_data_words: usize = 6;
+pub const message_handle_slots: usize = 4;
+
+// User virtual-address window (03-syscall-abi.md; 06-kernel-ddd.md Section 6.3). Every process shares the kernel's
+// top-level identity entry (level-0 slot 0, privileged) so EL1 can run with the user root active; user mappings live
+// above 512 GiB (level-0 slot 1+), clear of the kernel's block-mapped range.
+
+pub const user_space_base: usize = 0x80_0000_0000;

@@ -60,6 +60,14 @@ pub const HandleTable = struct {
 
     }
 
+    /// Insert with a badge already attached - the kernel's way to hand a process a badged endpoint at bootstrap,
+    /// before that process exists to `copy` one for itself (04-boot-and-bootstrap.md).
+    pub fn insert_badged(self: *HandleTable, target: *object.Object, badge: u64) Error!Handle {
+
+        return self.insert_with_badge(target, badge);
+
+    }
+
     pub fn resolve(self: *HandleTable, handle: Handle) Error!*object.Object {
 
         const entry = try self.entry_of(handle);

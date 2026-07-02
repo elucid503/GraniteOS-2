@@ -1,4 +1,6 @@
-// Thread (06-kernel-ddd.md Section 7.2): a schedulable flow inside a Process, created suspended. The IPC fields (pending reply, bound notification, donated scheduling) arrive with M3/M5/M8.
+// Thread (06-kernel-ddd.md Section 7.2): a schedulable flow inside a Process. Kernel threads run at EL1 on their
+// kernel stack; user threads run at EL0 on a separate mapped stack and trap back onto that same kernel stack.
+// The IPC fields carry a synchronous request/reply across a rendezvous (Section 9). Multi-wait/donation are M5/M8.
 
 const std = @import("std");
 
@@ -11,6 +13,7 @@ const scheduler = @import("../sched/scheduler.zig");
 const runqueue = @import("../sched/runqueue.zig");
 
 const Process = @import("process.zig").Process;
+const Message = @import("../ipc/message.zig").Message;
 const Error = @import("../error.zig").Error;
 
 const PhysAddr = arch.PhysAddr;
@@ -53,35 +56,39 @@ pub const Thread = struct {
     stack_base: PhysAddr,
     next_in_process: ?*Thread,
 
-    /// A suspended thread on a fresh kernel stack; `start` admits it to the scheduler.
+    // IPC (Section 9). A blocking send/call/receive stages its envelope here, in kernel memory, and remembers the
+    // user virtual address it must be copied back to on wake. `send_badge` is the badge the sender's endpoint handle
+    // carried, reported to the receiver; `is_call` distinguishes a queued caller from a plain sender; `awaiting_reply`
+    // marks a caller parked for its one-shot reply. `notify_bits` delivers a notification's bits to a woken waiter.
+
+    staged: Message,
+    message_buffer: VirtAddr,
+    send_badge: u64,
+    observed_badge: u64,
+    is_call: bool,
+    awaiting_reply: bool,
+    notify_bits: u64,
+
+    /// A suspended kernel thread (EL1) on its own kernel stack; `start` admits it to the scheduler.
     pub fn create(process: *Process, entry: VirtAddr) Error!*Thread {
 
-        const stack_pages = config.thread_stack_pages;
-        const stack_base = try frames.alloc_contiguous(stack_pages);
-        errdefer frames.free_contiguous(stack_base, stack_pages);
+        const thread = try alloc(process);
+        errdefer free(thread);
 
-        const thread = try cache.alloc();
+        arch.init_thread_context(&thread.context, entry, kernel_stack_top(thread), 0);
 
-        thread.* = .{
+        return thread;
 
-            .header = .{ .kind = .thread },
-            .process = process,
-            .context = undefined,
-            .state = .suspended,
+    }
 
-            .scheduling = .{},
-            .blocked_on = null,
-            .queue_link = .{},
+    /// A suspended user thread (EL0). It runs on `user_stack_top` in `process`'s address space and traps onto its own
+    /// kernel stack; `arg` lands in the entry's first argument (03-syscall-abi.md: the init message pointer).
+    pub fn create_user(process: *Process, entry: VirtAddr, user_stack_top: VirtAddr, arg: u64) Error!*Thread {
 
-            .stack_base = stack_base,
-            .next_in_process = process.threads,
+        const thread = try alloc(process);
+        errdefer free(thread);
 
-        };
-
-        arch.init_thread_context(&thread.context, entry, stack_base + stack_pages * page_size, 0);
-
-        process.threads = thread;
-        process.header.retain();
+        arch.init_user_thread_context(&thread.context, entry, kernel_stack_top(thread), user_stack_top, arg);
 
         return thread;
 
@@ -151,6 +158,62 @@ pub const Thread = struct {
     }
 
 };
+
+fn alloc(process: *Process) Error!*Thread {
+
+    const stack_pages = config.thread_stack_pages;
+    const stack_base = try frames.alloc_contiguous(stack_pages);
+    errdefer frames.free_contiguous(stack_base, stack_pages);
+
+    const thread = try cache.alloc();
+
+    thread.* = .{
+
+        .header = .{ .kind = .thread },
+        .process = process,
+        .context = undefined,
+        .state = .suspended,
+
+        .scheduling = .{},
+        .blocked_on = null,
+        .queue_link = .{},
+
+        .stack_base = stack_base,
+        .next_in_process = process.threads,
+
+        .staged = undefined,
+        .message_buffer = 0,
+        .send_badge = 0,
+        .observed_badge = 0,
+        .is_call = false,
+        .awaiting_reply = false,
+        .notify_bits = 0,
+
+    };
+
+    process.threads = thread;
+    process.header.retain();
+
+    return thread;
+
+}
+
+fn free(thread: *Thread) void {
+
+    frames.free_contiguous(thread.stack_base, config.thread_stack_pages);
+    thread.unlink();
+
+    if (thread.process.header.release()) object.destroy(&thread.process.header);
+
+    cache.free(thread);
+
+}
+
+fn kernel_stack_top(thread: *Thread) VirtAddr {
+
+    return thread.stack_base + config.thread_stack_pages * page_size;
+
+}
 
 pub fn init() void {
 

@@ -14,7 +14,10 @@ const Permissions = arch.Permissions;
 const page_size = config.page_size;
 
 const max_mappings = 8;
-const default_base: VirtAddr = 0x1000_0000;
+
+// Kernel-chosen mappings land in the user window (config.user_space_base): above 512 GiB, clear of the kernel's
+// block-mapped identity range that every process root shares (06-kernel-ddd.md Section 6.3; arch/aarch64/mmu.zig).
+const default_base: VirtAddr = config.user_space_base;
 
 var cache: slab.Cache(AddressSpace) = .{};
 

@@ -50,6 +50,8 @@ pub fn restore_interrupts(state: InterruptState) void {
 
 }
 
+pub fn sync_instruction_cache() void {}
+
 pub fn halt() noreturn {
 
     unreachable;
@@ -65,6 +67,13 @@ pub fn switch_context(save_into: *Context, restore_from: *const Context) void {
 
 pub fn init_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, arg: u64) void {
 
+    ctx.* = .{ .entry = entry, .stack = stack, .arg = arg };
+
+}
+
+pub fn init_user_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, user_stack: VirtAddr, arg: u64) void {
+
+    _ = user_stack;
     ctx.* = .{ .entry = entry, .stack = stack, .arg = arg };
 
 }

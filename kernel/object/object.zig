@@ -44,6 +44,8 @@ const Process = @import("process.zig").Process;
 const Thread = @import("thread.zig").Thread;
 const AddressSpace = @import("../memory/address_space.zig").AddressSpace;
 const Region = @import("../memory/region.zig").Region;
+const Endpoint = @import("endpoint.zig").Endpoint;
+const Notification = @import("notification.zig").Notification;
 
 pub fn TypeOf(comptime kind: Kind) type {
 
@@ -53,6 +55,8 @@ pub fn TypeOf(comptime kind: Kind) type {
         .thread => Thread,
         .address_space => AddressSpace,
         .region => Region,
+        .endpoint => Endpoint,
+        .notification => Notification,
 
         else => @compileError("object kind not built yet"),
 
@@ -68,8 +72,10 @@ pub fn destroy(object: *Object) void {
         .thread => container(Thread, object).destroy(),
         .address_space => container(AddressSpace, object).destroy(),
         .region => container(Region, object).destroy(),
+        .endpoint => container(Endpoint, object).destroy(),
+        .notification => container(Notification, object).destroy(),
 
-        // The remaining kinds arrive with M3+.
+        // The authority and interrupt kinds arrive with M4+.
 
         else => unreachable,
 

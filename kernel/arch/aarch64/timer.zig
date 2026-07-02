@@ -16,6 +16,14 @@ pub fn init() void {
 
     );
 
+    // Let EL0 read the physical and virtual counters (CNTKCTL_EL1.EL0PCTEN | EL0VCTEN), so user code can time itself
+    // (the IPC micro-benchmark) without a syscall. The timer *interrupt* stays kernel-only.
+
+    asm volatile ("msr cntkctl_el1, %[bits]"
+        :
+        : [bits] "r" (@as(u64, 0b11)),
+    );
+
     gic.enable_line(interrupt_line);
 
 }

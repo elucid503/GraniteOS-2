@@ -11,5 +11,7 @@ test {
     _ = @import("cap/handle_table.zig");
     _ = @import("sched/runqueue.zig");
     _ = @import("sched/scheduler.zig");
+    _ = @import("ipc/message.zig");
+    _ = @import("ipc/transfer.zig");
 
 }

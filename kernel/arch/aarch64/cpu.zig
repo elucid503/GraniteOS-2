@@ -20,6 +20,19 @@ pub fn wait_for_event() void {
 
 }
 
+/// Make freshly written instructions visible to the fetch path (after copying user code into a mapped page). Coarse
+/// but correct: flush the whole instruction cache and re-synchronise; per-range maintenance is a later refinement.
+pub fn sync_instruction_cache() void {
+
+    asm volatile (
+        \\ dsb ish
+        \\ ic iallu
+        \\ dsb ish
+        \\ isb
+        ::: .{ .memory = true });
+
+}
+
 // The prior IRQ-mask state, so nested disable/restore pairs compose (06-kernel-ddd.md Section 5).
 
 pub const InterruptState = usize;

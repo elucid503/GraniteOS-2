@@ -1,5 +1,7 @@
 // MLFQ scheduler core (06-kernel-ddd.md Section 10): per-core queues, the fixed driver band, quantum accounting, demotion, and the periodic boost. Single-core for M2 - work-stealing, IPIs, and scheduling donation arrive with M8; the policy is separated from the switch so it host-tests.
 
+const builtin = @import("builtin");
+
 const config = @import("../config.zig");
 const arch = @import("../arch/arch.zig");
 const object = @import("../object/object.zig");
@@ -9,6 +11,8 @@ const thread_module = @import("../object/thread.zig");
 
 const Thread = thread_module.Thread;
 const RunQueue = runqueue.RunQueue;
+
+const PhysAddr = arch.PhysAddr;
 
 pub const Class = enum(u8) {
 
@@ -37,6 +41,12 @@ pub const Core = struct {
     idle_context: arch.Context,
     last_boost_ns: u64,
 
+    // The address-space root currently loaded in TTBR0, so a switch within one process skips the TLB flush.
+    space_root: PhysAddr,
+
+    // A thread that exited on this core; freed by the next thread once it is off the dead thread's stack.
+    zombie: ?*Thread,
+
 };
 
 const bottom_level = config.scheduling_levels - 1;
@@ -59,6 +69,9 @@ pub fn init() void {
 
         .idle_context = undefined,
         .last_boost_ns = arch.now_ns(),
+
+        .space_root = 0,
+        .zombie = null,
 
     };
 
@@ -213,7 +226,21 @@ pub fn unblock(waker: *Core, thread: *Thread) void {
 
 }
 
-/// Retire the running thread. Freeing the object is its handles' business, not the scheduler's.
+/// The IPC direct hand-off (06-kernel-ddd.md Section 9): switch straight from `from` to a already-waiting `to` on
+/// this core, no run-queue trip. `from` is blocking (the caller set its state); the caller already removed `to` from
+/// the endpoint's receiver queue. Priority/quantum donation is integrated in M8; for now `to` runs on its own state.
+pub fn hand_off(from: *Thread, to: *Thread) void {
+
+    const core = current_core();
+
+    core.current = null;
+
+    reschedule(core, from, to, arch.now_ns(), .pending);
+
+}
+
+/// Retire the running thread. Its alive reference is dropped here; if that was the last one, the object is reaped by
+/// the next thread once we are off this thread's stack (freeing a running stack in place is not safe).
 pub fn exit_current() noreturn {
 
     _ = arch.disable_interrupts();
@@ -224,9 +251,34 @@ pub fn exit_current() noreturn {
     current.state = .dead;
     core.current = null;
 
+    if (current.header.release()) core.zombie = current;
+
     reschedule(core, current, pick_next(core), arch.now_ns(), .pending);
 
     unreachable;
+
+}
+
+// Free a thread that exited on this core. Safe only once we have switched onto another stack, so it runs from the
+// point a thread resumes a switch (or first reaches a trampoline), never on the exiting thread itself.
+
+fn reap(core: *Core) void {
+
+    if (core.zombie) |zombie| {
+
+        core.zombie = null;
+        object.destroy(&zombie.header);
+
+    }
+
+}
+
+// The trampoline in `asm/switch.S` calls this the instant a freshly-scheduled thread lands, so a thread that exited
+// to make room for it is reaped even when its successor is starting for the first time.
+
+export fn kernel_after_switch() callconv(.c) void {
+
+    reap(current_core());
 
 }
 
@@ -280,9 +332,12 @@ fn reschedule(core: *Core, previous: ?*Thread, next: ?*Thread, now_ns: u64, dead
 
         if (thread != previous) {
 
+            activate_space(core, thread);
+
             const save_into = if (previous) |p| &p.context else &core.idle_context;
 
             arch.switch_context(save_into, &thread.context);
+            reap(core);
 
         }
 
@@ -293,10 +348,28 @@ fn reschedule(core: *Core, previous: ?*Thread, next: ?*Thread, now_ns: u64, dead
         if (previous) |p| {
 
             arch.switch_context(&p.context, &core.idle_context);
+            reap(core);
 
         }
 
     }
+
+}
+
+// Load the incoming thread's page-table root into TTBR0 when it differs from what is live. Every process root shares
+// the kernel's top-level entry, so kernel code keeps running after the switch (config.user_space_base). Host test
+// builds have no MMU and construct threads without a real process, so the activation is compiled out there.
+
+fn activate_space(core: *Core, thread: *Thread) void {
+
+    if (builtin.is_test) return;
+
+    const root = thread.process.address_space.root;
+
+    if (root == core.space_root) return;
+
+    core.space_root = root;
+    arch.activate_space(root);
 
 }
 
