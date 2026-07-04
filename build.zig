@@ -55,23 +55,23 @@ pub fn build(b: *std.Build) void {
 
     });
 
-    const startup = user_program(b, target, optimize, user_lib, "granite-startup.elf", "user/startup/main.zig");
+    const flint = user_program(b, target, optimize, user_lib, "granite-flint.elf", "user/flint/main.zig");
     const console = user_program(b, target, optimize, user_lib, "granite-console.elf", "user/drivers/console/main.zig");
     const marble = user_program(b, target, optimize, user_lib, "granite-marble.elf", "user/marble/main.zig");
     const naming = user_program(b, target, optimize, user_lib, "granite-naming.elf", "user/servers/naming/main.zig");
-    const echo = user_program(b, target, optimize, user_lib, "granite-echo.elf", "user/programs/echo.zig");
-    const cat = user_program(b, target, optimize, user_lib, "granite-cat.elf", "user/programs/cat.zig");
-    const help = user_program(b, target, optimize, user_lib, "granite-help.elf", "user/programs/help.zig");
-    const cat_via_name = user_program(b, target, optimize, user_lib, "granite-cat-via-name.elf", "user/programs/cat_via_name.zig");
+    const echo = user_program(b, target, optimize, user_lib, "granite-echo.elf", "user/programs/common/echo.zig");
+    const cat = user_program(b, target, optimize, user_lib, "granite-cat.elf", "user/programs/common/cat.zig");
+    const help = user_program(b, target, optimize, user_lib, "granite-help.elf", "user/programs/common/help.zig");
+    const cat_via_name = user_program(b, target, optimize, user_lib, "granite-cat-via-name.elf", "user/programs/common/cat_via_name.zig");
 
     const flatten = host_tool(b, "flatten", "tools/flatten.zig");
     const bundle_tool = host_tool(b, "bundle", "tools/bundle.zig");
 
     const kernel_image = flatten_image(b, flatten, kernel, "granite-kernel.bin");
-    const startup_image = flatten_image(b, flatten, startup, "startup.bin");
+    const flint_image = flatten_image(b, flatten, flint, "flint.bin");
     const bundle_image = bundle_image_step(b, bundle_tool, .{
 
-        .startup = startup_image,
+        .flint = flint_image,
         .console = console,
         .marble = marble,
         .naming = naming,
@@ -84,7 +84,7 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(kernel);
     b.getInstallStep().dependOn(&b.addInstallBinFile(kernel_image, "granite-kernel.bin").step);
-    b.getInstallStep().dependOn(&b.addInstallBinFile(startup_image, "startup.bin").step);
+    b.getInstallStep().dependOn(&b.addInstallBinFile(flint_image, "flint.bin").step);
     b.getInstallStep().dependOn(&b.addInstallBinFile(bundle_image, "bundle.img").step);
 
     add_qemu_step(b, kernel_image, bundle_image, .{
@@ -222,7 +222,7 @@ fn flatten_image(b: *std.Build, flatten: *std.Build.Step.Compile, image: *std.Bu
 
 const BundleInputs = struct {
 
-    startup: std.Build.LazyPath,
+    flint: std.Build.LazyPath,
     console: *std.Build.Step.Compile,
     marble: *std.Build.Step.Compile,
     naming: *std.Build.Step.Compile,
@@ -239,7 +239,7 @@ fn bundle_image_step(b: *std.Build, bundle_tool: *std.Build.Step.Compile, inputs
 
     const output = run.addOutputFileArg("bundle.img");
 
-    add_module(run, "startup", inputs.startup);
+    add_module(run, "flint", inputs.flint);
     add_artifact_module(run, "console", inputs.console);
     add_artifact_module(run, "marble", inputs.marble);
     add_artifact_module(run, "naming", inputs.naming);

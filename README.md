@@ -21,11 +21,11 @@ zig build test # run the host unit tests for the arch-independent core
 ```
 
 `zig build qemu` boots, discovers the machine from the device tree, logs each subsystem
-as it comes up (memory, interrupts, objects and scheduler), then hands off to the Startup
-Binary. The startup process loads bundled ELF programs for the name service, console
-console driver, Marble (the interactive shell), and utilities (`echo`, `cat`, `help`,
-`cat-via-name`). Type `exit` at the `marble [/] >` prompt to watch the supervisor restart
-Marble; quit QEMU with `Ctrl-A` then `x`. `scripts/m6.sh` drives Marble over serial.
+as it comes up (memory, interrupts, objects and scheduler), then hands off to Flint.
+Flint loads bundled ELF programs for the name service, console driver, Marble (the
+interactive shell), and utilities (`echo`, `cat`, `help`, `cat-via-name`). Type `exit` at
+the `marble [/] >` prompt to watch the supervisor restart Marble; quit QEMU with `Ctrl-A`
+then `x`. `scripts/m6.sh` drives Marble over serial.
 
 ## Layout
 
@@ -62,7 +62,7 @@ kernel/
     board/virt.zig        board fallback constants (UART, GIC windows)
   boot/
     dtb.zig               device-tree parse: memory, cores, intctrl windows
-    bundle.zig            startup-module lookup inside the initrd bundle
+    bundle.zig            Flint-module lookup inside the initrd bundle
   memory/
     frames.zig            buddy physical-frame allocator
     slab.zig              per-type object caches
@@ -81,4 +81,20 @@ kernel/
   debug/
     console.zig           panic-only PL011 UART
     panic.zig             panic diagnostic + halt
+user/
+  flint/main.zig          boot supervisor; spawns servers and Marble
+  marble/main.zig         interactive shell
+  lib/
+    root.zig              user runtime entry; re-exports submodules
+    cap/                  handle indices and grant layouts
+    ipc/                  message envelope and protocol constants
+    syscall/              syscall wrappers
+    runtime/              program entry and init-message handling
+    io/                   streams and formatting helpers
+    boot/                 bundle reader, ELF loader, DTB parser
+    shell/                Marble help/about catalog
+    mem/                  user-space memory helpers
+  programs/common/        bundled utilities (echo, cat, help, …)
+  drivers/console/        PL011 console driver
+  servers/naming/         name service
 ```

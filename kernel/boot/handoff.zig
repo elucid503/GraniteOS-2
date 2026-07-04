@@ -1,4 +1,4 @@
-// Boot hand-off (06-kernel-ddd.md Section 13; 04-boot-and-bootstrap.md): construct the first world and spawn the Startup Binary. The kernel's only loading responsibility is this one raw-mapped, static, non-PIE image; every later program is loaded in user space.
+// Boot hand-off (06-kernel-ddd.md Section 13; 04-boot-and-bootstrap.md): construct the first world and spawn Flint. The kernel's only loading responsibility is this one raw-mapped, static, non-PIE image; every later program is loaded in user space.
 
 const std = @import("std");
 
@@ -26,29 +26,28 @@ const page_size = config.page_size;
 const read_only = arch.Permissions{ .read = true, .user = true };
 const read_write = arch.Permissions{ .read = true, .write = true, .user = true };
 
-// The Startup Binary is the one program allowed writable code pages: its flat image carries text, data, and the
-// flatten-padded zero BSS in a single raw-mapped span (04-boot-and-bootstrap.md).
+// Flint is the one program allowed writable code pages: its flat image carries text, data, and the flatten-padded zero
+// BSS in a single raw-mapped span (04-boot-and-bootstrap.md).
 
 const image_permissions = arch.Permissions{ .read = true, .write = true, .execute = true, .user = true };
 
-// The bundle's fixed handle order; user/lib/cap.zig relies on these indices.
+// The bundle's fixed handle order; user/lib/cap/cap.zig relies on these indices.
 
 // 0: root MemoryAuthority   1: InterruptAuthority   2: DeviceAuthority   3: DTB Region   4: boot-module Region
 
-/// Build the first AddressSpace, raw-map the Startup Binary from the initrd, pre-load its HandleTable with the
-/// capability bundle, and start its first thread. `arg` (x0) carries the DTB's byte offset into its page-aligned Region.
+/// Build the first AddressSpace, raw-map Flint from the initrd, pre-load its HandleTable with the capability bundle,
+/// and start its first thread. `arg` (x0) carries the DTB's byte offset into its page-aligned Region.
 pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
 
     const space = try AddressSpace.create();
     const initrd_bytes: [*]const u8 = @ptrFromInt(initrd.base);
     const bundle = try bundle_module.Bundle.open(initrd_bytes[0..initrd.length]);
-    const startup_image = (try bundle.find("startup")) orelse return error.Invalid;
+    const flint_image = (try bundle.find("flint")) orelse return error.Invalid;
 
-    // The working image: a private copy of the startup module at the fixed link base (config.user_space_base), so the
-    // pristine bundle Region below stays untouched for the Startup Binary and Marble.
+    // Working copy at the fixed link base (config.user_space_base); the pristine bundle Region stays untouched for Flint and Marble.
 
-    const image = try Region.create(startup_image.len);
-    copy_bytes(image, startup_image);
+    const image = try Region.create(flint_image.len);
+    copy_bytes(image, flint_image);
 
     const image_base = try space.map(image, null, image_permissions);
 
@@ -83,12 +82,12 @@ pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
     };
 
     const module_offset = initrd.base - module_page;
-    const startup_arg =
+    const flint_arg =
         (@as(u64, @intCast(initrd.length)) << 32) |
         (@as(u64, @intCast(module_offset)) << 16) |
         (dtb_address - dtb_page);
-    const startup = try Process.spawn(space, image_base, stack_top, &grants, startup_arg);
-    _ = startup.header.release();
+    const flint = try Process.spawn(space, image_base, stack_top, &grants, flint_arg);
+    _ = flint.header.release();
 
 }
 

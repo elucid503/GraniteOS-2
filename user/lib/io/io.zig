@@ -3,7 +3,7 @@
 const std = @import("std");
 
 const stream = @import("stream.zig");
-const sys = @import("sys.zig");
+const sys = @import("../syscall/sys.zig");
 
 pub const Error = sys.Error;
 

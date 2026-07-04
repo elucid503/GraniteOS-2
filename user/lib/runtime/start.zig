@@ -1,11 +1,11 @@
 // Program entry (07-userspace-ddd.md Section 3.3). ELF programs receive argv and stream metadata through an init
-// message on cap.startup_endpoint before root.main(args) runs. The raw-mapped Startup Binary owns its own entry.
+// message on cap.startup_endpoint before root.main(args) runs. Flint owns its own entry.
 
-const cap = @import("cap.zig");
-const ipc = @import("ipc.zig");
-const proto = @import("proto.zig");
-const stream = @import("stream.zig");
-const sys = @import("sys.zig");
+const cap = @import("../cap/cap.zig");
+const ipc = @import("../ipc/ipc.zig");
+const proto = @import("../ipc/proto.zig");
+const stream = @import("../io/stream.zig");
+const sys = @import("../syscall/sys.zig");
 
 const max_args = 16;
 

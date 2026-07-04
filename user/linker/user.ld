@@ -1,4 +1,4 @@
-/* The Startup Binary image: static, non-PIE, linked at the fixed user window base so the kernel raw-maps it with no
+/* The Flint image: static, non-PIE, linked at the fixed user window base so the kernel raw-maps it with no
    ELF parsing (06-kernel-ddd.md Section 13). Must match config.user_space_base. `.text.start` comes first so the
    image base is the entry point. One flat RWX span for M4; a text/data split is a later hardening step. */
 

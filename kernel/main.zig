@@ -75,11 +75,11 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
 
         };
 
-        console.debug_print("Startup: binary hand-off ... Loaded\n");
+        console.debug_print("Flint: hand-off ... Loaded\n");
 
     } else {
 
-        console.debug_print("Startup: no initrd, halting\n");
+        console.debug_print("Flint: no initrd, halting\n");
         arch.halt();
 
     }

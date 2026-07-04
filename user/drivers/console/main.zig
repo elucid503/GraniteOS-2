@@ -41,7 +41,7 @@ var uart: usize = 0;
 var rx_notification: Handle = 0;
 
 // Per-client shared buffers (05-server-protocol.md): attached once, then reused by every read/write. Badges are the
-// Session badges; Startup uses 0, Marble uses 1.
+// Session badges; Flint uses 0, Marble uses 1.
 
 const max_sessions = 16;
 

@@ -1,4 +1,4 @@
-// Interrupt authority (06-kernel-ddd.md Section 11): gates `create(.interrupt, ...)`. Only the boot hand-off mints one, so hardware lines reach a driver only through the Startup Binary.
+// Interrupt authority (06-kernel-ddd.md Section 11): gates `create(.interrupt, ...)`. Only the boot hand-off mints one, so hardware lines reach a driver only through Flint.
 
 const config = @import("../config.zig");
 const slab = @import("../memory/slab.zig");

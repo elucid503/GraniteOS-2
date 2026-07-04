@@ -36,7 +36,7 @@ check() {
 
 }
 
-check "kernel initialized"            "Startup: binary hand-off ... Loaded"
+check "kernel initialized"            "Flint: hand-off ... Loaded"
 check "console driver came up"        "Console: PL011 driver ... Loaded"
 check "marble reached prompt"          "marble [/] >"
 check "external echo launched"        "hello"

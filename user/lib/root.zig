@@ -2,15 +2,15 @@
 
 const builtin = @import("builtin");
 
-pub const start = if (builtin.target.cpu.arch == .aarch64) @import("start.zig") else @import("host_start.zig");
-pub const sys = @import("sys.zig");
-pub const cap = @import("cap.zig");
-pub const ipc = @import("ipc.zig");
-pub const proto = @import("proto.zig");
-pub const mem = @import("mem.zig");
-pub const dtb = @import("dtb.zig");
-pub const bundle = @import("bundle.zig");
-pub const elf = @import("elf.zig");
-pub const stream = @import("stream.zig");
-pub const io = @import("io.zig");
-pub const catalog = @import("catalog.zig");
+pub const start = if (builtin.target.cpu.arch == .aarch64) @import("runtime/start.zig") else @import("runtime/host_start.zig");
+pub const sys = @import("syscall/sys.zig");
+pub const cap = @import("cap/cap.zig");
+pub const ipc = @import("ipc/ipc.zig");
+pub const proto = @import("ipc/proto.zig");
+pub const mem = @import("mem/mem.zig");
+pub const dtb = @import("boot/dtb.zig");
+pub const bundle = @import("boot/bundle.zig");
+pub const elf = @import("boot/elf.zig");
+pub const stream = @import("io/stream.zig");
+pub const io = @import("io/io.zig");
+pub const catalog = @import("shell/catalog.zig");

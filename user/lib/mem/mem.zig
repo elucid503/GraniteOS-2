@@ -1,7 +1,7 @@
 // Region-backed heap (07-userspace-ddd.md Section 3.6): no `brk`. The heap grows by `create`-ing Regions from the process's memory authority and mapping them; a bump pointer sub-allocates within the current chunk. Freeing arrives with a real allocator later.
 
-const cap = @import("cap.zig");
-const sys = @import("sys.zig");
+const cap = @import("../cap/cap.zig");
+const sys = @import("../syscall/sys.zig");
 
 const Handle = cap.Handle;
 const Error = sys.Error;

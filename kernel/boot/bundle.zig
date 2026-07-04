@@ -83,7 +83,7 @@ test "finds present modules and reports missing names" {
     std.mem.writeInt(u32, bytes[4..8], version, .little);
     std.mem.writeInt(u32, bytes[8..12], 2, .little);
 
-    @memcpy(bytes[16..23], "startup");
+    @memcpy(bytes[16..21], "flint");
     std.mem.writeInt(u32, bytes[40..44], 80, .little);
     std.mem.writeInt(u32, bytes[44..48], 4, .little);
 
@@ -96,7 +96,7 @@ test "finds present modules and reports missing names" {
 
     const bundle = try Bundle.open(&bytes);
 
-    try testing.expectEqualStrings("boot", (try bundle.find("startup")).?);
+    try testing.expectEqualStrings("boot", (try bundle.find("flint")).?);
     try testing.expectEqualStrings("hello", (try bundle.find("echo")).?);
     try testing.expectEqual(@as(?[]const u8, null), try bundle.find("cat"));
 

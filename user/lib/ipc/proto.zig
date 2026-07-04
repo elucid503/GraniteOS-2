@@ -48,7 +48,7 @@ pub const name = struct {
 };
 
 // The process-supervision (death) convention (07-userspace-ddd.md Section 10.4): a child's runtime `send`s a one-way
-// death message here on exit; the spawner (the Startup Binary) receives these to reap and restart. The sender's badge
+// death message here on exit; the spawner (Flint) receives these to reap and restart. The sender's badge
 // identifies the child; data[1] carries its exit status.
 
 pub const supervisor = struct {

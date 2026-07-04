@@ -2,8 +2,8 @@
 
 const builtin = @import("builtin");
 
-const cap = @import("cap.zig");
-const ipc = @import("ipc.zig");
+const cap = @import("../cap/cap.zig");
+const ipc = @import("../ipc/ipc.zig");
 
 const Handle = cap.Handle;
 const Message = ipc.Message;
@@ -20,6 +20,7 @@ pub const Error = error{
     NotFound,
     Invalid,
     Gone,
+
 };
 
 const Number = enum(u64) {
@@ -44,8 +45,7 @@ const Number = enum(u64) {
 
 };
 
-// `create` kinds, mirroring the kernel's numbering (kernel/syscall/syscall.zig). Gated kinds carry the granting
-// authority's handle as their last argument.
+// `create` kinds, mirroring the kernel's numbering (kernel/syscall/syscall.zig). Gated kinds carry the granting authority's handle as their last argument.
 
 pub const CreateKind = enum(u64) {
 

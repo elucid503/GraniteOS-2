@@ -1,4 +1,4 @@
-// Host tool `bundle <out.img> <name> <image>...`: packs the M6 module bundle. The startup image is flat; all other
+// Host tool `bundle <out.img> <name> <image>...`: packs the user module bundle. The Flint image is flat; all other
 // images are ELF files copied verbatim.
 
 const std = @import("std");

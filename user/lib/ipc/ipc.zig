@@ -2,8 +2,8 @@
 
 const std = @import("std");
 
-const cap = @import("cap.zig");
-const sys = @import("sys.zig");
+const cap = @import("../cap/cap.zig");
+const sys = @import("../syscall/sys.zig");
 
 const Handle = cap.Handle;
 const Error = sys.Error;

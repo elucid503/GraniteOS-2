@@ -1,8 +1,8 @@
 // Host-test stand-in for the target runtime entry.
 
-const cap = @import("cap.zig");
-const stream = @import("stream.zig");
-const sys = @import("sys.zig");
+const cap = @import("../cap/cap.zig");
+const stream = @import("../io/stream.zig");
+const sys = @import("../syscall/sys.zig");
 
 pub fn supervise_via(_: cap.Handle) void {}
 

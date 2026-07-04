@@ -28,9 +28,9 @@ pub const notification_wake: u64 = 0x7fff_ffff_ffff_ffff;
 pub const class_driver: u64 = 0;
 pub const class_normal: u64 = 1;
 
-// The Startup Binary's bootstrap bundle, in the order the kernel hand-off inserts it (kernel/boot/handoff.zig).
+// Flint's bootstrap bundle, in the order the kernel hand-off inserts it (kernel/boot/handoff.zig).
 
-pub const startup = struct {
+pub const flint = struct {
 
     pub const memory: Handle = 0; // root MemoryAuthority
     pub const interrupts: Handle = 1; // InterruptAuthority

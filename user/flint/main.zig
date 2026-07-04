@@ -1,4 +1,4 @@
-// The Startup Binary: parses the boot bundle, starts user-space services, and supervises them.
+// Flint: the startup program. Parses the boot bundle, starts user-space services, and supervises them.
 
 const lib = @import("lib");
 
@@ -30,12 +30,12 @@ pub export fn _start() linksection(".text.start") callconv(.naked) noreturn {
     asm volatile (
         \\ mov x29, xzr
         \\ mov x30, xzr
-        \\ b   startup_enter
+        \\ b   flint_enter
     );
 
 }
 
-export fn startup_enter(arg: u64) callconv(.c) noreturn {
+export fn flint_enter(arg: u64) callconv(.c) noreturn {
 
     main(arg);
 
@@ -55,10 +55,10 @@ fn run(arg: u64) !void {
     bundle_offset = @intCast((arg >> 16) & 0xffff);
     bundle_length = @intCast(arg >> 32);
 
-    const dtb_base = try sys.map(cap.self_space, cap.startup.dtb, 0, sys.read);
+    const dtb_base = try sys.map(cap.self_space, cap.flint.dtb, 0, sys.read);
     console_uart = lib.dtb.find_uart(dtb_base + dtb_offset) orelse return error.NotFound;
 
-    const bundle_base = try sys.map(cap.self_space, cap.startup.module, 0, sys.read);
+    const bundle_base = try sys.map(cap.self_space, cap.flint.module, 0, sys.read);
     bundle = try lib.bundle.Bundle.open(bundle_base + bundle_offset, bundle_length);
 
     naming_endpoint = try sys.create(.endpoint, 0, 0);
@@ -76,8 +76,8 @@ fn run(arg: u64) !void {
 fn spawn_naming() !void {
 
     const image = bundle.find("naming") orelse return error.NotFound;
-    const memory = try sys.create(.memory_authority, child_budget, cap.startup.memory);
-    const startup = try sys.create(.endpoint, 0, 0);
+    const memory = try sys.create(.memory_authority, child_budget, cap.flint.memory);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
     const report = try sys.copy(supervisor_endpoint, naming_id);
 
     const grants = [_]Handle{
@@ -87,7 +87,7 @@ fn spawn_naming() !void {
         naming_endpoint,
         naming_endpoint,
         memory,
-        startup,
+        init_endpoint,
         report,
 
     };
@@ -106,10 +106,10 @@ fn spawn_naming() !void {
 fn spawn_console() !void {
 
     const image = bundle.find("console") orelse return error.NotFound;
-    const window = try sys.create_device_region(console_uart.base, page_size, cap.startup.devices);
-    const interrupt = try sys.create(.interrupt, console_uart.interrupt_line, cap.startup.interrupts);
-    const memory = try sys.create(.memory_authority, child_budget, cap.startup.memory);
-    const startup = try sys.create(.endpoint, 0, 0);
+    const window = try sys.create_device_region(console_uart.base, page_size, cap.flint.devices);
+    const interrupt = try sys.create(.interrupt, console_uart.interrupt_line, cap.flint.interrupts);
+    const memory = try sys.create(.memory_authority, child_budget, cap.flint.memory);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
     const report = try sys.copy(supervisor_endpoint, console_id);
 
     const grants = [_]Handle{
@@ -119,7 +119,7 @@ fn spawn_console() !void {
         console_endpoint,
         naming_endpoint,
         memory,
-        startup,
+        init_endpoint,
         report,
         window,
         interrupt,
@@ -141,8 +141,8 @@ fn spawn_marble() !void {
 
     const image = bundle.find("marble") orelse return error.NotFound;
     const badged_console = try sys.copy(console_endpoint, 1);
-    const memory = try sys.create(.memory_authority, marble_budget, cap.startup.memory);
-    const startup = try sys.create(.endpoint, 0, 0);
+    const memory = try sys.create(.memory_authority, marble_budget, cap.flint.memory);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
     const report = try sys.copy(supervisor_endpoint, marble_id);
 
     const grants = [_]Handle{
@@ -152,11 +152,11 @@ fn spawn_marble() !void {
         badged_console,
         naming_endpoint,
         memory,
-        startup,
+        init_endpoint,
         report,
         badged_console,
         badged_console,
-        cap.startup.module,
+        cap.flint.module,
 
     };
 

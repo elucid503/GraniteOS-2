@@ -2,10 +2,10 @@
 
 const std = @import("std");
 
-const cap = @import("cap.zig");
-const ipc = @import("ipc.zig");
-const proto = @import("proto.zig");
-const sys = @import("sys.zig");
+const cap = @import("../cap/cap.zig");
+const ipc = @import("../ipc/ipc.zig");
+const proto = @import("../ipc/proto.zig");
+const sys = @import("../syscall/sys.zig");
 
 const Handle = cap.Handle;
 const Error = sys.Error;

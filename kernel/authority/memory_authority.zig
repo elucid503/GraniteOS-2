@@ -15,7 +15,7 @@ pub const MemoryAuthority = struct {
     budget_total: usize,
     budget_used: usize,
 
-    /// The root of the budget tree, held only by the Startup Binary (04-boot-and-bootstrap.md).
+    /// The root of the budget tree, held only by Flint (04-boot-and-bootstrap.md).
     pub fn create_root(total: usize) Error!*MemoryAuthority {
 
         const authority = try cache.alloc();

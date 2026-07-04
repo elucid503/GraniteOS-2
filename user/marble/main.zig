@@ -265,7 +265,7 @@ fn spawn_stage(stage: *const Stage, index: usize, count: usize, rings: *[max_sta
 
     const image = bundle.find(stage.argv[0]) orelse return unknown(stage.argv[0]);
     const memory = try sys.create(.memory_authority, child_budget, cap.memory);
-    const startup = try sys.create(.endpoint, 0, 0);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
     const report = try sys.copy(supervisor, @intCast(index + 1));
     const console = try sys.copy(cap.stdout, @intCast(2 + index));
 
@@ -278,7 +278,7 @@ fn spawn_stage(stage: *const Stage, index: usize, count: usize, rings: *[max_sta
     grants[cap.stderr] = console;
     grants[cap.name_service] = cap.name_service;
     grants[cap.memory] = memory;
-    grants[cap.startup_endpoint] = startup;
+    grants[cap.startup_endpoint] = init_endpoint;
     grants[cap.supervisor] = report;
 
     if (index > 0) {

@@ -1,8 +1,8 @@
-// User-space reader for the M6 module bundle mapped from the Startup Binary.
+// User-space reader for the module bundle mapped from Flint.
 
 const std = @import("std");
 
-const sys = @import("sys.zig");
+const sys = @import("../syscall/sys.zig");
 
 pub const Error = sys.Error;
 

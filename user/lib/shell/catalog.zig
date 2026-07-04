@@ -1,7 +1,7 @@
-// Program catalog and Basalt-style help/about output for Marble and bundled utilities.
+// Program catalog and help/about output for Marble and all the bundled utilities.
 
-const io = @import("io.zig");
-const stream = @import("stream.zig");
+const io = @import("../io/io.zig");
+const stream = @import("../io/stream.zig");
 
 pub const Entry = struct {
 
