@@ -17,18 +17,6 @@ SECTIONS {
 
     }
 
-    /* The M3 user-mode programs: a position-independent blob the kernel copies into each process and maps at EL0.
-       Page-aligned and bounded so boot can copy exactly [__user_text_start, __user_text_end) into a user Region. */
-
-    .user_text : ALIGN(4096) {
-
-        __user_text_start = .;
-        KEEP(*(.user_text))
-        . = ALIGN(4096);
-        __user_text_end = .;
-
-    }
-
     .rodata : ALIGN(4096) {
 
         *(.rodata .rodata.*)

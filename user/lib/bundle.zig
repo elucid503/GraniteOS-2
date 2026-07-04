@@ -69,30 +69,6 @@ pub const Bundle = struct {
 
     }
 
-    pub fn list(self: *const Bundle) Iterator {
-
-        return .{ .bundle = self };
-
-    }
-
-};
-
-pub const Iterator = struct {
-
-    bundle: *const Bundle,
-    index: usize = 0,
-
-    pub fn next(self: *Iterator) ?[]const u8 {
-
-        if (self.index >= self.bundle.count) return null;
-
-        const entry = header_size + self.index * entry_size;
-        self.index += 1;
-
-        return entry_name(self.bundle.bytes[entry .. entry + name_bytes]);
-
-    }
-
 };
 
 fn entry_name(raw: []const u8) []const u8 {

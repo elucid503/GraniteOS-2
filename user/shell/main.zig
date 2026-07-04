@@ -71,7 +71,7 @@ fn run() !void {
     const out = try lib.start.stdout();
     var line: [max_line]u8 = undefined;
 
-    try lib.io.write(out, "\nGraniteOS shell - 'help' lists the builtins.\n");
+    try lib.io.write(out, "\nGraniteOS (temp) shell - run 'help'\n");
 
     while (true) {
 
@@ -162,7 +162,7 @@ fn run_builtin(stage: *const Stage, out: *lib.stream.Stream) !bool {
 
     if (equals(command, "about")) {
 
-        try lib.io.write(out, "GraniteOS-2 M6: bundled ELF programs, name service, and peer-to-peer pipes.\n");
+        try lib.io.write(out, "GraniteOS-2: bundled ELF programs, name service, and peer-to-peer pipes.\n");
         return true;
 
     }

@@ -1,12 +1,9 @@
 // The Startup Binary: parses the boot bundle, starts user-space services, and supervises them.
 
-const std = @import("std");
-
 const lib = @import("lib");
 
 const cap = lib.cap;
 const ipc = lib.ipc;
-const proto = lib.proto;
 const sys = lib.sys;
 
 const Handle = cap.Handle;
@@ -70,8 +67,8 @@ fn run(arg: u64) !void {
 
     try spawn_naming();
     try spawn_console();
-    try register_name("console", console_endpoint);
-    try register_name("naming", naming_endpoint);
+    try lib.stream.register_with(naming_endpoint, "console", console_endpoint);
+    try lib.stream.register_with(naming_endpoint, "naming", naming_endpoint);
     try spawn_shell();
 
 }
@@ -176,30 +173,6 @@ fn spawn_shell() !void {
 
 }
 
-fn register_name(name: []const u8, endpoint: Handle) !void {
-
-    if (name.len > proto.name.max_length) return error.Invalid;
-
-    var inline_name = [_]u8{0} ** proto.name.max_length;
-    @memcpy(inline_name[0..name.len], name);
-
-    var words = [_]u64{0} ** 5;
-    words[0] = name.len;
-
-    for (0..4) |index| {
-
-        words[index + 1] = std.mem.readInt(u64, inline_name[index * 8 ..][0..8], .little);
-
-    }
-
-    _ = try ipc.request(naming_endpoint, proto.name.register, &words, &.{
-
-        .{ .handle = endpoint, .move = false },
-
-    });
-
-}
-
 fn supervise() noreturn {
 
     var message = ipc.Message.zeroed;
@@ -221,15 +194,15 @@ fn restart(who: u64) !void {
         naming_id => {
 
             try spawn_naming();
-            try register_name("console", console_endpoint);
-            try register_name("naming", naming_endpoint);
+            try lib.stream.register_with(naming_endpoint, "console", console_endpoint);
+            try lib.stream.register_with(naming_endpoint, "naming", naming_endpoint);
 
         },
 
         console_id => {
 
             try spawn_console();
-            try register_name("console", console_endpoint);
+            try lib.stream.register_with(naming_endpoint, "console", console_endpoint);
 
         },
 

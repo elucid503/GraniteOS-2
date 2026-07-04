@@ -5,7 +5,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
-    const test_build = b.option(bool, "test", "Exit QEMU via semihosting on halt/panic (for the unattended milestone tests)") orelse false;
+    const test_build = b.option(bool, "test", "Exit QEMU via semihosting on halt/panic") orelse false;
 
     const target = b.resolveTargetQuery(.{
 
@@ -108,7 +108,7 @@ pub fn build(b: *std.Build) void {
     add_qemu_step(b, kernel_image, null, .{
 
         .name = "qemu-bare",
-        .description = "Boot the kernel without an initrd (halts after the kernel milestone demos)",
+        .description = "Boot the kernel without an initrd (halts after initialization)",
         .debug = false,
         .test_build = test_build,
 

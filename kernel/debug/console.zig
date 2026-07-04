@@ -40,6 +40,36 @@ pub fn debug_print(text: []const u8) void {
 
 }
 
+pub fn debug_print_dec(value: u64) void {
+
+    var buffer: [20]u8 = undefined;
+    var length: usize = 0;
+    var remaining = value;
+
+    if (remaining == 0) {
+
+        debug_putchar('0');
+        return;
+
+    }
+
+    while (remaining > 0) {
+
+        buffer[length] = @intCast('0' + (remaining % 10));
+        length += 1;
+        remaining /= 10;
+
+    }
+
+    while (length > 0) {
+
+        length -= 1;
+        debug_putchar(buffer[length]);
+
+    }
+
+}
+
 /// Print a 64-bit value as `0x`-prefixed, zero-padded hex - the one number format the fault diagnostics need.
 pub fn debug_print_hex(value: u64) void {
 

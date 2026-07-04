@@ -87,7 +87,7 @@ fn run() !void {
 
     init_uart();
 
-    put_text("console: driver up\n");
+    put_text("Console: PL011 driver ... Loaded\n");
 
     // The canonical loop, inlined because `read` blocks inside its handler on the RX notification.
 

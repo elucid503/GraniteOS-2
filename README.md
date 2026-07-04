@@ -13,24 +13,19 @@ user-space servers.
 ## Build and run
 
 ```sh
-zig build # build the kernel image + M6 module bundle (zig-out/bin)
+zig build # build the kernel image + user module bundle (zig-out/bin)
 zig build qemu # boot the full system under QEMU virt (interactive; quit with Ctrl-A x)
-zig build qemu-bare # boot the kernel alone; halts after the in-kernel milestone demos
+zig build qemu-bare # boot the kernel alone; halts after initialization
 zig build qemu-debug # boot halted with a gdb stub on :1234
 zig build test # run the host unit tests for the arch-independent core
 ```
 
-`zig build qemu` boots, discovers the machine from the device tree, brings up the
-memory foundation (leak-free alloc/map/free stress loop), the scheduler (two kernel
-threads time-slice, demote, boost, and yield), and the syscall/IPC spine, then proves
-the M5 robustness primitives — one thread waiting on an endpoint and a notification at
-once, and a blocked `call` waking with `Gone` when its server dies — before handing off
-to the Startup Binary. M6 then loads separate bundled ELF programs for the name service,
-console driver, shell, and utilities (`echo`, `cat`, `help`, `cat-via-name`).
-Type `exit` at the prompt to watch the supervisor restart the shell; quit QEMU with
-`Ctrl-A` then `x`. `scripts/m1.sh`…`m3.sh` and `scripts/m5.sh` run the kernel unattended
-(`qemu-bare`) and check each milestone's exit criteria over serial. `scripts/m6.sh`
-drives the interactive M6 shell over serial.
+`zig build qemu` boots, discovers the machine from the device tree, logs each subsystem
+as it comes up (memory, interrupts, objects and scheduler), then hands off to the Startup
+Binary. The startup process loads bundled ELF programs for the name service, console
+driver, shell, and utilities (`echo`, `cat`, `help`, `cat-via-name`). Type `exit` at the
+prompt to watch the supervisor restart the shell; quit QEMU with `Ctrl-A` then `x`.
+`scripts/m6.sh` drives the interactive shell over serial.
 
 ## Layout
 
@@ -43,7 +38,7 @@ build.zig                 kernel + user ELFs + bundle/flatten tools + QEMU run s
 tools/flatten.zig         host tool: ELF -> load-faithful flat image
 tools/bundle.zig          host tool: user module bundle packer
 kernel/
-  main.zig                post-arch entry; machine discovery; M1/M2 demos
+  main.zig                post-arch entry; machine discovery; subsystem init; hand-off
   config.zig              compile-time tunables
   error.zig               shared Error set + ABI mapping
   types.zig               arch-free address types

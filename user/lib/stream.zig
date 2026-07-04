@@ -279,7 +279,7 @@ pub fn lookup(service: []const u8, authority: Handle) Error!Stream {
 
 pub fn lookup_endpoint(service: []const u8) Error!Handle {
 
-    const message = try name_request(proto.name.lookup, service, &.{});
+    const message = try name_request(cap.name_service, proto.name.lookup, service, &.{});
 
     if (message.handle_count < 1) return error.NotFound;
 
@@ -289,7 +289,13 @@ pub fn lookup_endpoint(service: []const u8) Error!Handle {
 
 pub fn register_name(service: []const u8, endpoint: Handle) Error!void {
 
-    _ = try name_request(proto.name.register, service, &.{
+    try register_with(cap.name_service, service, endpoint);
+
+}
+
+pub fn register_with(naming: Handle, service: []const u8, endpoint: Handle) Error!void {
+
+    _ = try name_request(naming, proto.name.register, service, &.{
 
         .{ .handle = endpoint, .move = false },
 
@@ -297,7 +303,7 @@ pub fn register_name(service: []const u8, endpoint: Handle) Error!void {
 
 }
 
-fn name_request(method: u16, name: []const u8, handles: []const ipc.HandleSlot) Error!ipc.Message {
+fn name_request(naming: Handle, method: u16, name: []const u8, handles: []const ipc.HandleSlot) Error!ipc.Message {
 
     if (name.len > proto.name.max_length) return error.Invalid;
 
@@ -313,7 +319,7 @@ fn name_request(method: u16, name: []const u8, handles: []const ipc.HandleSlot) 
 
     }
 
-    return ipc.request(cap.name_service, method, &words, handles);
+    return ipc.request(naming, method, &words, handles);
 
 }
 

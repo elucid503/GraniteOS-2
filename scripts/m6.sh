@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# M6 test: boot the bundled user-space system, launch programs from the shell, run a pipeline, and exercise the name
+# Boot test: boot the bundled user-space system, launch programs from the shell, run a pipeline, and exercise the name
 # service over serial.
 
 set -euo pipefail
@@ -36,7 +36,8 @@ check() {
 
 }
 
-check "console driver came up"        "console: driver up"
+check "kernel initialized"            "Startup: binary hand-off ... Loaded"
+check "console driver came up"        "Console: PL011 driver ... Loaded"
 check "shell reached prompt"          "GraniteOS shell"
 check "external echo launched"        "hello"
 check "pipeline produced output"      "pipe-me"
@@ -46,9 +47,9 @@ check "supervisor restart path"       "bye - the supervisor will bring the shell
 
 if [ "$fail" -ne 0 ]; then
 
-    echo "M6: FAIL"
+    echo "boot: FAIL"
     exit 1
 
 fi
 
-echo "M6: PASS"
+echo "boot: PASS"

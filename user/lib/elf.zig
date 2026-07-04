@@ -27,9 +27,6 @@ const p_filesz = 0x20;
 const p_memsz = 0x28;
 
 const pt_load = 1;
-const pf_x = 1;
-const pf_w = 2;
-const pf_r = 4;
 
 pub const Loaded = struct {
 
@@ -202,18 +199,6 @@ fn build_args(authority: Handle, args: []const []const u8) Error!PackedArgs {
         .length = length,
 
     };
-
-}
-
-fn permissions(flags: u32) u64 {
-
-    var bits: u64 = 0;
-
-    if (flags & pf_r != 0) bits |= sys.read;
-    if (flags & pf_w != 0) bits |= sys.write;
-    if (flags & pf_x != 0) bits |= sys.execute;
-
-    return bits;
 
 }
 
