@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Boot test: boot the bundled user-space system, launch programs from the shell, run a pipeline, and exercise the name
+# Boot test: boot the bundled user-space system, launch programs from Marble, run a pipeline, and exercise the name
 # service over serial.
 
 set -euo pipefail
@@ -38,12 +38,12 @@ check() {
 
 check "kernel initialized"            "Startup: binary hand-off ... Loaded"
 check "console driver came up"        "Console: PL011 driver ... Loaded"
-check "shell reached prompt"          "GraniteOS shell"
+check "marble reached prompt"          "marble [/] >"
 check "external echo launched"        "hello"
 check "pipeline produced output"      "pipe-me"
-check "pipeline exit collection"      "[done] echo=0 cat=0"
+check "help lists programs"           "GraniteOS-2 - Available Programs"
 check "name service lookup works"     "cat-via-name: resolved console"
-check "supervisor restart path"       "bye - the supervisor will bring the shell back."
+check "supervisor restart path"       "Exiting MARBLE..."
 
 if [ "$fail" -ne 0 ]; then
 

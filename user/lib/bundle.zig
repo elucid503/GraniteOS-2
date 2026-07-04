@@ -101,7 +101,7 @@ test "finds modules and rejects malformed headers" {
     const bundle = try Bundle.open_bytes(&bytes);
 
     try testing.expectEqualStrings("hello", bundle.find("echo").?);
-    try testing.expectEqual(@as(?[]const u8, null), bundle.find("shell"));
+    try testing.expectEqual(@as(?[]const u8, null), bundle.find("marble"));
 
     bytes[4] = 9;
     try testing.expectError(error.Invalid, Bundle.open_bytes(&bytes));

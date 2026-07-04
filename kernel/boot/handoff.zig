@@ -45,7 +45,7 @@ pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
     const startup_image = (try bundle.find("startup")) orelse return error.Invalid;
 
     // The working image: a private copy of the startup module at the fixed link base (config.user_space_base), so the
-    // pristine bundle Region below stays untouched for the Startup Binary and shell.
+    // pristine bundle Region below stays untouched for the Startup Binary and Marble.
 
     const image = try Region.create(startup_image.len);
     copy_bytes(image, startup_image);

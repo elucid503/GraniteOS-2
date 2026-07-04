@@ -13,3 +13,4 @@ pub const bundle = @import("bundle.zig");
 pub const elf = @import("elf.zig");
 pub const stream = @import("stream.zig");
 pub const io = @import("io.zig");
+pub const catalog = @import("catalog.zig");

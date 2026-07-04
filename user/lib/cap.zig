@@ -68,7 +68,7 @@ pub const driver = struct {
 
 };
 
-pub const shell = struct {
+pub const marble = struct {
 
     pub const console: Handle = stdin; // the console driver's endpoint (badged)
     pub const bundle: Handle = reserved_grants + 2; // read-only module bundle Region

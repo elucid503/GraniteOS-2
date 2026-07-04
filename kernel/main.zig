@@ -32,7 +32,7 @@ extern const __kernel_end: u8;
 
 pub fn main(dtb_address: arch.PhysAddr) noreturn {
 
-    console.debug_print("GraniteOS-2 (aarch64 virt)\n");
+    console.debug_print("GraniteOS-2 (aarch64 virt)\n\n");
 
     var memory_banks: [8]dtb.MemoryRange = undefined;
     const machine = dtb.parse(dtb_address, &memory_banks) catch {

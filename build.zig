@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
 
     const startup = user_program(b, target, optimize, user_lib, "granite-startup.elf", "user/startup/main.zig");
     const console = user_program(b, target, optimize, user_lib, "granite-console.elf", "user/drivers/console/main.zig");
-    const shell = user_program(b, target, optimize, user_lib, "granite-shell.elf", "user/shell/main.zig");
+    const marble = user_program(b, target, optimize, user_lib, "granite-marble.elf", "user/marble/main.zig");
     const naming = user_program(b, target, optimize, user_lib, "granite-naming.elf", "user/servers/naming/main.zig");
     const echo = user_program(b, target, optimize, user_lib, "granite-echo.elf", "user/programs/echo.zig");
     const cat = user_program(b, target, optimize, user_lib, "granite-cat.elf", "user/programs/cat.zig");
@@ -73,7 +73,7 @@ pub fn build(b: *std.Build) void {
 
         .startup = startup_image,
         .console = console,
-        .shell = shell,
+        .marble = marble,
         .naming = naming,
         .echo = echo,
         .cat = cat,
@@ -224,7 +224,7 @@ const BundleInputs = struct {
 
     startup: std.Build.LazyPath,
     console: *std.Build.Step.Compile,
-    shell: *std.Build.Step.Compile,
+    marble: *std.Build.Step.Compile,
     naming: *std.Build.Step.Compile,
     echo: *std.Build.Step.Compile,
     cat: *std.Build.Step.Compile,
@@ -241,7 +241,7 @@ fn bundle_image_step(b: *std.Build, bundle_tool: *std.Build.Step.Compile, inputs
 
     add_module(run, "startup", inputs.startup);
     add_artifact_module(run, "console", inputs.console);
-    add_artifact_module(run, "shell", inputs.shell);
+    add_artifact_module(run, "marble", inputs.marble);
     add_artifact_module(run, "naming", inputs.naming);
     add_artifact_module(run, "echo", inputs.echo);
     add_artifact_module(run, "cat", inputs.cat);

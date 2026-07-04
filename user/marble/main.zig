@@ -1,4 +1,4 @@
-// M6 shell: builtins plus external program launch from the boot bundle, with simple pipelines over Ring streams.
+// Marble: the GraniteOS interactive shell. Launches bundled programs and runs pipelines over Ring streams.
 
 const std = @import("std");
 
@@ -14,6 +14,9 @@ comptime {
     _ = lib.start;
 
 }
+
+const name = "marble";
+const root_dir = "/";
 
 const max_line = 256;
 const max_stages = 4;
@@ -49,7 +52,9 @@ pub fn main(_: []const []const u8) u8 {
     run() catch |failure| {
 
         const err = lib.start.stdout() catch return 1;
-        lib.io.write(err, "shell: fatal ") catch {};
+
+        lib.io.write(err, name) catch {};
+        lib.io.write(err, ": fatal ") catch {};
         lib.io.write(err, @errorName(failure)) catch {};
         lib.io.write(err, "\n") catch {};
 
@@ -63,7 +68,7 @@ pub fn main(_: []const []const u8) u8 {
 
 fn run() !void {
 
-    const bundle_base = try sys.map(cap.self_space, cap.shell.bundle, 0, sys.read);
+    const bundle_base = try sys.map(cap.self_space, cap.marble.bundle, 0, sys.read);
     bundle = try lib.bundle.Bundle.open(bundle_base + @as(usize, @intCast(lib.start.word(4))), @intCast(lib.start.word(3)));
     supervisor = try sys.create(.endpoint, 0, 0);
 
@@ -71,14 +76,20 @@ fn run() !void {
     const out = try lib.start.stdout();
     var line: [max_line]u8 = undefined;
 
-    try lib.io.write(out, "\nGraniteOS (temp) shell - run 'help'\n");
+    try write_banner(out);
 
     while (true) {
 
-        try lib.io.write(out, "granite> ");
+        try write_prompt(out);
 
         const length = try input.read(&line);
-        var pipeline = try parse(line[0..length]);
+
+        const pipeline = parse(line[0..length]) catch |failure| {
+
+            try report_parse_error(out, failure);
+            continue;
+
+        };
 
         if (pipeline.count == 0) continue;
 
@@ -88,9 +99,42 @@ fn run() !void {
 
         }
 
-        try run_pipeline(&pipeline, out);
+        try run_pipeline(&pipeline);
 
     }
+
+}
+
+fn write_banner(out: *lib.stream.Stream) !void {
+
+    try lib.io.writeln(out, "");
+    try lib.io.writeln(out, "MARBLE ......... Ready");
+    try lib.io.writeln(out, "");
+    try lib.io.writeln(out, "Type 'help' for available commands, 'exit' to relaunch.");
+    try lib.io.writeln(out, "");
+
+}
+
+fn write_prompt(out: *lib.stream.Stream) !void {
+
+    try lib.io.write(out, name);
+    try lib.io.write(out, " [");
+    try lib.io.write(out, root_dir);
+    try lib.io.write(out, "] > ");
+
+}
+
+fn report_parse_error(out: *lib.stream.Stream, failure: anyerror) !void {
+
+    const message = switch (failure) {
+
+        error.TooManyStages => "marble: too many pipe stages",
+        error.EmptyStage => "marble: empty command in pipeline",
+        else => "marble: invalid command line",
+
+    };
+
+    try lib.io.writeln(out, message);
 
 }
 
@@ -108,7 +152,7 @@ fn parse(line: []u8) !Pipeline {
         }
 
         if (cursor >= line.len) break;
-        if (pipeline.count >= max_stages) return error.Invalid;
+        if (pipeline.count >= max_stages) return error.TooManyStages;
 
         var stage = Stage{};
 
@@ -136,7 +180,7 @@ fn parse(line: []u8) !Pipeline {
 
         }
 
-        if (stage.argc == 0) return error.Invalid;
+        if (stage.argc == 0) return error.EmptyStage;
 
         pipeline.stages[pipeline.count] = stage;
         pipeline.count += 1;
@@ -155,21 +199,23 @@ fn run_builtin(stage: *const Stage, out: *lib.stream.Stream) !bool {
 
     if (equals(command, "help")) {
 
-        try lib.io.write(out, "builtins:\n  help   list builtins and bundled programs\n  about  describe this system\n  exit   quit; the supervisor restarts the shell\nprograms:\n  echo\n  cat\n  help\n  cat-via-name\n");
+        try lib.catalog.write_help(out);
+
         return true;
 
     }
 
     if (equals(command, "about")) {
 
-        try lib.io.write(out, "GraniteOS-2: bundled ELF programs, name service, and peer-to-peer pipes.\n");
+        try lib.catalog.write_about(out);
+
         return true;
 
     }
 
     if (equals(command, "exit")) {
 
-        try lib.io.write(out, "bye - the supervisor will bring the shell back.\n");
+        try lib.io.writeln(out, "Exiting MARBLE...");
         lib.start.exit_with(0);
 
     }
@@ -178,10 +224,9 @@ fn run_builtin(stage: *const Stage, out: *lib.stream.Stream) !bool {
 
 }
 
-fn run_pipeline(pipeline: *Pipeline, out: *lib.stream.Stream) !void {
+fn run_pipeline(pipeline: *const Pipeline) !void {
 
     var rings: [max_stages - 1]lib.stream.Ring.Pair = undefined;
-    var statuses: [max_stages]u64 = [_]u64{255} ** max_stages;
 
     if (pipeline.count > 1) {
 
@@ -208,28 +253,9 @@ fn run_pipeline(pipeline: *Pipeline, out: *lib.stream.Stream) !void {
 
         if (badge >= 1 and badge <= @as(u64, @intCast(pipeline.count))) {
 
-            statuses[@intCast(badge - 1)] = message.data[1];
             received += 1;
 
         }
-
-    }
-
-    if (pipeline.count == 1) {
-
-        try lib.io.print(out, "[done] {s}={d}\n", .{ pipeline.stages[0].argv[0], statuses[0] });
-
-    } else {
-
-        try lib.io.write(out, "[done]");
-
-        for (0..pipeline.count) |index| {
-
-            try lib.io.print(out, " {s}={d}", .{ pipeline.stages[index].argv[0], statuses[index] });
-
-        }
-
-        try lib.io.write(out, "\n");
 
     }
 
@@ -289,9 +315,10 @@ fn unknown(command: []const u8) error{NotFound} {
 
     const out = lib.start.stdout() catch return error.NotFound;
 
-    lib.io.write(out, "unknown command: '") catch {};
+    lib.io.write(out, name) catch {};
+    lib.io.write(out, ": unknown command: ") catch {};
     lib.io.write(out, command) catch {};
-    lib.io.write(out, "' - try 'help'.\n") catch {};
+    lib.io.write(out, "\n") catch {};
 
     return error.NotFound;
 

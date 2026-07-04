@@ -23,9 +23,9 @@ zig build test # run the host unit tests for the arch-independent core
 `zig build qemu` boots, discovers the machine from the device tree, logs each subsystem
 as it comes up (memory, interrupts, objects and scheduler), then hands off to the Startup
 Binary. The startup process loads bundled ELF programs for the name service, console
-driver, shell, and utilities (`echo`, `cat`, `help`, `cat-via-name`). Type `exit` at the
-prompt to watch the supervisor restart the shell; quit QEMU with `Ctrl-A` then `x`.
-`scripts/m6.sh` drives the interactive shell over serial.
+console driver, Marble (the interactive shell), and utilities (`echo`, `cat`, `help`,
+`cat-via-name`). Type `exit` at the `marble [/] >` prompt to watch the supervisor restart
+Marble; quit QEMU with `Ctrl-A` then `x`. `scripts/m6.sh` drives Marble over serial.
 
 ## Layout
 

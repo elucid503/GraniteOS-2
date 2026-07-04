@@ -10,7 +10,7 @@ const Handle = cap.Handle;
 
 const page_size = 4096;
 const child_budget = 4 * 1024 * 1024;
-const shell_budget = 16 * 1024 * 1024;
+const marble_budget = 16 * 1024 * 1024;
 
 var bundle: lib.bundle.Bundle = undefined;
 var bundle_length: usize = 0;
@@ -23,7 +23,7 @@ var console_uart: lib.dtb.Uart = undefined;
 
 const naming_id: u64 = 1;
 const console_id: u64 = 2;
-const shell_id: u64 = 3;
+const marble_id: u64 = 3;
 
 pub export fn _start() linksection(".text.start") callconv(.naked) noreturn {
 
@@ -69,7 +69,7 @@ fn run(arg: u64) !void {
     try spawn_console();
     try lib.stream.register_with(naming_endpoint, "console", console_endpoint);
     try lib.stream.register_with(naming_endpoint, "naming", naming_endpoint);
-    try spawn_shell();
+    try spawn_marble();
 
 }
 
@@ -137,13 +137,13 @@ fn spawn_console() !void {
 
 }
 
-fn spawn_shell() !void {
+fn spawn_marble() !void {
 
-    const image = bundle.find("shell") orelse return error.NotFound;
+    const image = bundle.find("marble") orelse return error.NotFound;
     const badged_console = try sys.copy(console_endpoint, 1);
-    const memory = try sys.create(.memory_authority, shell_budget, cap.startup.memory);
+    const memory = try sys.create(.memory_authority, marble_budget, cap.startup.memory);
     const startup = try sys.create(.endpoint, 0, 0);
-    const report = try sys.copy(supervisor_endpoint, shell_id);
+    const report = try sys.copy(supervisor_endpoint, marble_id);
 
     const grants = [_]Handle{
 
@@ -164,7 +164,7 @@ fn spawn_shell() !void {
 
         .image = image,
         .authority = memory,
-        .args = &.{"shell"},
+        .args = &.{"marble"},
         .grants = &grants,
         .data3 = bundle_length,
         .data4 = bundle_offset,
@@ -206,7 +206,7 @@ fn restart(who: u64) !void {
 
         },
 
-        shell_id => try spawn_shell(),
+        marble_id => try spawn_marble(),
 
         else => {},
 
