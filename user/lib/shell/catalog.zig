@@ -57,6 +57,7 @@ pub fn write_about(out: *stream.Stream) io.Error!void {
     try io.writeln(out, "  - User-space drivers and servers");
     try io.writeln(out, "  - Ring-stream pipeline support");
     try io.writeln(out, "  - Bundled ELF program loading");
+    try io.writeln(out, "  - FLINT startup program");
     try io.writeln(out, "  - MARBLE shell");
     try io.writeln(out, "");
     try io.writeln(out, "Type 'help' to see available commands.");
