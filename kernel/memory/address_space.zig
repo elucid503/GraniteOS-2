@@ -79,7 +79,9 @@ pub const AddressSpace = struct {
 
         slot.* = .{ .base = base, .pages = region.pages, .active = true };
 
-        if (at == null) self.next_base = base + region.pages * page_size;
+        const end = base + region.pages * page_size;
+
+        if (end > self.next_base) self.next_base = end;
 
         return base;
 

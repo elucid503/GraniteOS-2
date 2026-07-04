@@ -1,14 +1,11 @@
-// Build the aarch64 freestanding kernel, the user-space Startup Binary image, and the QEMU `virt` run steps (08-roadmap.md; 06-kernel-ddd.md Section 2, 07-userspace-ddd.md Section 2, Section 11).
+// Build the aarch64 freestanding kernel, M6 user module bundle, and QEMU `virt` run steps.
 
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
-
-    const test_build = b.option( bool, "test", "Exit QEMU via semihosting on halt/panic (for the unattended milestone tests)") orelse false;
-
-    // ARM64 `virt`, cortex-a57: EL1 kernel, GICv2, ARM generic timer (06-kernel-ddd.md Section 1, Section 16.5).
+    const test_build = b.option(bool, "test", "Exit QEMU via semihosting on halt/panic (for the unattended milestone tests)") orelse false;
 
     const target = b.resolveTargetQuery(.{
 
@@ -48,9 +45,6 @@ pub fn build(b: *std.Build) void {
     kernel.setLinkerScript(b.path("kernel/arch/aarch64/asm/linker.ld"));
     kernel.entry = .{ .symbol_name = "_start" };
 
-    // The user-space image (07-userspace-ddd.md Section 2): the runtime library plus the Startup Binary, console
-    // driver, and shell, linked as one static non-PIE image at the fixed user base (user/linker/user.ld).
-
     const user_lib = b.createModule(.{
 
         .root_source_file = b.path("user/lib/root.zig"),
@@ -61,109 +55,64 @@ pub fn build(b: *std.Build) void {
 
     });
 
-    const user_console = b.createModule(.{
+    const startup = user_program(b, target, optimize, user_lib, "granite-startup.elf", "user/startup/main.zig");
+    const console = user_program(b, target, optimize, user_lib, "granite-console.elf", "user/drivers/console/main.zig");
+    const shell = user_program(b, target, optimize, user_lib, "granite-shell.elf", "user/shell/main.zig");
+    const naming = user_program(b, target, optimize, user_lib, "granite-naming.elf", "user/servers/naming/main.zig");
+    const echo = user_program(b, target, optimize, user_lib, "granite-echo.elf", "user/programs/echo.zig");
+    const cat = user_program(b, target, optimize, user_lib, "granite-cat.elf", "user/programs/cat.zig");
+    const help = user_program(b, target, optimize, user_lib, "granite-help.elf", "user/programs/help.zig");
+    const cat_via_name = user_program(b, target, optimize, user_lib, "granite-cat-via-name.elf", "user/programs/cat_via_name.zig");
 
-        .root_source_file = b.path("user/drivers/console/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .single_threaded = true,
-        .pic = false,
-
-    });
-
-    user_console.addImport("lib", user_lib);
-
-    const user_shell = b.createModule(.{
-
-        .root_source_file = b.path("user/shell/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .single_threaded = true,
-        .pic = false,
-
-    });
-
-    user_shell.addImport("lib", user_lib);
-
-    const user_startup = b.createModule(.{
-
-        .root_source_file = b.path("user/startup/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .code_model = .small,
-        .single_threaded = true,
-        .pic = false,
-
-    });
-
-    user_startup.addImport("lib", user_lib);
-    user_startup.addImport("console", user_console);
-    user_startup.addImport("shell", user_shell);
-
-    const startup = b.addExecutable(.{
-
-        .name = "granite-startup.elf",
-        .root_module = user_startup,
-
-    });
-
-    startup.setLinkerScript(b.path("user/linker/user.ld"));
-    startup.entry = .{ .symbol_name = "_start" };
-
-    // QEMU hands the DTB in x0 only for a flat image, not a bare ELF; a host tool flattens load segments faithfully
-    // (objcopy drops page gaps) and pads to the memory extent so the raw-mapped BSS arrives zeroed.
-
-    const flatten = b.addExecutable(.{
-
-        .name = "flatten",
-        .root_module = b.createModule(.{
-
-            .root_source_file = b.path("tools/flatten.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-
-        }),
-
-    });
+    const flatten = host_tool(b, "flatten", "tools/flatten.zig");
+    const bundle_tool = host_tool(b, "bundle", "tools/bundle.zig");
 
     const kernel_image = flatten_image(b, flatten, kernel, "granite-kernel.bin");
-    const startup_image = flatten_image(b, flatten, startup, "granite-startup.bin");
+    const startup_image = flatten_image(b, flatten, startup, "startup.bin");
+    const bundle_image = bundle_image_step(b, bundle_tool, .{
+
+        .startup = startup_image,
+        .console = console,
+        .shell = shell,
+        .naming = naming,
+        .echo = echo,
+        .cat = cat,
+        .help = help,
+        .cat_via_name = cat_via_name,
+
+    });
 
     b.installArtifact(kernel);
-    b.getInstallStep().dependOn(&b.addInstallBinFile( kernel_image, "granite-kernel.bin", ).step);
-    b.getInstallStep().dependOn(&b.addInstallBinFile( startup_image, "granite-startup.bin", ).step);
+    b.getInstallStep().dependOn(&b.addInstallBinFile(kernel_image, "granite-kernel.bin").step);
+    b.getInstallStep().dependOn(&b.addInstallBinFile(startup_image, "startup.bin").step);
+    b.getInstallStep().dependOn(&b.addInstallBinFile(bundle_image, "bundle.img").step);
 
-    add_qemu_step(b, kernel_image, startup_image, .{
+    add_qemu_step(b, kernel_image, bundle_image, .{
 
         .name = "qemu",
-        .description = "Boot the full system (kernel + startup binary) under QEMU `virt`",
+        .description = "Boot the full M6 system under QEMU `virt`",
         .debug = false,
         .test_build = test_build,
 
     });
 
-    add_qemu_step(b, kernel_image, startup_image, .{
+    add_qemu_step(b, kernel_image, bundle_image, .{
 
         .name = "qemu-debug",
-        .description = "Boot the full system under QEMU `virt`, halted, with a gdb stub on :1234",
+        .description = "Boot the full M6 system under QEMU `virt`, halted, with a gdb stub on :1234",
         .debug = true,
         .test_build = test_build,
 
     });
 
-    // The kernel alone halts after the M3 checks, so the M1-M3 smoke tests terminate via semihosting.
-
     add_qemu_step(b, kernel_image, null, .{
 
         .name = "qemu-bare",
-        .description = "Boot the kernel without an initrd (halts after the M3 checks)",
+        .description = "Boot the kernel without an initrd (halts after the kernel milestone demos)",
         .debug = false,
         .test_build = test_build,
 
     });
-
-    // Host unit tests for the arch-independent core and the user runtime (06-kernel-ddd.md cross-cutting:
-    // zig test runs on the host, QEMU is for integration).
 
     const kernel_tests = b.addTest(.{
 
@@ -177,15 +126,27 @@ pub fn build(b: *std.Build) void {
 
     });
 
+    const host_user_lib = b.createModule(.{
+
+        .root_source_file = b.path("user/lib/root.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+
+    });
+
+    const user_tests_module = b.createModule(.{
+
+        .root_source_file = b.path("user/tests.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+
+    });
+
+    user_tests_module.addImport("lib", host_user_lib);
+
     const user_tests = b.addTest(.{
 
-        .root_module = b.createModule(.{
-
-            .root_source_file = b.path("user/tests.zig"),
-            .target = b.graph.host,
-            .optimize = optimize,
-
-        }),
+        .root_module = user_tests_module,
 
     });
 
@@ -196,6 +157,59 @@ pub fn build(b: *std.Build) void {
 
 }
 
+fn user_program(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    user_lib: *std.Build.Module,
+    name: []const u8,
+    root: []const u8,
+) *std.Build.Step.Compile {
+
+    const module = b.createModule(.{
+
+        .root_source_file = b.path(root),
+        .target = target,
+        .optimize = optimize,
+        .code_model = .small,
+        .single_threaded = true,
+        .pic = false,
+
+    });
+
+    module.addImport("lib", user_lib);
+
+    const executable = b.addExecutable(.{
+
+        .name = name,
+        .root_module = module,
+
+    });
+
+    executable.setLinkerScript(b.path("user/linker/user.ld"));
+    executable.entry = .{ .symbol_name = "_start" };
+
+    return executable;
+
+}
+
+fn host_tool(b: *std.Build, name: []const u8, root: []const u8) *std.Build.Step.Compile {
+
+    return b.addExecutable(.{
+
+        .name = name,
+        .root_module = b.createModule(.{
+
+            .root_source_file = b.path(root),
+            .target = b.graph.host,
+            .optimize = .Debug,
+
+        }),
+
+    });
+
+}
+
 fn flatten_image(b: *std.Build, flatten: *std.Build.Step.Compile, image: *std.Build.Step.Compile, name: []const u8) std.Build.LazyPath {
 
     const run = b.addRunArtifact(flatten);
@@ -203,6 +217,52 @@ fn flatten_image(b: *std.Build, flatten: *std.Build.Step.Compile, image: *std.Bu
     run.addArtifactArg(image);
 
     return run.addOutputFileArg(name);
+
+}
+
+const BundleInputs = struct {
+
+    startup: std.Build.LazyPath,
+    console: *std.Build.Step.Compile,
+    shell: *std.Build.Step.Compile,
+    naming: *std.Build.Step.Compile,
+    echo: *std.Build.Step.Compile,
+    cat: *std.Build.Step.Compile,
+    help: *std.Build.Step.Compile,
+    cat_via_name: *std.Build.Step.Compile,
+
+};
+
+fn bundle_image_step(b: *std.Build, bundle_tool: *std.Build.Step.Compile, inputs: BundleInputs) std.Build.LazyPath {
+
+    const run = b.addRunArtifact(bundle_tool);
+
+    const output = run.addOutputFileArg("bundle.img");
+
+    add_module(run, "startup", inputs.startup);
+    add_artifact_module(run, "console", inputs.console);
+    add_artifact_module(run, "shell", inputs.shell);
+    add_artifact_module(run, "naming", inputs.naming);
+    add_artifact_module(run, "echo", inputs.echo);
+    add_artifact_module(run, "cat", inputs.cat);
+    add_artifact_module(run, "help", inputs.help);
+    add_artifact_module(run, "cat-via-name", inputs.cat_via_name);
+
+    return output;
+
+}
+
+fn add_module(run: *std.Build.Step.Run, name: []const u8, file: std.Build.LazyPath) void {
+
+    run.addArg(name);
+    run.addFileArg(file);
+
+}
+
+fn add_artifact_module(run: *std.Build.Step.Run, name: []const u8, artifact: *std.Build.Step.Compile) void {
+
+    run.addArg(name);
+    run.addArtifactArg(artifact);
 
 }
 

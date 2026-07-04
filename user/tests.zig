@@ -2,7 +2,7 @@
 
 test {
 
-    _ = @import("lib/ipc.zig");
-    _ = @import("lib/dtb.zig");
+    _ = @import("lib");
+    _ = @import("servers/naming/main.zig");
 
 }

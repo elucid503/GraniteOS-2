@@ -1,5 +1,7 @@
 // Typed wrappers for the 17 kernel verbs (07-userspace-ddd.md Section 3.1; 03-syscall-abi.md): number in x8, arguments in x0-x5, signed result in x0.
 
+const builtin = @import("builtin");
+
 const cap = @import("cap.zig");
 const ipc = @import("ipc.zig");
 
@@ -189,6 +191,12 @@ pub fn copy(target: Handle, badge: u64) Error!Handle {
 // The raw trap. The kernel's svc path saves and restores the whole register frame, so only x0 (the result) changes.
 
 fn invoke(number: Number, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) i64 {
+
+    if (comptime builtin.target.cpu.arch != .aarch64) {
+
+        @panic("user syscalls are target-only");
+
+    }
 
     return asm volatile ("svc #0"
         : [result] "={x0}" (-> i64),

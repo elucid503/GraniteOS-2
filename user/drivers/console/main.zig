@@ -10,6 +10,12 @@ const sys = lib.sys;
 const Handle = cap.Handle;
 const Message = ipc.Message;
 
+comptime {
+
+    _ = lib.start;
+
+}
+
 // PL011 registers (offsets from the mapped window).
 
 const data = 0x00; // DR
@@ -37,7 +43,7 @@ var rx_notification: Handle = 0;
 // Per-client shared buffers (05-server-protocol.md): attached once, then reused by every read/write. Badges are the
 // M4 session ids; Startup uses 0, the shell uses 1.
 
-const max_sessions = 4;
+const max_sessions = 16;
 
 const Session = struct {
 
@@ -48,11 +54,7 @@ const Session = struct {
 
 var sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions;
 
-pub fn main(_: u64) callconv(.c) noreturn {
-
-    // Report our exit to the Startup Binary, which supervises the driver (M5, 07 Section 10.4).
-
-    lib.start.supervise_via(cap.driver.supervisor);
+pub fn main(_: []const []const u8) u8 {
 
     run() catch |failure| {
 
@@ -64,9 +66,11 @@ pub fn main(_: u64) callconv(.c) noreturn {
 
         }
 
+        return 1;
+
     };
 
-    lib.start.exit_with(1);
+    return 0;
 
 }
 

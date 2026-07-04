@@ -36,27 +36,47 @@ pub const startup = struct {
     pub const interrupts: Handle = 1; // InterruptAuthority
     pub const devices: Handle = 2; // DeviceAuthority
     pub const dtb: Handle = 3; // read-only DTB Region
-    pub const module: Handle = 4; // pristine boot-module Region (the flat user image)
+    pub const module: Handle = 4; // read-only module bundle Region
 
 };
 
-// M4 grant layouts, in spawn order. The full reserved layout (STDIN..SUPERVISOR, 07-userspace-ddd.md Section 3.2)
-// lands with M6's spawn/argv machinery; until then each program class documents its own short list here.
+// M6 reserved grant layout (07-userspace-ddd.md Section 3.2). Spawners fill these first, in order, so every program
+// can start before it has dynamic discovery.
+
+pub const stdin: Handle = 0;
+pub const stdout: Handle = 1;
+pub const stderr: Handle = 2;
+pub const name_service: Handle = 3;
+pub const memory: Handle = 4;
+pub const startup_endpoint: Handle = 5;
+pub const supervisor: Handle = 6;
+
+pub const reserved_grants = 7;
+
+// Ring streams use the STDIN/STDOUT slots for the shared Region and these tail slots for the Notification.
+
+pub const ring_stdin_ready: Handle = 7;
+pub const ring_stdout_ready: Handle = 8;
+
+// Per-class names for extra tail grants.
 
 pub const driver = struct {
 
-    pub const endpoint: Handle = 0; // requests arrive here
-    pub const device: Handle = 1; // MMIO window Region
-    pub const interrupt: Handle = 2; // the hardware line
-    pub const memory: Handle = 3; // memory-authority sub-grant
-    pub const supervisor: Handle = 4; // endpoint to report exit to (badged; M5, 07 Section 10.4)
+    pub const endpoint: Handle = stdin; // requests arrive here
+    pub const device: Handle = reserved_grants; // MMIO window Region
+    pub const interrupt: Handle = reserved_grants + 1; // the hardware line
 
 };
 
 pub const shell = struct {
 
-    pub const console: Handle = 0; // the console driver's endpoint (badged)
-    pub const memory: Handle = 1; // memory-authority sub-grant
-    pub const supervisor: Handle = 2; // endpoint to report exit to (badged; M5, 07 Section 10.4)
+    pub const console: Handle = stdin; // the console driver's endpoint (badged)
+    pub const bundle: Handle = reserved_grants + 2; // read-only module bundle Region
+
+};
+
+pub const server = struct {
+
+    pub const endpoint: Handle = stdin;
 
 };

@@ -6,6 +6,7 @@ const arch = @import("../arch/arch.zig");
 const config = @import("../config.zig");
 
 const dtb = @import("dtb.zig");
+const bundle_module = @import("bundle.zig");
 const frames = @import("../memory/frames.zig");
 const region_module = @import("../memory/region.zig");
 const address_space = @import("../memory/address_space.zig");
@@ -39,12 +40,15 @@ const image_permissions = arch.Permissions{ .read = true, .write = true, .execut
 pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
 
     const space = try AddressSpace.create();
+    const initrd_bytes: [*]const u8 = @ptrFromInt(initrd.base);
+    const bundle = try bundle_module.Bundle.open(initrd_bytes[0..initrd.length]);
+    const startup_image = (try bundle.find("startup")) orelse return error.Invalid;
 
-    // The working image: a private copy of the initrd bytes at the fixed link base (config.user_space_base), so the
-    // pristine module Region below stays untouched for the Startup Binary to load its children from.
+    // The working image: a private copy of the startup module at the fixed link base (config.user_space_base), so the
+    // pristine bundle Region below stays untouched for the Startup Binary and shell.
 
-    const image = try Region.create(initrd.length);
-    copy_initrd(image, initrd);
+    const image = try Region.create(startup_image.len);
+    copy_bytes(image, startup_image);
 
     const image_base = try space.map(image, null, image_permissions);
 
@@ -56,8 +60,9 @@ pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
 
     // The capability bundle (04-boot-and-bootstrap.md): all authority plus the DTB and boot module, nothing ambient.
 
-    const modules = try Region.create(initrd.length);
-    copy_initrd(modules, initrd);
+    const module_page = std.mem.alignBackward(PhysAddr, initrd.base, page_size);
+    const module_top = std.mem.alignForward(PhysAddr, initrd.base + initrd.length, page_size);
+    const modules = try Region.wrap(module_page, module_top - module_page);
 
     const dtb_page = std.mem.alignBackward(PhysAddr, dtb_address, page_size);
     const dtb_top = std.mem.alignForward(PhysAddr, dtb_address + dtb.total_size(dtb_address), page_size);
@@ -77,20 +82,22 @@ pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
 
     };
 
-    const startup = try Process.spawn(space, image_base, stack_top, &grants, dtb_address - dtb_page);
+    const module_offset = initrd.base - module_page;
+    const startup_arg =
+        (@as(u64, @intCast(initrd.length)) << 32) |
+        (@as(u64, @intCast(module_offset)) << 16) |
+        (dtb_address - dtb_page);
+    const startup = try Process.spawn(space, image_base, stack_top, &grants, startup_arg);
     _ = startup.header.release();
 
 }
 
-// Fill `region` with the initrd bytes (text, data, and the flatten-padded zero BSS), zeroing any rounding slack.
-
-fn copy_initrd(region: *Region, initrd: dtb.MemoryRange) void {
+fn copy_bytes(region: *Region, bytes: []const u8) void {
 
     const destination: [*]u8 = @ptrFromInt(region.base);
-    const source: [*]const u8 = @ptrFromInt(initrd.base);
 
-    @memcpy(destination[0..initrd.length], source[0..initrd.length]);
-    @memset(destination[initrd.length .. region.pages * page_size], 0);
+    @memcpy(destination[0..bytes.len], bytes);
+    @memset(destination[bytes.len .. region.pages * page_size], 0);
 
     arch.sync_instruction_cache();
 

@@ -11,7 +11,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-# Build the kernel + Startup Binary images, then drive the interactive system directly under QEMU.
+# Build the kernel + module bundle, then drive the interactive system directly under QEMU.
 
 zig build 2>&1
 
@@ -20,7 +20,7 @@ session=$'help\nabout\n'
 output="$(printf '%s' "$session" | timeout 20 qemu-system-aarch64 \
     -machine virt -cpu cortex-a57 -smp 1 -m 256M -nographic \
     -kernel zig-out/bin/granite-kernel.bin \
-    -initrd zig-out/bin/granite-startup.bin 2>&1 || true)"
+    -initrd zig-out/bin/bundle.img 2>&1 || true)"
 
 echo "$output"
 
@@ -46,7 +46,7 @@ check "console driver came up"        "console: driver up"
 check "reached the interactive prompt" "GraniteOS shell"
 check "typing echoes through driver"  "granite> help"
 check "help builtin ran"              "builtins:"
-check "about builtin ran"             "talking over IPC"
+check "about builtin ran"             "bundled ELF programs"
 
 # Global exit
 

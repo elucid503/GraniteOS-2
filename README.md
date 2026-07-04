@@ -13,7 +13,7 @@ user-space servers.
 ## Build and run
 
 ```sh
-zig build # build the kernel ELF + flat boot image (zig-out/bin)
+zig build # build the kernel image + M6 module bundle (zig-out/bin)
 zig build qemu # boot the full system under QEMU virt (interactive; quit with Ctrl-A x)
 zig build qemu-bare # boot the kernel alone; halts after the in-kernel milestone demos
 zig build qemu-debug # boot halted with a gdb stub on :1234
@@ -25,10 +25,12 @@ memory foundation (leak-free alloc/map/free stress loop), the scheduler (two ker
 threads time-slice, demote, boost, and yield), and the syscall/IPC spine, then proves
 the M5 robustness primitives — one thread waiting on an endpoint and a notification at
 once, and a blocked `call` waking with `Gone` when its server dies — before handing off
-to the Startup Binary, which brings up the console driver and a **supervised** shell.
+to the Startup Binary. M6 then loads separate bundled ELF programs for the name service,
+console driver, shell, and utilities (`echo`, `cat`, `help`, `cat-via-name`).
 Type `exit` at the prompt to watch the supervisor restart the shell; quit QEMU with
 `Ctrl-A` then `x`. `scripts/m1.sh`…`m3.sh` and `scripts/m5.sh` run the kernel unattended
-(`qemu-bare`) and check each milestone's exit criteria over serial.
+(`qemu-bare`) and check each milestone's exit criteria over serial. `scripts/m6.sh`
+drives the interactive M6 shell over serial.
 
 ## Layout
 
@@ -37,8 +39,9 @@ inputs (`.S` sources and the linker script) in an `asm/` subdirectory, so the
 arch directory itself is Zig-only.
 
 ```
-build.zig                 kernel + flatten tool + QEMU run steps
+build.zig                 kernel + user ELFs + bundle/flatten tools + QEMU run steps
 tools/flatten.zig         host tool: ELF -> load-faithful flat image
+tools/bundle.zig          host tool: user module bundle packer
 kernel/
   main.zig                post-arch entry; machine discovery; M1/M2 demos
   config.zig              compile-time tunables
@@ -64,6 +67,7 @@ kernel/
     board/virt.zig        board fallback constants (UART, GIC windows)
   boot/
     dtb.zig               device-tree parse: memory, cores, intctrl windows
+    bundle.zig            startup-module lookup inside the initrd bundle
   memory/
     frames.zig            buddy physical-frame allocator
     slab.zig              per-type object caches

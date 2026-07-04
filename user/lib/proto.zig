@@ -21,6 +21,32 @@ pub const stream = struct {
 
 };
 
+// Init message consumed by the runtime on cap.startup_endpoint before it calls the program's main.
+
+pub const init = struct {
+
+    pub const stdin_ring: u64 = 1 << 0;
+    pub const stdout_ring: u64 = 1 << 1;
+    pub const stderr_ring: u64 = 1 << 2;
+
+};
+
+// Name service interface (07-userspace-ddd.md Section 10.1), with M6 inline names.
+
+pub const name = struct {
+
+    pub const interface_id: u32 = 0x4e41_4d45; // "NAME"
+    pub const version: u32 = 1;
+
+    pub const max_length: usize = 32;
+
+    pub const register: u16 = 1;
+    pub const lookup: u16 = 2;
+    pub const list: u16 = 3;
+    pub const unregister: u16 = 4;
+
+};
+
 // The process-supervision (death) convention (07-userspace-ddd.md Section 10.4): a child's runtime `send`s a one-way
 // death message here on exit; the spawner (the Startup Binary) receives these to reap and restart. The sender's badge
 // identifies the child; data[1] carries its exit status.
