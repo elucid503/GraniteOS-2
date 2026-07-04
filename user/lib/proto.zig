@@ -20,3 +20,13 @@ pub const stream = struct {
     pub const mode_cooked: u64 = 1;
 
 };
+
+// The process-supervision (death) convention (07-userspace-ddd.md Section 10.4): a child's runtime `send`s a one-way
+// death message here on exit; the spawner (the Startup Binary) receives these to reap and restart. The sender's badge
+// identifies the child; data[1] carries its exit status.
+
+pub const supervisor = struct {
+
+    pub const death: u16 = 1; // request: exit status        (one-way; no reply)
+
+};

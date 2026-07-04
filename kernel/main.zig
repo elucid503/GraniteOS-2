@@ -21,7 +21,12 @@ const memory_authority = @import("authority/memory_authority.zig");
 const interrupt_authority = @import("authority/interrupt_authority.zig");
 const device_authority = @import("authority/device_authority.zig");
 const scheduler = @import("sched/scheduler.zig");
+const transfer = @import("ipc/transfer.zig");
 const programs = @import("user/programs.zig");
+
+const message_module = @import("ipc/message.zig");
+const Message = message_module.Message;
+const notification_wake = message_module.notification_wake;
 
 const Region = region.Region;
 const AddressSpace = address_space.AddressSpace;
@@ -222,7 +227,165 @@ fn run_m3() noreturn {
 
     report_m3(client_boot);
 
+    run_m5();
+
+}
+
+// M5: robustness and multi-wait (08-roadmap.md M5 "Done when"). Two in-kernel demos over the same IPC primitives the
+// syscall layer uses: one thread serves a request and an async event through a single `receive` (bound notification),
+// and a client blocked in `call` wakes with `Gone` when its server dies without replying. Kernel-mode threads (like the
+// M2 demo) drive the transfer path directly, so the proof needs no user image and runs under the bare smoke test.
+
+const M5 = struct {
+
+    var request_ep: *Endpoint = undefined;
+    var bound: *Notification = undefined;
+    var multi_wait_done: *Notification = undefined;
+
+    var gone_ep: *Endpoint = undefined;
+    var gone_done: *Notification = undefined;
+
+    var saw_event: bool = false;
+    var saw_request: bool = false;
+    var multi_wait_ok: bool = false;
+    var gone_ok: bool = false;
+
+    const event_bits: u64 = 0b1010;
+
+};
+
+fn run_m5() noreturn {
+
+    const space = AddressSpace.create() catch oom();
+    const kproc = Process.create(space) catch oom();
+
+    // Phase 1 - multi-wait: one thread waits on an endpoint and a notification at once.
+
+    M5.request_ep = Endpoint.create() catch oom();
+    M5.bound = Notification.create() catch oom();
+    M5.multi_wait_done = Notification.create() catch oom();
+
+    const waiter = Thread.create(kproc, @intFromPtr(&m5_waiter)) catch oom();
+    waiter.start();
+
+    // The event may arrive before the waiter first blocks; the pending path in `receive` still reports it.
+
+    M5.bound.signal(M5.event_bits);
+
+    const requester = Thread.create(kproc, @intFromPtr(&m5_requester)) catch oom();
+    requester.start();
+
+    overseer_wait(M5.multi_wait_done);
+
+    if (!M5.multi_wait_ok) panic_path.panic("M5: multi-wait did not deliver both a request and an event", null);
+
+    console.debug_print("M5: multi-wait OK\n");
+
+    // Phase 2 - Gone: a client blocked in `call` wakes when its server dies without replying.
+
+    M5.gone_ep = Endpoint.create() catch oom();
+    M5.gone_done = Notification.create() catch oom();
+
+    const victim = Thread.create(kproc, @intFromPtr(&m5_victim)) catch oom();
+    victim.start();
+
+    const client = Thread.create(kproc, @intFromPtr(&m5_client)) catch oom();
+    client.start();
+
+    overseer_wait(M5.gone_done);
+
+    if (!M5.gone_ok) panic_path.panic("M5: a dead server did not wake its blocked caller with Gone", null);
+
+    console.debug_print("M5: gone OK\n");
+    console.debug_print("M5: OK robustness and multi-wait up\n");
+
     run_m4();
+
+}
+
+// The waiter serves both worlds through one `receive`: a bound-notification wake counts as an event, any other wake is
+// a request it replies to. Seeing one of each proves single-thread multi-wait; it then reports done and retires.
+
+fn m5_waiter(_: u64) callconv(.c) void {
+
+    const self = scheduler.current_core().current.?;
+
+    M5.bound.bound_to = self;
+    self.bound_notification = M5.bound;
+    M5.bound.header.retain();
+
+    while (!(M5.saw_event and M5.saw_request)) {
+
+        const badge = transfer.receive(self, M5.request_ep) catch break;
+
+        if (badge == notification_wake) {
+
+            if (self.notify_bits == M5.event_bits) M5.saw_event = true;
+
+        } else {
+
+            M5.saw_request = true;
+
+            self.staged = Message.zeroed;
+
+            transfer.reply(self, self.staged.reply) catch {};
+
+        }
+
+    }
+
+    M5.multi_wait_ok = M5.saw_event and M5.saw_request;
+    M5.multi_wait_done.signal(1);
+
+}
+
+fn m5_requester(_: u64) callconv(.c) void {
+
+    const self = scheduler.current_core().current.?;
+
+    self.staged = Message.zeroed;
+
+    transfer.call(self, M5.request_ep) catch {};
+
+}
+
+// The victim receives a call, then dies without replying - exercising the reply-cancellation teardown.
+
+fn m5_victim(_: u64) callconv(.c) void {
+
+    const self = scheduler.current_core().current.?;
+
+    _ = transfer.receive(self, M5.gone_ep) catch {};
+
+}
+
+fn m5_client(_: u64) callconv(.c) void {
+
+    const self = scheduler.current_core().current.?;
+
+    self.staged = Message.zeroed;
+
+    if (transfer.call(self, M5.gone_ep)) |_| {} else |failure| {
+
+        if (failure == error.Gone) M5.gone_ok = true;
+
+    }
+
+    M5.gone_done.signal(1);
+
+}
+
+// Park the overseer on `notification` until a demo thread signals completion (the run_m3 done-handshake pattern).
+
+fn overseer_wait(notification: *Notification) void {
+
+    const overseer = scheduler.current_core().current.?;
+
+    if (notification.poll_or_block(overseer) == null) {
+
+        scheduler.block(scheduler.current_core(), overseer, &notification.header);
+
+    }
 
 }
 

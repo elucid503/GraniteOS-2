@@ -9,6 +9,8 @@ const Endpoint = @import("../object/endpoint.zig").Endpoint;
 const Handle = @import("../cap/handle.zig").Handle;
 const Error = @import("../error.zig").Error;
 
+const notification_wake = @import("message.zig").notification_wake;
+
 const no_handle: Handle = @bitCast(@as(u32, 0xffff_ffff));
 
 /// Synchronous send: block until a receiver takes the message (no reply). `from.staged` is already filled.
@@ -30,10 +32,18 @@ pub fn send(from: *Thread, endpoint: *Endpoint) Error!void {
     }
 
     from.is_call = false;
+    from.ipc_aborted = false;
     from.state = .blocked_send;
     endpoint.senders.push(from);
 
     scheduler.block(core, from, &endpoint.header);
+
+    if (from.ipc_aborted) {
+
+        from.ipc_aborted = false;
+        return error.Gone;
+
+    }
 
 }
 
@@ -47,6 +57,7 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
 
     from.is_call = true;
     from.awaiting_reply = true;
+    from.ipc_aborted = false;
 
     if (endpoint.receivers.pop()) |receiver| {
 
@@ -58,24 +69,44 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
 
         scheduler.hand_off(from, receiver);
 
-        return;
+    } else {
+
+        from.state = .blocked_send;
+        endpoint.senders.push(from);
+
+        scheduler.block(core, from, &endpoint.header);
 
     }
 
-    from.state = .blocked_send;
-    endpoint.senders.push(from);
+    // The server (or the endpoint) died while we blocked: the call cannot complete (06-kernel-ddd.md Section 9).
 
-    scheduler.block(core, from, &endpoint.header);
+    if (from.ipc_aborted) {
+
+        from.ipc_aborted = false;
+        from.awaiting_reply = false;
+        return error.Gone;
+
+    }
 
 }
 
-/// Receive: take a waiting sender's message, or block until one arrives. Returns the sender's badge.
+/// Receive: take a waiting sender's message, block until one arrives, or wake on the bound notification (multi-wait).
+/// Returns the sender's badge, or `notification_wake` with the event bits staged in `into.notify_bits`.
 pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
     const saved = arch.disable_interrupts();
     defer arch.restore_interrupts(saved);
 
     const core = scheduler.current_core();
+
+    // The first receive on an endpoint registers the thread as one of its servers (06-kernel-ddd.md Section 9).
+
+    if (into.serving == null) {
+
+        into.serving = endpoint;
+        endpoint.join();
+
+    }
 
     if (endpoint.senders.pop()) |sender| {
 
@@ -90,10 +121,31 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
     }
 
+    // Multi-wait: an event already pending on the bound notification wakes us without blocking.
+
+    if (into.bound_notification) |notification| {
+
+        if (notification.take_pending()) |bits| {
+
+            into.notify_bits = bits;
+            return notification_wake;
+
+        }
+
+    }
+
+    into.woke_on_notification = false;
     into.state = .blocked_receive;
     endpoint.receivers.push(into);
 
     scheduler.block(core, into, &endpoint.header);
+
+    if (into.woke_on_notification) {
+
+        into.woke_on_notification = false;
+        return notification_wake;
+
+    }
 
     return into.observed_badge;
 
@@ -112,6 +164,7 @@ pub fn reply(from: *Thread, reply_handle: Handle) Error!void {
     try deliver(from, caller, false);
 
     caller.awaiting_reply = false;
+    from.owes_reply_to = null;
     from.process.handles.close(reply_handle) catch {};
 
     scheduler.unblock(scheduler.current_core(), caller);
@@ -137,6 +190,10 @@ fn deliver(source: *Thread, dest: *Thread, is_call: bool) Error!void {
     if (is_call) {
 
         dest.staged.reply = try dest.process.handles.insert(&source.header);
+
+        // The receiver now owes this caller a reply; if it dies first, teardown wakes the caller with `Gone`.
+
+        dest.owes_reply_to = source;
 
     } else {
 
@@ -244,5 +301,148 @@ test "a call delivery mints a one-shot reply handle to the caller" {
 
     const replied = try server_process.handles.resolve_as(server.staged.reply, .thread);
     try testing.expectEqual(&caller, replied);
+
+}
+
+// M5: multi-wait and fault-aware teardown.
+
+const thread_module = @import("../object/thread.zig");
+const endpoint_module = @import("../object/endpoint.zig");
+const notification_module = @import("../object/notification.zig");
+
+const Notification = @import("../object/notification.zig").Notification;
+const ThreadState = thread_module.ThreadState;
+
+// A full host stage: the object caches and the scheduler, so real threads can block, wake, and be enqueued.
+fn ipc_pool(pages: usize) []u8 {
+
+    const pool = host_pool(pages);
+
+    thread_module.init();
+    endpoint_module.init();
+    notification_module.init();
+    scheduler.init();
+
+    return pool;
+
+}
+
+test "a dying server wakes the caller it still owes a reply with Gone" {
+
+    const pool = ipc_pool(256);
+    defer std.heap.page_allocator.free(pool);
+
+    const process = try Process.create(try address_space.AddressSpace.create());
+
+    const caller = try Thread.create(process, 0x1000);
+    const server = try Thread.create(process, 0x2000);
+
+    // The state left behind once the server received the caller's call but has not yet replied.
+
+    caller.awaiting_reply = true;
+    caller.state = .blocked_receive;
+    server.owes_reply_to = caller;
+
+    server.release_ipc();
+
+    try testing.expectEqual(true, caller.ipc_aborted);
+    try testing.expectEqual(false, caller.awaiting_reply);
+    try testing.expectEqual(@as(?*Thread, null), server.owes_reply_to);
+    try testing.expectEqual(ThreadState.ready, caller.state);
+
+}
+
+test "the last server leaving breaks the endpoint and wakes queued senders with Gone" {
+
+    const pool = ipc_pool(256);
+    defer std.heap.page_allocator.free(pool);
+
+    const process = try Process.create(try address_space.AddressSpace.create());
+
+    const endpoint = try Endpoint.create();
+
+    endpoint.join();
+    endpoint.join();
+
+    const sender = try Thread.create(process, 0x1000);
+    sender.state = .blocked_send;
+    endpoint.senders.push(sender);
+
+    endpoint.leave();
+    try testing.expectEqual(false, sender.ipc_aborted);
+
+    endpoint.leave();
+    try testing.expectEqual(true, sender.ipc_aborted);
+    try testing.expectEqual(ThreadState.ready, sender.state);
+
+}
+
+test "a signal wakes a bound thread out of receive with the event bits" {
+
+    const pool = ipc_pool(256);
+    defer std.heap.page_allocator.free(pool);
+
+    const process = try Process.create(try address_space.AddressSpace.create());
+
+    const endpoint = try Endpoint.create();
+    const notification = try Notification.create();
+
+    const server = try Thread.create(process, 0x1000);
+
+    notification.bound_to = server;
+    server.bound_notification = notification;
+
+    server.state = .blocked_receive;
+    server.blocked_on = &endpoint.header;
+    endpoint.receivers.push(server);
+
+    notification.signal(0b101);
+
+    try testing.expectEqual(true, server.woke_on_notification);
+    try testing.expectEqual(@as(u64, 0b101), server.notify_bits);
+    try testing.expectEqual(@as(u64, 0), notification.bits);
+    try testing.expectEqual(ThreadState.ready, server.state);
+    try testing.expect(endpoint.receivers.is_empty());
+
+}
+
+test "a caller awaiting its reply is not mistaken for a bound receiver" {
+
+    const pool = ipc_pool(256);
+    defer std.heap.page_allocator.free(pool);
+
+    const process = try Process.create(try address_space.AddressSpace.create());
+
+    const notification = try Notification.create();
+    const caller = try Thread.create(process, 0x1000);
+
+    notification.bound_to = caller;
+    caller.bound_notification = notification;
+
+    // Blocked awaiting a reply (also `.blocked_receive`) - a signal must not steal it out of the reply wait.
+
+    caller.state = .blocked_receive;
+    caller.awaiting_reply = true;
+
+    notification.signal(0b1);
+
+    try testing.expectEqual(false, caller.woke_on_notification);
+    try testing.expectEqual(@as(u64, 0b1), notification.bits);
+
+}
+
+test "take_pending returns the accumulated bits once and clears them" {
+
+    const pool = ipc_pool(64);
+    defer std.heap.page_allocator.free(pool);
+
+    const notification = try Notification.create();
+
+    try testing.expectEqual(@as(?u64, null), notification.take_pending());
+
+    notification.bits = 0b11;
+
+    try testing.expectEqual(@as(?u64, 0b11), notification.take_pending());
+    try testing.expectEqual(@as(u64, 0), notification.bits);
 
 }

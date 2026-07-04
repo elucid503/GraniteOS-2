@@ -7,6 +7,7 @@ const scheduler = @import("../sched/scheduler.zig");
 const runqueue = @import("../sched/runqueue.zig");
 
 const Thread = @import("thread.zig").Thread;
+const Endpoint = @import("endpoint.zig").Endpoint;
 const Error = @import("../error.zig").Error;
 
 var cache: slab.Cache(Notification) = .{};
@@ -53,6 +54,8 @@ pub const Notification = struct {
 
         self.bits |= bits;
 
+        // A thread parked in `wait` takes the bits directly.
+
         if (self.waiters.pop()) |waiter| {
 
             waiter.notify_bits = self.bits;
@@ -60,7 +63,44 @@ pub const Notification = struct {
 
             scheduler.unblock(scheduler.current_core(), waiter);
 
+            return;
+
         }
+
+        // Multi-wait (M5): a bound thread blocked in `receive` wakes with NOTIFICATION_WAKE. `awaiting_reply` rules out
+        // a caller that is merely blocked awaiting its reply (also `.blocked_receive`, but not a queued receiver).
+
+        if (self.bound_to) |thread| {
+
+            if (thread.state == .blocked_receive and !thread.awaiting_reply) {
+
+                if (thread.blocked_on) |blocked_on| {
+
+                    if (blocked_on.kind == .endpoint) object.container(Endpoint, blocked_on).receivers.remove(thread);
+
+                }
+
+                thread.notify_bits = self.bits;
+                self.bits = 0;
+                thread.woke_on_notification = true;
+
+                scheduler.unblock(scheduler.current_core(), thread);
+
+            }
+
+        }
+
+    }
+
+    /// Take and clear any accumulated bits (for a bound receiver polling before it blocks); null when none are pending.
+    pub fn take_pending(self: *Notification) ?u64 {
+
+        if (self.bits == 0) return null;
+
+        const bits = self.bits;
+        self.bits = 0;
+
+        return bits;
 
     }
 

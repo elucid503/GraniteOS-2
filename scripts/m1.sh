@@ -8,7 +8,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-output="$(zig build qemu -Dtest=true 2>&1)"
+output="$(zig build qemu-bare -Dtest=true 2>&1)"
 echo "$output"
 
 fail=0

@@ -4,6 +4,11 @@ const config = @import("../config.zig");
 
 const Handle = @import("../cap/handle.zig").Handle;
 
+// The sentinel badge `receive` returns when a bound notification (not a request) woke it (03-syscall-abi.md Multi-wait).
+// It is a large positive value so it survives the signed ABI as a success (a real badge would never be this).
+
+pub const notification_wake: u64 = 0x7fff_ffff_ffff_ffff;
+
 // One transferred handle plus its disposition: `move` closes it in the sender, a copy leaves it in both.
 
 pub const HandleSlot = extern struct {

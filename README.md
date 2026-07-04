@@ -14,17 +14,21 @@ user-space servers.
 
 ```sh
 zig build # build the kernel ELF + flat boot image (zig-out/bin)
-zig build qemu # boot under QEMU virt (interactive; quit with Ctrl-A x)
+zig build qemu # boot the full system under QEMU virt (interactive; quit with Ctrl-A x)
+zig build qemu-bare # boot the kernel alone; halts after the in-kernel milestone demos
 zig build qemu-debug # boot halted with a gdb stub on :1234
 zig build test # run the host unit tests for the arch-independent core
 ```
 
 `zig build qemu` boots, discovers the machine from the device tree, brings up the
-memory foundation (with a leak-free alloc/map/free stress loop), then starts the
-interrupt controller, timer, and scheduler and proves two kernel threads
-time-slice, demote, boost, and yield; quit QEMU with `Ctrl-A` then `x`.
-`scripts/m1.sh` and `scripts/m2.sh` run that boot unattended and check each
-milestone's exit criteria over serial.
+memory foundation (leak-free alloc/map/free stress loop), the scheduler (two kernel
+threads time-slice, demote, boost, and yield), and the syscall/IPC spine, then proves
+the M5 robustness primitives — one thread waiting on an endpoint and a notification at
+once, and a blocked `call` waking with `Gone` when its server dies — before handing off
+to the Startup Binary, which brings up the console driver and a **supervised** shell.
+Type `exit` at the prompt to watch the supervisor restart the shell; quit QEMU with
+`Ctrl-A` then `x`. `scripts/m1.sh`…`m3.sh` and `scripts/m5.sh` run the kernel unattended
+(`qemu-bare`) and check each milestone's exit criteria over serial.
 
 ## Layout
 

@@ -21,7 +21,9 @@ const Endpoint = @import("../object/endpoint.zig").Endpoint;
 const Notification = @import("../object/notification.zig").Notification;
 const Interrupt = @import("../object/interrupt.zig").Interrupt;
 const MemoryAuthority = @import("../authority/memory_authority.zig").MemoryAuthority;
-const Message = @import("../ipc/message.zig").Message;
+const message_module = @import("../ipc/message.zig");
+const Message = message_module.Message;
+const notification_wake = message_module.notification_wake;
 
 const Error = err.Error;
 const VirtAddr = arch.VirtAddr;
@@ -328,6 +330,15 @@ fn receive(endpoint_raw: u64, message_ptr: u64) Error!u64 {
     server.message_buffer = message_ptr;
 
     const badge = try transfer.receive(server, endpoint);
+
+    // A bound-notification wake carries no request: hand back only the event bits (03-syscall-abi.md Multi-wait).
+
+    if (badge == notification_wake) {
+
+        server.staged = Message.zeroed;
+        server.staged.data[0] = server.notify_bits;
+
+    }
 
     try write_message(server, server.message_buffer);
 

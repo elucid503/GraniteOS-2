@@ -17,6 +17,10 @@ var session_base: usize = 0;
 
 pub fn main(_: u64) callconv(.c) noreturn {
 
+    // Report our exit to the Startup Binary, which supervises and restarts us (M5, 07 Section 10.4).
+
+    lib.start.supervise_via(cap.shell.supervisor);
+
     run() catch |failure| {
 
         if (session_base != 0) {
@@ -27,9 +31,11 @@ pub fn main(_: u64) callconv(.c) noreturn {
 
         }
 
+        lib.start.exit_with(1);
+
     };
 
-    lib.start.exit();
+    lib.start.exit_with(0);
 
 }
 
@@ -74,13 +80,22 @@ fn run_builtin(line: []const u8) !void {
 
     if (equals(line, "help")) {
 
-        return put_text("builtins:\n  help   list the builtins\n  about  describe this system\n");
+        return put_text("builtins:\n  help   list the builtins\n  about  describe this system\n  exit   quit; the supervisor restarts the shell\n");
 
     }
 
     if (equals(line, "about")) {
 
-        return put_text("GraniteOS-2 M4 walking skeleton: kernel, console driver, and shell talking over IPC.\n");
+        return put_text("GraniteOS-2 M5: kernel, console driver, and a supervised shell talking over IPC.\n");
+
+    }
+
+    // Exit reports a death message to the Startup Binary, which restarts a fresh shell (M5, 07 Section 4).
+
+    if (equals(line, "exit")) {
+
+        try put_text("bye - the supervisor will bring the shell back.\n");
+        lib.start.exit_with(0);
 
     }
 

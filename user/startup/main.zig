@@ -5,6 +5,8 @@ const console = @import("console");
 const shell = @import("shell");
 
 const cap = lib.cap;
+const ipc = lib.ipc;
+const proto = lib.proto;
 const sys = lib.sys;
 
 const Handle = cap.Handle;
@@ -31,13 +33,25 @@ const child_budget = 4 * 1024 * 1024;
 
 var module_base: usize = 0;
 
+// The supervision state: the console's request endpoint and hardware, plus the endpoint children report their exit to.
+// Held so a death message can respawn exactly the child that died (07-userspace-ddd.md Section 4).
+
+var console_endpoint: Handle = 0;
+var supervisor_endpoint: Handle = 0;
+var console_uart: lib.dtb.Uart = undefined;
+
+// Badges identifying each supervised child on the supervisor endpoint (07-userspace-ddd.md Section 10.4).
+
+const console_id: u64 = 1;
+const shell_id: u64 = 2;
+
 pub fn main(dtb_offset: u64) noreturn {
 
-    // Failures before the console driver is up still park silently; after that, `report` writes over the Stream.
+    // A failure before the console driver is up parks silently; once children are running we become their supervisor.
 
     run(dtb_offset) catch {};
 
-    park();
+    supervise();
 
 }
 
@@ -46,45 +60,48 @@ fn run(dtb_offset: u64) !void {
     // Hardware discovery lives up here now: the kernel handed over the DTB, not device addresses.
 
     const dtb_base = try sys.map(cap.self_space, cap.startup.dtb, 0, sys.read);
-    const uart = lib.dtb.find_uart(dtb_base + dtb_offset) orelse return error.NotFound;
+    console_uart = lib.dtb.find_uart(dtb_base + dtb_offset) orelse return error.NotFound;
 
     module_base = try sys.map(cap.self_space, cap.startup.module, 0, sys.read);
 
-    const endpoint = try sys.create(.endpoint, 0, 0);
+    console_endpoint = try sys.create(.endpoint, 0, 0);
+    supervisor_endpoint = try sys.create(.endpoint, 0, 0);
 
-    try spawn_console(endpoint, uart);
-    try spawn_shell(endpoint);
+    try spawn_console();
+    try spawn_shell();
 
 }
 
-// The console driver gets exactly its hardware: the UART window, the UART line, its endpoint, and a memory slice
-// (grant order = cap.driver).
+// The console driver gets exactly its hardware: the UART window, the UART line, its request endpoint, a memory slice,
+// and a badged supervisor endpoint to report exit on (grant order = cap.driver).
 
-fn spawn_console(endpoint: Handle, uart: lib.dtb.Uart) !void {
+fn spawn_console() !void {
 
-    const window = try sys.create_device_region(uart.base, page_size, cap.startup.devices);
-    const interrupt = try sys.create(.interrupt, uart.interrupt_line, cap.startup.interrupts);
+    const window = try sys.create_device_region(console_uart.base, page_size, cap.startup.devices);
+    const interrupt = try sys.create(.interrupt, console_uart.interrupt_line, cap.startup.interrupts);
     const memory = try sys.create(.memory_authority, child_budget, cap.startup.memory);
+    const report = try sys.copy(supervisor_endpoint, console_id);
 
     const space = try sys.create(.address_space, 0, 0);
     const stack_top = try build_child(space);
 
-    _ = try sys.spawn(space, entry_of(&console.main), stack_top, &.{ endpoint, window, interrupt, memory });
+    _ = try sys.spawn(space, entry_of(&console.main), stack_top, &.{ console_endpoint, window, interrupt, memory, report });
 
 }
 
-// The shell gets a badged copy of the console endpoint (so the driver can tell it apart) and a memory slice
-// (grant order = cap.shell).
+// The shell gets a badged copy of the console endpoint (so the driver can tell it apart), a memory slice, and a badged
+// supervisor endpoint to report exit on (grant order = cap.shell).
 
-fn spawn_shell(endpoint: Handle) !void {
+fn spawn_shell() !void {
 
-    const badged = try sys.copy(endpoint, 1);
+    const badged = try sys.copy(console_endpoint, 1);
     const memory = try sys.create(.memory_authority, child_budget, cap.startup.memory);
+    const report = try sys.copy(supervisor_endpoint, shell_id);
 
     const space = try sys.create(.address_space, 0, 0);
     const stack_top = try build_child(space);
 
-    _ = try sys.spawn(space, entry_of(&shell.main), stack_top, &.{ badged, memory });
+    _ = try sys.spawn(space, entry_of(&shell.main), stack_top, &.{ badged, memory, report });
 
 }
 
@@ -128,15 +145,36 @@ fn entry_of(function: *const fn (u64) callconv(.c) noreturn) usize {
 
 }
 
-// Nothing to supervise yet (M5): block forever on a notification nobody signals.
+// The top-level supervisor (07-userspace-ddd.md Section 4): block on the supervisor endpoint for children's one-way
+// death messages; the sender's badge names the child, and we respawn it. A crashed server's blocked clients wake with
+// `Gone` (06-kernel-ddd.md Section 9) and retry against the restarted endpoint.
 
-fn park() noreturn {
+fn supervise() noreturn {
 
-    const idle = sys.create(.notification, 0, 0) catch lib.start.exit();
+    var message = ipc.Message.zeroed;
 
     while (true) {
 
-        _ = sys.wait(idle) catch {};
+        const who = sys.receive(supervisor_endpoint, &message) catch continue;
+
+        restart(who) catch {};
+
+    }
+
+}
+
+fn restart(who: u64) !void {
+
+    switch (who) {
+
+        shell_id => try spawn_shell(),
+
+        // A driver holds a hardware line until its old process is fully reaped; the respawn is best-effort until then
+        // (resource reclamation is a tracked M5 follow-up), so a failure here is caught by the supervisor loop.
+
+        console_id => try spawn_console(),
+
+        else => {},
 
     }
 

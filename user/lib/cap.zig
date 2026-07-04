@@ -18,6 +18,11 @@ pub const Attribute = enum(u64) {
 
 };
 
+// The sentinel badge `receive` returns when the wake came from a bound notification, not a request (03-syscall-abi.md
+// Multi-wait). Matches the kernel's `message.notification_wake`: a large positive value, so it survives the signed ABI.
+
+pub const notification_wake: u64 = 0x7fff_ffff_ffff_ffff;
+
 // scheduling_class values (kernel/sched/scheduler.zig Class).
 
 pub const class_driver: u64 = 0;
@@ -44,6 +49,7 @@ pub const driver = struct {
     pub const device: Handle = 1; // MMIO window Region
     pub const interrupt: Handle = 2; // the hardware line
     pub const memory: Handle = 3; // memory-authority sub-grant
+    pub const supervisor: Handle = 4; // endpoint to report exit to (badged; M5, 07 Section 10.4)
 
 };
 
@@ -51,5 +57,6 @@ pub const shell = struct {
 
     pub const console: Handle = 0; // the console driver's endpoint (badged)
     pub const memory: Handle = 1; // memory-authority sub-grant
+    pub const supervisor: Handle = 2; // endpoint to report exit to (badged; M5, 07 Section 10.4)
 
 };

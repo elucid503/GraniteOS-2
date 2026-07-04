@@ -12,6 +12,8 @@ const runqueue = @import("../sched/runqueue.zig");
 
 const Process = @import("process.zig").Process;
 const Message = @import("../ipc/message.zig").Message;
+const Notification = @import("notification.zig").Notification;
+const Endpoint = @import("endpoint.zig").Endpoint;
 const Error = @import("../error.zig").Error;
 
 const PhysAddr = arch.PhysAddr;
@@ -64,6 +66,23 @@ pub const Thread = struct {
     awaiting_reply: bool,
     notify_bits: u64,
 
+    // Multi-wait and fault semantics (M5, 06-kernel-ddd.md Section 9).
+
+    // The notification bound for multi-wait: a signal to it also wakes this thread out of `receive`.
+    bound_notification: ?*Notification,
+
+    // Set when `receive` woke on the bound notification rather than a request; `receive` then reports NOTIFICATION_WAKE.
+    woke_on_notification: bool,
+
+    // The caller this thread (a server) still owes a reply to; a death here wakes that caller with `Gone`.
+    owes_reply_to: ?*Thread,
+
+    // The endpoint this thread is registered to serve; its death drops the endpoint's server count.
+    serving: ?*Endpoint,
+
+    // A blocked send/call was aborted by a peer's death: the syscall unwinds as `Gone` rather than completing.
+    ipc_aborted: bool,
+
     /// A suspended kernel thread (EL1) on its own kernel stack; `start` admits it to the scheduler.
     pub fn create(process: *Process, entry: VirtAddr) Error!*Thread {
 
@@ -112,11 +131,68 @@ pub const Thread = struct {
 
             },
 
-            // Multi-wait arrives with M5.
+            // Multi-wait (M5, 03-syscall-abi.md): bind a notification so a signal also wakes this thread out of
+            // `receive`. Value 0 clears the binding.
 
-            .bound_notification => return error.Invalid,
+            .bound_notification => {
+
+                if (value == 0) {
+
+                    self.clear_bound_notification();
+                    return;
+
+                }
+
+                const handle: @import("../cap/handle.zig").Handle = @bitCast(@as(u32, @truncate(value)));
+                const notification = try self.process.handles.resolve_as(handle, .notification);
+
+                self.clear_bound_notification();
+
+                notification.header.retain();
+                notification.bound_to = self;
+                self.bound_notification = notification;
+
+            },
 
         }
+
+    }
+
+    fn clear_bound_notification(self: *Thread) void {
+
+        if (self.bound_notification) |notification| {
+
+            if (notification.bound_to == self) notification.bound_to = null;
+
+            if (notification.header.release()) object.destroy(&notification.header);
+
+            self.bound_notification = null;
+
+        }
+
+    }
+
+    /// IPC teardown at death (06-kernel-ddd.md Section 9): wake a caller this thread still owes a reply, drop the
+    /// endpoint it served (breaking it once no server remains), and release its bound notification. No timeouts, no hangs.
+    pub fn release_ipc(self: *Thread) void {
+
+        if (self.owes_reply_to) |caller| {
+
+            self.owes_reply_to = null;
+            scheduler.abort_ipc(caller);
+
+        }
+
+        if (self.serving) |endpoint| {
+
+            self.serving = null;
+            endpoint.leave();
+
+            if (endpoint.header.release()) object.destroy(&endpoint.header);
+
+        }
+
+        self.clear_bound_notification();
 
     }
 
@@ -182,6 +258,12 @@ fn alloc(process: *Process) Error!*Thread {
         .is_call = false,
         .awaiting_reply = false,
         .notify_bits = 0,
+
+        .bound_notification = null,
+        .woke_on_notification = false,
+        .owes_reply_to = null,
+        .serving = null,
+        .ipc_aborted = false,
 
     };
 

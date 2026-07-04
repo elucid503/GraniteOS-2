@@ -50,6 +50,10 @@ var sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions;
 
 pub fn main(_: u64) callconv(.c) noreturn {
 
+    // Report our exit to the Startup Binary, which supervises the driver (M5, 07 Section 10.4).
+
+    lib.start.supervise_via(cap.driver.supervisor);
+
     run() catch |failure| {
 
         if (uart != 0) {
@@ -62,7 +66,7 @@ pub fn main(_: u64) callconv(.c) noreturn {
 
     };
 
-    lib.start.exit();
+    lib.start.exit_with(1);
 
 }
 

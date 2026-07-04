@@ -226,6 +226,16 @@ pub fn unblock(waker: *Core, thread: *Thread) void {
 
 }
 
+/// Wake a thread blocked in send/call because its peer died (06-kernel-ddd.md Section 9): its syscall unwinds as `Gone`.
+pub fn abort_ipc(thread: *Thread) void {
+
+    thread.ipc_aborted = true;
+    thread.awaiting_reply = false;
+
+    unblock(current_core(), thread);
+
+}
+
 /// The IPC direct hand-off (06-kernel-ddd.md Section 9): switch straight from `from` to a already-waiting `to` on
 /// this core, no run-queue trip. `from` is blocking (the caller set its state); the caller already removed `to` from
 /// the endpoint's receiver queue. Priority/quantum donation is integrated in M8; for now `to` runs on its own state.
@@ -248,6 +258,10 @@ pub fn exit_current() noreturn {
 
     const core = current_core();
     const current = core.current.?;
+
+    // Fault-aware teardown (06-kernel-ddd.md Section 9): wake anyone this thread owed a reply or blocked toward.
+
+    current.release_ipc();
 
     current.state = .dead;
     core.current = null;
