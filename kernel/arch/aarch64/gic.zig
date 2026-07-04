@@ -8,6 +8,12 @@ const types = @import("../../types.zig");
 
 const distributor_control = 0x000; // GICD_CTLR
 const set_enable_base = 0x100; // GICD_ISENABLERn
+const clear_enable_base = 0x180; // GICD_ICENABLERn
+const targets_base = 0x800; // GICD_ITARGETSRn (byte per line)
+
+// Lines below this are per-core (SGIs and PPIs), banked and self-targeted; SPIs need explicit routing.
+
+const first_shared_line = 32;
 
 // CPU-interface registers.
 
@@ -78,9 +84,27 @@ pub fn complete(irq: u32) void {
 
 pub fn enable_line(irq: u32) void {
 
+    // SPIs reset with no target core; route them to core 0 (the only core until M8).
+
+    if (irq >= first_shared_line) {
+
+        const target: *volatile u8 = @ptrFromInt(distributor + targets_base + irq);
+        target.* = 1;
+
+    }
+
     const word = irq / 32;
     const bit = @as(u32, 1) << @intCast(irq % 32);
 
     distributor_register(set_enable_base + word * 4).* = bit;
+
+}
+
+pub fn disable_line(irq: u32) void {
+
+    const word = irq / 32;
+    const bit = @as(u32, 1) << @intCast(irq % 32);
+
+    distributor_register(clear_enable_base + word * 4).* = bit;
 
 }

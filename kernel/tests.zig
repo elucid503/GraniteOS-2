@@ -6,6 +6,8 @@ test {
     _ = @import("memory/slab.zig");
     _ = @import("memory/region.zig");
     _ = @import("object/object.zig");
+    _ = @import("object/interrupt.zig");
+    _ = @import("authority/memory_authority.zig");
     _ = @import("boot/dtb.zig");
     _ = @import("cap/handle.zig");
     _ = @import("cap/handle_table.zig");

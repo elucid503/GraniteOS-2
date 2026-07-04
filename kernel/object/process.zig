@@ -13,6 +13,16 @@ const VirtAddr = @import("../types.zig").VirtAddr;
 
 var cache: slab.Cache(Process) = .{};
 
+// One pre-placed capability: the object plus the badge it should carry in the child's table, so a
+// badged endpoint survives the grant (the child cannot mint its own badge before it exists).
+
+pub const Grant = struct {
+
+    object: *object.Object,
+    badge: u64 = 0,
+
+};
+
 pub const Process = struct {
 
     header: object.Object,
@@ -44,16 +54,16 @@ pub const Process = struct {
 
     /// The capability-passing replacement for fork+exec (03-syscall-abi.md spawn): build a process over a prepared
     /// `space`, pre-load its handle table with the `grants`, then create and start its first user thread at `entry`.
-    /// `arg` reaches that thread as its first argument (the init-message pointer). Callers hand raw object pointers;
-    /// the syscall layer resolves the grant *handles* from the parent's table before calling in.
-    pub fn spawn(space: *AddressSpace, entry: VirtAddr, user_stack: VirtAddr, grants: []const *object.Object, arg: u64) Error!*Process {
+    /// `arg` reaches that thread as its first argument (the init-message pointer). Callers hand `Grant`s (object plus
+    /// badge); the syscall layer resolves the grant *handles* from the parent's table before calling in.
+    pub fn spawn(space: *AddressSpace, entry: VirtAddr, user_stack: VirtAddr, grants: []const Grant, arg: u64) Error!*Process {
 
         const process = try create(space);
         errdefer process.destroy();
 
         for (grants) |granted| {
 
-            _ = try process.handles.insert(granted);
+            _ = try process.handles.insert_badged(granted.object, granted.badge);
 
         }
 

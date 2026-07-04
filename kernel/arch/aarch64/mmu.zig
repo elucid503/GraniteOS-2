@@ -165,7 +165,11 @@ pub const Permissions = packed struct(u8) {
     write: bool = false,
     execute: bool = false,
     user: bool = true,
-    _pad: u4 = 0,
+
+    // Device/MMIO mapping: non-cacheable, non-gathering, never executable (06-kernel-ddd.md Section 16.3).
+    device: bool = false,
+
+    _pad: u3 = 0,
 };
 
 const page_descriptor: u64 = descriptor_valid | (1 << 1);
@@ -369,6 +373,12 @@ fn zero_table(frame: PhysAddr) void {
 
 fn leaf_attributes(perms: Permissions) u64 {
 
+    if (perms.device) {
+
+        return access_flag | attribute_device | privileged_execute_never | user_execute_never | device_access(perms);
+
+    }
+
     var attributes = access_flag | shareable_inner | attribute_normal;
 
     if (perms.user) {
@@ -396,5 +406,19 @@ fn leaf_attributes(perms: Permissions) u64 {
     }
 
     return attributes;
+
+}
+
+// AP[2:1] for a device leaf; same encoding as the normal-memory path, without the execute choices.
+
+fn device_access(perms: Permissions) u64 {
+
+    if (perms.user) {
+
+        return if (perms.write) @as(u64, 0b01) << 6 else @as(u64, 0b11) << 6;
+
+    }
+
+    return if (perms.write) @as(u64, 0b00) << 6 else @as(u64, 0b10) << 6;
 
 }

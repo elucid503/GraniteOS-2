@@ -4,6 +4,7 @@ const panic = @import("../../debug/panic.zig");
 
 const gic = @import("gic.zig");
 const timer = @import("timer.zig");
+const interrupt_module = @import("../../object/interrupt.zig");
 const scheduler = @import("../../sched/scheduler.zig");
 const syscall = @import("../../syscall/syscall.zig");
 
@@ -38,6 +39,15 @@ export fn kernel_irq() callconv(.c) void {
     if (irq == timer.interrupt_line) {
 
         timer.stop();
+        gic.complete(irq);
+        scheduler.tick();
+
+    } else if (interrupt_module.find(irq)) |device| {
+
+        // fire masks the line before the end-of-interrupt so a level-triggered device cannot storm; the driver's
+        // acknowledge re-arms it. The tick lets the woken driver-band thread preempt right away.
+
+        device.fire();
         gic.complete(irq);
         scheduler.tick();
 

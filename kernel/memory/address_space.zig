@@ -66,9 +66,14 @@ pub const AddressSpace = struct {
         const slot = self.free_slot() orelse return error.NoMemory;
         const base = at orelse self.next_base;
 
+        // A device window carries its memory type with it; callers only choose access rights.
+
+        var effective = perms;
+        effective.device = region.device;
+
         for (0..region.pages) |index| {
 
-            try arch.map_page(self.root, base + index * page_size, region.frame(index), perms);
+            try arch.map_page(self.root, base + index * page_size, region.frame(index), effective);
 
         }
 

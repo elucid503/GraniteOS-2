@@ -14,7 +14,8 @@ pub const Permissions = packed struct(u8) {
     write: bool = false,
     execute: bool = false,
     user: bool = true,
-    _pad: u4 = 0,
+    device: bool = false,
+    _pad: u3 = 0,
 
 };
 
@@ -155,6 +156,12 @@ pub fn intctrl_init_primary(windows: ?types.IntctrlWindows) void {
 }
 
 pub fn intctrl_enable_line(irq: u32) void {
+
+    _ = irq;
+
+}
+
+pub fn intctrl_disable_line(irq: u32) void {
 
     _ = irq;
 

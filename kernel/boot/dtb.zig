@@ -16,6 +16,9 @@ pub const Machine = struct {
     core_count: usize,
     intctrl: ?IntctrlWindows,
 
+    // The initrd span from /chosen (QEMU -initrd): the boot modules the hand-off turns into Regions.
+    initrd: ?MemoryRange,
+
 };
 
 const magic = 0xd00dfeed;
@@ -60,6 +63,8 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
     var memory_count: usize = 0;
     var core_count: usize = 0;
     var intctrl: ?IntctrlWindows = null;
+    var initrd_start: u64 = 0;
+    var initrd_end: u64 = 0;
 
     var position: usize = struct_offset;
 
@@ -135,6 +140,14 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
 
                     is_gic[depth] = true;
 
+                } else if (equals(property, "linux,initrd-start") and equals(names[depth], "chosen")) {
+
+                    initrd_start = read_sized(dtb, value, length);
+
+                } else if (equals(property, "linux,initrd-end") and equals(names[depth], "chosen")) {
+
+                    initrd_end = read_sized(dtb, value, length);
+
                 }
 
             },
@@ -148,7 +161,24 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
 
     }
 
-    return .{ .memory = memory_out[0..memory_count], .core_count = core_count, .intctrl = intctrl };
+    const initrd: ?MemoryRange = if (initrd_end > initrd_start and initrd_start != 0) .{
+
+        .base = @intCast(initrd_start),
+        .length = @intCast(initrd_end - initrd_start),
+
+    } else null;
+
+    return .{ .memory = memory_out[0..memory_count], .core_count = core_count, .intctrl = intctrl, .initrd = initrd };
+
+}
+
+// The /chosen initrd properties are sized to their value: one cell on small machines, two above 4 GiB.
+
+fn read_sized(dtb: usize, value: usize, length: u32) u64 {
+
+    if (length == 8) return read_cells(dtb, value, 2);
+
+    return read_u32(dtb, value);
 
 }
 
@@ -299,6 +329,15 @@ test "discovers the GICv2 windows" {
 
     try testing.expectEqual(@as(usize, 0x0800_0000), intctrl.distributor);
     try testing.expectEqual(@as(usize, 0x0801_0000), intctrl.cpu_interface);
+
+}
+
+test "a tree without /chosen initrd properties reports no initrd" {
+
+    var memory: [8]MemoryRange = undefined;
+    const machine = try parse(@intFromPtr(fixture), &memory);
+
+    try testing.expectEqual(@as(?MemoryRange, null), machine.initrd);
 
 }
 

@@ -12,12 +12,15 @@ const Handle = handle_module.Handle;
 const SyscallFrame = @import("../arch/aarch64/trap.zig").SyscallFrame;
 
 const thread_module = @import("../object/thread.zig");
+const process_module = @import("../object/process.zig");
 const Thread = thread_module.Thread;
-const Process = @import("../object/process.zig").Process;
+const Process = process_module.Process;
 const AddressSpace = @import("../memory/address_space.zig").AddressSpace;
 const Region = @import("../memory/region.zig").Region;
 const Endpoint = @import("../object/endpoint.zig").Endpoint;
 const Notification = @import("../object/notification.zig").Notification;
+const Interrupt = @import("../object/interrupt.zig").Interrupt;
+const MemoryAuthority = @import("../authority/memory_authority.zig").MemoryAuthority;
 const Message = @import("../ipc/message.zig").Message;
 
 const Error = err.Error;
@@ -46,19 +49,31 @@ pub const Number = enum(u64) {
 
 };
 
-// `create` kinds, in this ABI's own numbering (03-syscall-abi.md appendix). Interrupt/DMA regions arrive with M4/M7.
+// `create` kinds, in this ABI's own numbering (03-syscall-abi.md appendix); the numbers are append-only. The gated
+// kinds carry the granting authority's handle as their last argument. DMA regions arrive with M7.
 
 pub const CreateKind = enum(u64) {
 
     endpoint = 1,
     notification,
     address_space,
-    region,
+    region, // x1 = length, x2 = MemoryAuthority handle
+    interrupt, // x1 = line, x2 = InterruptAuthority handle
+    memory_authority, // x1 = budget bytes, x2 = parent MemoryAuthority handle
+    device_region, // x1 = physical base, x2 = length, x3 = DeviceAuthority handle
 
 };
 
+pub var debug_last_number: u64 = 0;
+pub var debug_last_arg0: u64 = 0;
+pub var debug_last_arg1: u64 = 0;
+
 /// Trap entry: decode the verb in x8, run its handler, and write the signed ABI result back into x0.
 pub fn dispatch(frame: *SyscallFrame) void {
+
+    debug_last_number = frame.registers[8];
+    debug_last_arg0 = frame.registers[0];
+    debug_last_arg1 = frame.registers[1];
 
     const result = run(frame);
 
@@ -78,7 +93,7 @@ fn run(frame: *SyscallFrame) Error!u64 {
 
     return switch (number) {
 
-        .create => create(a0, a1, a2),
+        .create => create(a0, a1, a2, a3),
         .spawn => spawn(a0, a1, a2, a3, a4),
         .close => close(a0),
         .start => start(a0),
@@ -92,11 +107,9 @@ fn run(frame: *SyscallFrame) Error!u64 {
         .reply => reply(a0, a1),
         .notify => notify(a0, a1),
         .wait => wait(a0),
+        .bind => bind(a0, a1, a2),
+        .acknowledge => acknowledge(a0),
         .copy => copy(a0, a1),
-
-        // Interrupt binding is gated by an InterruptAuthority (M4).
-
-        .bind, .acknowledge => error.NotAllowed,
 
     };
 
@@ -104,9 +117,7 @@ fn run(frame: *SyscallFrame) Error!u64 {
 
 // Lifecycle
 
-fn create(kind_raw: u64, arg_a: u64, arg_b: u64) Error!u64 {
-
-    _ = arg_b;
+fn create(kind_raw: u64, arg_a: u64, arg_b: u64, arg_c: u64) Error!u64 {
 
     const kind = std.meta.intToEnum(CreateKind, kind_raw) catch return error.Invalid;
 
@@ -115,7 +126,10 @@ fn create(kind_raw: u64, arg_a: u64, arg_b: u64) Error!u64 {
         .endpoint => &(try Endpoint.create()).header,
         .notification => &(try Notification.create()).header,
         .address_space => &(try AddressSpace.create()).header,
-        .region => &(try Region.create(arg_a)).header,
+        .region => &(try create_region(arg_a, arg_b)).header,
+        .interrupt => &(try create_interrupt(arg_a, arg_b)).header,
+        .memory_authority => &(try create_memory_authority(arg_a, arg_b)).header,
+        .device_region => &(try create_device_region(arg_a, arg_b, arg_c)).header,
 
     };
 
@@ -131,13 +145,61 @@ fn create(kind_raw: u64, arg_a: u64, arg_b: u64) Error!u64 {
 
 }
 
+// A user Region is always charged against a MemoryAuthority (04-boot-and-bootstrap.md: no ambient authority).
+
+fn create_region(length: u64, authority_raw: u64) Error!*Region {
+
+    const authority = try resolve_as(authority_raw, .memory_authority);
+
+    const bytes = std.mem.alignForward(u64, length, page_size);
+
+    try authority.charge(bytes);
+    errdefer authority.refund(bytes);
+
+    const region = try Region.create(length);
+
+    region.charge_to(authority);
+
+    return region;
+
+}
+
+fn create_interrupt(line: u64, authority_raw: u64) Error!*Interrupt {
+
+    const authority = try resolve_as(authority_raw, .interrupt_authority);
+
+    if (line > std.math.maxInt(u32)) return error.Invalid;
+    if (!authority.allows(@intCast(line))) return error.NotAllowed;
+
+    return Interrupt.create(@intCast(line));
+
+}
+
+fn create_memory_authority(budget: u64, parent_raw: u64) Error!*MemoryAuthority {
+
+    const parent = try resolve_as(parent_raw, .memory_authority);
+
+    return parent.create_child(budget);
+
+}
+
+fn create_device_region(base: u64, length: u64, authority_raw: u64) Error!*Region {
+
+    const authority = try resolve_as(authority_raw, .device_authority);
+
+    if (!authority.allows(base, length)) return error.NotAllowed;
+
+    return Region.create_device(base, length);
+
+}
+
 fn spawn(space_raw: u64, entry: u64, stack: u64, grant_ptr: u64, grant_count: u64) Error!u64 {
 
     const space = try resolve_space(space_raw);
 
     if (grant_count > max_grants) return error.Invalid;
 
-    var grants: [max_grants]*object.Object = undefined;
+    var grants: [max_grants]process_module.Grant = undefined;
     const count: usize = @intCast(grant_count);
 
     var index: usize = 0;
@@ -147,15 +209,25 @@ fn spawn(space_raw: u64, entry: u64, stack: u64, grant_ptr: u64, grant_count: u6
         var word: u32 = 0;
         try copy_from_user(grant_ptr + index * @sizeOf(u32), std.mem.asBytes(&word));
 
-        grants[index] = try current_process().handles.resolve(handle_from(word));
+        const handle = handle_from(word);
+
+        // The badge travels with the grant, so a badged endpoint copy lands badged in the child.
+
+        grants[index] = .{
+
+            .object = try current_process().handles.resolve(handle),
+            .badge = try current_process().handles.badge_of(handle),
+
+        };
 
     }
 
     const child = try Process.spawn(space, entry, stack, grants[0..count], 0);
 
-    errdefer child.destroy();
+    const child_handle = try current_process().handles.insert(&child.header);
+    _ = child.header.release();
 
-    return handle_word(try current_process().handles.insert(&child.header));
+    return handle_word(child_handle);
 
 }
 
@@ -209,7 +281,12 @@ fn map(space_raw: u64, region_raw: u64, address: u64, permissions: u64) Error!u6
 
     const at: ?VirtAddr = if (address == 0) null else address;
 
-    const mapped = try space.map(region, at, decode_permissions(permissions));
+    const perms = decode_permissions(permissions);
+    const mapped = try space.map(region, at, perms);
+
+    // The caller filled these pages through another (data) mapping; make the writes visible to instruction fetch.
+
+    if (perms.execute) arch.sync_instruction_cache();
 
     return mapped;
 
@@ -301,6 +378,9 @@ fn notify(notification_raw: u64, bits: u64) Error!u64 {
 
 fn wait(notification_raw: u64) Error!u64 {
 
+    const saved = arch.disable_interrupts();
+    defer arch.restore_interrupts(saved);
+
     const notification = try current_process().handles.resolve_as(handle_from(@truncate(notification_raw)), .notification);
 
     const waiter = current_thread();
@@ -310,6 +390,29 @@ fn wait(notification_raw: u64) Error!u64 {
     scheduler.block(scheduler.current_core(), waiter, &notification.header);
 
     return waiter.notify_bits;
+
+}
+
+// Interrupts
+
+fn bind(interrupt_raw: u64, notification_raw: u64, bits: u64) Error!u64 {
+
+    const interrupt = try resolve_as(interrupt_raw, .interrupt);
+    const notification = try resolve_as(notification_raw, .notification);
+
+    try interrupt.bind(notification, bits);
+
+    return 0;
+
+}
+
+fn acknowledge(interrupt_raw: u64) Error!u64 {
+
+    const interrupt = try resolve_as(interrupt_raw, .interrupt);
+
+    try interrupt.acknowledge();
+
+    return 0;
 
 }
 
@@ -367,6 +470,12 @@ fn resolve_thread(raw: u64) Error!*Thread {
 
 }
 
+fn resolve_as(raw: u64, comptime kind: object.Kind) Error!*object.TypeOf(kind) {
+
+    return current_process().handles.resolve_as(handle_from(@truncate(raw)), kind);
+
+}
+
 // permissions: bit0 read, bit1 write, bit2 execute (03-syscall-abi.md Memory). User mappings are always EL0-visible.
 
 fn decode_permissions(bits: u64) arch.Permissions {
@@ -389,6 +498,7 @@ fn decode_permissions(bits: u64) arch.Permissions {
 fn read_message(into: *Thread, message_ptr: VirtAddr) Error!void {
 
     try copy_from_user_of(into, message_ptr, std.mem.asBytes(&into.staged));
+    if (into.staged.handle_count > config.message_handle_slots) return error.Invalid;
 
 }
 

@@ -1,6 +1,7 @@
 // IPC transfer (06-kernel-ddd.md Section 9): the synchronous rendezvous behind send/receive/call/reply.
 
 const object = @import("../object/object.zig");
+const arch = @import("../arch/arch.zig");
 const scheduler = @import("../sched/scheduler.zig");
 
 const Thread = @import("../object/thread.zig").Thread;
@@ -8,10 +9,13 @@ const Endpoint = @import("../object/endpoint.zig").Endpoint;
 const Handle = @import("../cap/handle.zig").Handle;
 const Error = @import("../error.zig").Error;
 
-const no_handle: Handle = @bitCast(@as(u32, 0));
+const no_handle: Handle = @bitCast(@as(u32, 0xffff_ffff));
 
 /// Synchronous send: block until a receiver takes the message (no reply). `from.staged` is already filled.
 pub fn send(from: *Thread, endpoint: *Endpoint) Error!void {
+
+    const saved = arch.disable_interrupts();
+    defer arch.restore_interrupts(saved);
 
     const core = scheduler.current_core();
 
@@ -35,6 +39,9 @@ pub fn send(from: *Thread, endpoint: *Endpoint) Error!void {
 
 /// Call: send and block for the reply. Direct hand-off to an already-waiting server; otherwise queue and wait.
 pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
+
+    const saved = arch.disable_interrupts();
+    defer arch.restore_interrupts(saved);
 
     const core = scheduler.current_core();
 
@@ -65,6 +72,9 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
 /// Receive: take a waiting sender's message, or block until one arrives. Returns the sender's badge.
 pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
+    const saved = arch.disable_interrupts();
+    defer arch.restore_interrupts(saved);
+
     const core = scheduler.current_core();
 
     if (endpoint.senders.pop()) |sender| {
@@ -92,6 +102,9 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 /// Reply: answer the caller named by the one-shot `reply_handle`, then wake it. `from.staged` holds the reply.
 pub fn reply(from: *Thread, reply_handle: Handle) Error!void {
 
+    const saved = arch.disable_interrupts();
+    defer arch.restore_interrupts(saved);
+
     const caller = try from.process.handles.resolve_as(reply_handle, .thread);
 
     if (!caller.awaiting_reply) return error.Invalid;
@@ -117,7 +130,7 @@ fn deliver(source: *Thread, dest: *Thread, is_call: bool) Error!void {
 
     while (index < count) : (index += 1) {
 
-        dest.staged.handles[index] = transfer_slot(source, dest, source.staged.handles[index]);
+        dest.staged.handles[index] = try transfer_slot(source, dest, source.staged.handles[index]);
 
     }
 
@@ -133,10 +146,10 @@ fn deliver(source: *Thread, dest: *Thread, is_call: bool) Error!void {
 
 }
 
-fn transfer_slot(source: *Thread, dest: *Thread, slot: @import("message.zig").HandleSlot) @import("message.zig").HandleSlot {
+fn transfer_slot(source: *Thread, dest: *Thread, slot: @import("message.zig").HandleSlot) Error!@import("message.zig").HandleSlot {
 
-    const target = source.process.handles.resolve(slot.handle) catch return .{ .handle = no_handle, .move = false };
-    const copied = dest.process.handles.insert(target) catch return .{ .handle = no_handle, .move = false };
+    const target = try source.process.handles.resolve(slot.handle);
+    const copied = try dest.process.handles.insert(target);
 
     if (slot.move) source.process.handles.close(slot.handle) catch {};
 

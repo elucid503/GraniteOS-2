@@ -48,8 +48,30 @@ pub fn fault(message: []const u8, info: FaultInfo) noreturn {
 }
 
 /// The signature `std.debug.FullPanic` calls for language-level panics (bounds checks, reached-unreachable, and friends).
-pub fn at(message: []const u8, _: ?usize) noreturn {
+pub fn at(message: []const u8, return_address: ?usize) noreturn {
 
-    panic(message, null);
+    console.debug_print("\n\n*** KERNEL PANIC ***\n");
+    console.debug_print(message);
+
+    if (return_address orelse @returnAddress() != 0) {
+
+        console.debug_print("\n  at ");
+        console.debug_print_hex(return_address orelse @returnAddress());
+
+    }
+
+    const syscall = @import("../syscall/syscall.zig");
+
+    console.debug_print("\n  DBG syscall ");
+    console.debug_print_hex(syscall.debug_last_number);
+    console.debug_print(" x0 ");
+    console.debug_print_hex(syscall.debug_last_arg0);
+    console.debug_print(" x1 ");
+    console.debug_print_hex(syscall.debug_last_arg1);
+
+    console.debug_putchar('\n');
+    console.debug_print("halted.\n");
+
+    arch.halt();
 
 }

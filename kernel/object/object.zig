@@ -46,6 +46,10 @@ const AddressSpace = @import("../memory/address_space.zig").AddressSpace;
 const Region = @import("../memory/region.zig").Region;
 const Endpoint = @import("endpoint.zig").Endpoint;
 const Notification = @import("notification.zig").Notification;
+const Interrupt = @import("interrupt.zig").Interrupt;
+const MemoryAuthority = @import("../authority/memory_authority.zig").MemoryAuthority;
+const InterruptAuthority = @import("../authority/interrupt_authority.zig").InterruptAuthority;
+const DeviceAuthority = @import("../authority/device_authority.zig").DeviceAuthority;
 
 pub fn TypeOf(comptime kind: Kind) type {
 
@@ -57,8 +61,10 @@ pub fn TypeOf(comptime kind: Kind) type {
         .region => Region,
         .endpoint => Endpoint,
         .notification => Notification,
-
-        else => @compileError("object kind not built yet"),
+        .interrupt => Interrupt,
+        .memory_authority => MemoryAuthority,
+        .interrupt_authority => InterruptAuthority,
+        .device_authority => DeviceAuthority,
 
     };
 
@@ -74,10 +80,10 @@ pub fn destroy(object: *Object) void {
         .region => container(Region, object).destroy(),
         .endpoint => container(Endpoint, object).destroy(),
         .notification => container(Notification, object).destroy(),
-
-        // The authority and interrupt kinds arrive with M4+.
-
-        else => unreachable,
+        .interrupt => container(Interrupt, object).destroy(),
+        .memory_authority => container(MemoryAuthority, object).destroy(),
+        .interrupt_authority => container(InterruptAuthority, object).destroy(),
+        .device_authority => container(DeviceAuthority, object).destroy(),
 
     }
 

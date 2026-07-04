@@ -59,6 +59,7 @@ pub const map_ram = mmu.map_ram;
 
 pub const intctrl_init_primary = if (is_target) gic.init_primary else host.intctrl_init_primary;
 pub const intctrl_enable_line = if (is_target) gic.enable_line else host.intctrl_enable_line;
+pub const intctrl_disable_line = if (is_target) gic.disable_line else host.intctrl_disable_line;
 
 // Timer (monotonic; variable quantum for the MLFQ).
 

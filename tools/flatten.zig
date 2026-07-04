@@ -1,4 +1,6 @@
-// Host tool `flatten <kernel.elf> <out.bin>`: writes a load-faithful boot image, placing each PT_LOAD segment at its load offset.
+// Host tool `flatten <image.elf> <out.bin>`: writes a load-faithful boot image, placing each PT_LOAD segment at its
+// load offset. The image extends to the largest memory size, so NOBITS tails (.bss) become explicit zeros - the
+// Startup Binary is raw-mapped with no loader to zero them (06-kernel-ddd.md Section 13).
 
 const std = @import("std");
 
@@ -12,6 +14,7 @@ const p_type = 0x00;
 const p_offset = 0x08;
 const p_paddr = 0x18;
 const p_filesz = 0x20;
+const p_memsz = 0x28;
 
 const pt_load = 1;
 
@@ -36,7 +39,7 @@ pub fn main() !void {
     const program_header_size = read_u16(elf, e_phentsize);
     const program_header_count = read_u16(elf, e_phnum);
 
-    // First pass: lowest load address is the image base, highest file-backed end is the image length.
+    // First pass: lowest load address is the image base, highest in-memory end is the image length.
 
     var base: u64 = std.math.maxInt(u64);
     var end: u64 = 0;
@@ -52,16 +55,16 @@ pub fn main() !void {
         }
 
         const load_address = read_u64(elf, header + p_paddr);
-        const file_size = read_u64(elf, header + p_filesz);
+        const memory_size = read_u64(elf, header + p_memsz);
 
-        if (file_size == 0) {
+        if (memory_size == 0) {
 
             continue;
 
         }
 
         base = @min(base, load_address);
-        end = @max(end, load_address + file_size);
+        end = @max(end, load_address + memory_size);
 
     }
 

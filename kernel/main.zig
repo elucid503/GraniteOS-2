@@ -1,4 +1,4 @@
-// Kernel entry (06-kernel-ddd.md Section 3): discover the machine, take ownership of RAM (M1), then bring up the interrupt controller, timer, objects, and scheduler, and prove two kernel threads time-slice, demote, boost, and yield (M2).
+// Kernel entry (06-kernel-ddd.md Section 3): discover the machine, take ownership of RAM (M1), bring up the interrupt controller, timer, objects, and scheduler (M2), prove the syscall/IPC spine (M3), then hand off to the Startup Binary (M4).
 
 const std = @import("std");
 
@@ -8,6 +8,7 @@ const console = @import("debug/console.zig");
 const panic_path = @import("debug/panic.zig");
 
 const dtb = @import("boot/dtb.zig");
+const handoff = @import("boot/handoff.zig");
 const frames = @import("memory/frames.zig");
 const region = @import("memory/region.zig");
 const address_space = @import("memory/address_space.zig");
@@ -15,6 +16,10 @@ const process_module = @import("object/process.zig");
 const thread_module = @import("object/thread.zig");
 const endpoint_module = @import("object/endpoint.zig");
 const notification_module = @import("object/notification.zig");
+const interrupt_module = @import("object/interrupt.zig");
+const memory_authority = @import("authority/memory_authority.zig");
+const interrupt_authority = @import("authority/interrupt_authority.zig");
+const device_authority = @import("authority/device_authority.zig");
 const scheduler = @import("sched/scheduler.zig");
 const programs = @import("user/programs.zig");
 
@@ -54,10 +59,15 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
 
     report_machine(machine);
 
+    // The M4 hand-off runs from the M3 overseer thread, long after these locals are gone.
+
+    boot_dtb_address = dtb_address;
+    boot_initrd = machine.initrd;
+
     // Make every discovered RAM bank reachable by its physical address, then take ownership of all of it bar what we occupy.
 
     arch.map_ram(machine.memory);
-    frames.init(machine.memory, &reserved(dtb_address));
+    frames.init(machine.memory, &reserved(dtb_address, machine.initrd));
     region.init();
     address_space.init();
 
@@ -73,6 +83,10 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
     thread_module.init();
     endpoint_module.init();
     notification_module.init();
+    interrupt_module.init();
+    memory_authority.init();
+    interrupt_authority.init();
+    device_authority.init();
     scheduler.init();
 
     start_demo_threads();
@@ -208,7 +222,37 @@ fn run_m3() noreturn {
 
     report_m3(client_boot);
 
-    arch.halt();
+    run_m4();
+
+}
+
+// M4: hand the machine to the Startup Binary (08-roadmap.md M4 "Done when": an interactive prompt over serial,
+// echo through the console driver, a builtin running). Without an initrd there is nothing to hand off to, so the
+// boot halts exactly where M3 left it - which keeps the M1-M3 smoke tests terminating.
+
+var boot_dtb_address: arch.PhysAddr = 0;
+var boot_initrd: ?dtb.MemoryRange = null;
+
+fn run_m4() noreturn {
+
+    const initrd = boot_initrd orelse {
+
+        console.debug_print("M4: no initrd; halting.\n");
+        arch.halt();
+
+    };
+
+    handoff.start(initrd, boot_dtb_address) catch {
+
+        panic_path.panic("M4: boot hand-off failed", null);
+
+    };
+
+    console.debug_print("M4: hand-off complete; the startup binary owns user space.\n");
+
+    // The overseer's work is done; from here on the kernel only schedules, faults, and dispatches syscalls.
+
+    scheduler.exit_current();
 
 }
 
@@ -270,7 +314,8 @@ fn build_server(endpoint: *Endpoint) void {
 
     const entry = user_code_base + offset_of(&programs.user_server);
 
-    _ = Process.spawn(space, entry, stack_top, &.{&endpoint.header}, user_bootinfo) catch oom();
+    const server = Process.spawn(space, entry, stack_top, &.{.{ .object = &endpoint.header }}, user_bootinfo) catch oom();
+    _ = server.header.release();
 
 }
 
@@ -334,8 +379,8 @@ fn report_m3(boot: *programs.ClientBootinfo) void {
 
 }
 
-// The spans the frame allocator must not hand out: the kernel image and the device tree.
-fn reserved(dtb_address: arch.PhysAddr) [2]frames.MemoryRange {
+// The spans the frame allocator must not hand out: the kernel image, the device tree, and the initrd (if any).
+fn reserved(dtb_address: arch.PhysAddr, initrd: ?dtb.MemoryRange) [3]frames.MemoryRange {
 
     const kernel_base = std.mem.alignBackward(usize, @intFromPtr(&__kernel_start), page_size);
     const kernel_top = std.mem.alignForward(usize, @intFromPtr(&__kernel_end), page_size);
@@ -343,11 +388,23 @@ fn reserved(dtb_address: arch.PhysAddr) [2]frames.MemoryRange {
     const dtb_base = std.mem.alignBackward(usize, dtb_address, page_size);
     const dtb_top = std.mem.alignForward(usize, dtb_address + dtb.total_size(dtb_address), page_size);
 
-    return .{
+    var spans = [3]frames.MemoryRange{
 
         .{ .base = kernel_base, .length = kernel_top - kernel_base },
         .{ .base = dtb_base, .length = dtb_top - dtb_base },
+        .{ .base = 0, .length = 0 },
     };
+
+    if (initrd) |modules| {
+
+        const modules_base = std.mem.alignBackward(usize, modules.base, page_size);
+        const modules_top = std.mem.alignForward(usize, modules.base + modules.length, page_size);
+
+        spans[2] = .{ .base = modules_base, .length = modules_top - modules_base };
+
+    }
+
+    return spans;
 
 }
 

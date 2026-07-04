@@ -1,6 +1,7 @@
 // Notification (06-kernel-ddd.md Section 7.3): an asynchronous wakeup carrying a word of flag bits. `notify` ORs bits and wakes a waiter; `wait` returns and clears the accumulated bits.
 
 const slab = @import("../memory/slab.zig");
+const arch = @import("../arch/arch.zig");
 const object = @import("object.zig");
 const scheduler = @import("../sched/scheduler.zig");
 const runqueue = @import("../sched/runqueue.zig");
@@ -47,6 +48,9 @@ pub const Notification = struct {
     /// Signal: accumulate `bits` and wake one waiter with the whole set (never blocks).
     pub fn signal(self: *Notification, bits: u64) void {
 
+        const saved = arch.disable_interrupts();
+        defer arch.restore_interrupts(saved);
+
         self.bits |= bits;
 
         if (self.waiters.pop()) |waiter| {
@@ -62,6 +66,9 @@ pub const Notification = struct {
 
     /// Wait: take the accumulated bits if any, otherwise park `by` on this notification and return null.
     pub fn poll_or_block(self: *Notification, by: *Thread) ?u64 {
+
+        const saved = arch.disable_interrupts();
+        defer arch.restore_interrupts(saved);
 
         if (self.bits != 0) {
 
