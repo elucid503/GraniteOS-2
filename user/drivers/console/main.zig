@@ -34,14 +34,33 @@ const rx_bit: u64 = 1; // the notification bit the interrupt is bound to
 var uart: usize = 0;
 var rx_notification: Handle = 0;
 
-// The per-session shared buffer (05-server-protocol.md): attached once, then reused by every read/write.
+// Per-client shared buffers (05-server-protocol.md): attached once, then reused by every read/write. Badges are the
+// M4 session ids; Startup uses 0, the shell uses 1.
 
-var session_base: usize = 0;
-var session_capacity: usize = 0;
+const max_sessions = 4;
+
+const Session = struct {
+
+    base: usize = 0,
+    capacity: usize = 0,
+
+};
+
+var sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions;
 
 pub fn main(_: u64) callconv(.c) noreturn {
 
-    run() catch {};
+    run() catch |failure| {
+
+        if (uart != 0) {
+
+            put_text("console: fatal ");
+            put_text(@errorName(failure));
+            put_text("\n");
+
+        }
+
+    };
 
     lib.start.exit();
 
@@ -68,26 +87,25 @@ fn run() !void {
 
     while (true) {
 
-        _ = try sys.receive(cap.driver.endpoint, &in);
-
+        const badge = try sys.receive(cap.driver.endpoint, &in);
         var out = Message.zeroed;
-        out.data[0] = @bitCast(dispatch(&in, &out));
+        out.data[0] = @bitCast(dispatch(badge, &in, &out));
 
-        sys.reply(in.reply, &out) catch {};
+        try sys.reply(in.reply, &out);
 
     }
 
 }
 
-fn dispatch(in: *const Message, out: *Message) i64 {
+fn dispatch(badge: u64, in: *const Message, out: *Message) i64 {
 
     return switch (in.data[0]) {
 
         proto.identify => identify(out),
-        proto.stream.read => read(in.data[1], in.data[2]),
-        proto.stream.write => write(in.data[1], in.data[2]),
+        proto.stream.read => read(badge, in.data[1], in.data[2]),
+        proto.stream.write => write(badge, in.data[1], in.data[2]),
         proto.stream.set_mode => set_mode(in.data[1]),
-        proto.stream.attach => attach(in),
+        proto.stream.attach => attach(badge, in),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
 
@@ -106,12 +124,14 @@ fn identify(out: *Message) i64 {
 
 // Map the client's shared buffer once; every later read/write passes only offset/length into it.
 
-fn attach(in: *const Message) i64 {
+fn attach(badge: u64, in: *const Message) i64 {
 
     if (in.handle_count < 1) return -7;
 
-    session_base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
-    session_capacity = @intCast(in.data[1]);
+    const session = session_for(badge) orelse return -7;
+
+    session.base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
+    session.capacity = @intCast(in.data[1]);
 
     return 0;
 
@@ -119,9 +139,9 @@ fn attach(in: *const Message) i64 {
 
 // Cooked-mode read: gather one line into the session buffer, echoing as it is typed; one IPC per line.
 
-fn read(offset: u64, capacity: u64) i64 {
+fn read(badge: u64, offset: u64, capacity: u64) i64 {
 
-    const span = session_span(offset, capacity) orelse return -7;
+    const span = session_span(badge, offset, capacity) orelse return -7;
 
     var length: usize = 0;
 
@@ -173,9 +193,9 @@ fn read(offset: u64, capacity: u64) i64 {
 
 }
 
-fn write(offset: u64, length: u64) i64 {
+fn write(badge: u64, offset: u64, length: u64) i64 {
 
-    const span = session_span(offset, length) orelse return -7;
+    const span = session_span(badge, offset, length) orelse return -7;
 
     put_text(span);
 
@@ -193,14 +213,24 @@ fn set_mode(mode: u64) i64 {
 
 }
 
-fn session_span(offset: u64, length: u64) ?[]u8 {
+fn session_span(badge: u64, offset: u64, length: u64) ?[]u8 {
 
-    if (session_base == 0) return null;
-    if (offset > session_capacity or length > session_capacity - offset) return null;
+    const session = session_for(badge) orelse return null;
 
-    const buffer: [*]u8 = @ptrFromInt(session_base);
+    if (session.base == 0) return null;
+    if (offset > session.capacity or length > session.capacity - offset) return null;
+
+    const buffer: [*]u8 = @ptrFromInt(session.base);
 
     return buffer[@intCast(offset)..@intCast(offset + length)];
+
+}
+
+fn session_for(badge: u64) ?*Session {
+
+    if (badge >= max_sessions) return null;
+
+    return &sessions[@intCast(badge)];
 
 }
 

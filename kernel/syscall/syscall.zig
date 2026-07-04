@@ -329,7 +329,7 @@ fn receive(endpoint_raw: u64, message_ptr: u64) Error!u64 {
 
     const badge = try transfer.receive(server, endpoint);
 
-    try write_message(server, message_ptr);
+    try write_message(server, server.message_buffer);
 
     return badge;
 
@@ -349,7 +349,7 @@ fn call(endpoint_raw: u64, message_ptr: u64) Error!u64 {
 
     // The reply landed in the caller's staged envelope while it was blocked; hand it back to user space.
 
-    try write_message(caller, message_ptr);
+    try write_message(caller, caller.message_buffer);
 
     return 0;
 

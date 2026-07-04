@@ -5,8 +5,6 @@ const console = @import("console");
 const shell = @import("shell");
 
 const cap = lib.cap;
-const ipc = lib.ipc;
-const proto = lib.proto;
 const sys = lib.sys;
 
 const Handle = cap.Handle;
@@ -32,8 +30,6 @@ const child_budget = 4 * 1024 * 1024;
 // The pristine boot module, mapped read-only once and copied per child.
 
 var module_base: usize = 0;
-var console_base: usize = 0;
-var console_endpoint: Handle = 0;
 
 pub fn main(dtb_offset: u64) noreturn {
 
@@ -57,15 +53,7 @@ fn run(dtb_offset: u64) !void {
     const endpoint = try sys.create(.endpoint, 0, 0);
 
     try spawn_console(endpoint, uart);
-    open_console(endpoint) catch {};
-    put_console("startup: console session up\n") catch {};
-
-    spawn_shell(endpoint) catch |e| {
-
-        report("startup: shell spawn failed: ", e);
-        return e;
-
-    };
+    try spawn_shell(endpoint);
 
 }
 
@@ -129,40 +117,6 @@ fn build_child(space: Handle) !usize {
     const stack_base = try sys.map(space, stack, 0, sys.read | sys.write);
 
     return stack_base + stack_pages * page_size;
-
-}
-
-fn open_console(endpoint: Handle) !void {
-
-    console_endpoint = endpoint;
-
-    const buffer = try sys.create(.region, page_size, cap.startup.memory);
-    console_base = try sys.map(cap.self_space, buffer, 0, sys.read | sys.write);
-
-    _ = try ipc.request(endpoint, proto.stream.attach, &.{page_size}, &.{
-
-        .{ .handle = buffer, .move = false },
-
-    });
-
-}
-
-fn put_console(text: []const u8) !void {
-
-    if (console_base == 0) return error.Invalid;
-
-    const buffer: [*]u8 = @ptrFromInt(console_base);
-    @memcpy(buffer[0..text.len], text);
-
-    _ = try ipc.request(console_endpoint, proto.stream.write, &.{ 0, text.len }, &.{});
-
-}
-
-fn report(prefix: []const u8, failure: anyerror) void {
-
-    put_console(prefix) catch {};
-    put_console(@errorName(failure)) catch {};
-    put_console("\n") catch {};
 
 }
 

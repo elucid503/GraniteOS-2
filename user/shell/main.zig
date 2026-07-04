@@ -17,7 +17,17 @@ var session_base: usize = 0;
 
 pub fn main(_: u64) callconv(.c) noreturn {
 
-    run() catch {};
+    run() catch |failure| {
+
+        if (session_base != 0) {
+
+            put_text("shell: fatal ") catch {};
+            put_text(@errorName(failure)) catch {};
+            put_text("\n") catch {};
+
+        }
+
+    };
 
     lib.start.exit();
 

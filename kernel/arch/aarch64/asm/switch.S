@@ -1,4 +1,4 @@
-// The context switch: save the callee-saved frame into *x0, restore it from *x1, and return on the restored link register. Offsets match `context.Context`: sp 0, x19..x28 8, x29 88, x30 96.
+// The context switch: save the callee-saved frame into *x0, restore it from *x1, and return on the restored link register. Offsets match `context.Context`: sp 0, x19..x28 8, x29 88, x30 96, sp_el0 104.
 
 .section .text
 .global switch_context
@@ -13,6 +13,8 @@ switch_context:
     stp     x26, x27, [x0, #64]
     stp     x28, x29, [x0, #80]
     str     x30,      [x0, #96]
+    mrs     x3, sp_el0
+    str     x3,       [x0, #104]
 
     ldp     x2,  x19, [x1, #0]
     ldp     x20, x21, [x1, #16]
@@ -21,6 +23,8 @@ switch_context:
     ldp     x26, x27, [x1, #64]
     ldp     x28, x29, [x1, #80]
     ldr     x30,      [x1, #96]
+    ldr     x3,       [x1, #104]
+    msr     sp_el0, x3
     mov     sp, x2
 
     ret

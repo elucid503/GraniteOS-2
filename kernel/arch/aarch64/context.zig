@@ -4,7 +4,7 @@ const types = @import("../../types.zig");
 
 const VirtAddr = types.VirtAddr;
 
-// Field order and offsets must match `asm/switch.S`: sp at 0, x19..x28 at 8, x29 at 88, x30 at 96.
+// Field order and offsets must match `asm/switch.S`: sp at 0, x19..x28 at 8, x29 at 88, x30 at 96, sp_el0 at 104.
 
 pub const Context = extern struct {
 
@@ -12,6 +12,7 @@ pub const Context = extern struct {
     x19_to_x28: [10]u64,
     x29: u64, // frame pointer
     x30: u64, // link register: where the next switch-in resumes
+    sp_el0: u64, // user stack pointer while the thread is in EL1
 
 };
 
@@ -32,6 +33,7 @@ pub fn init_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, arg:
         .x19_to_x28 = [_]u64{0} ** 10,
         .x29 = 0,
         .x30 = @intFromPtr(&thread_trampoline),
+        .sp_el0 = 0,
 
     };
 
@@ -51,6 +53,7 @@ pub fn init_user_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr,
         .x19_to_x28 = [_]u64{0} ** 10,
         .x29 = 0,
         .x30 = @intFromPtr(&user_trampoline),
+        .sp_el0 = user_stack & ~@as(u64, 0xf),
 
     };
 

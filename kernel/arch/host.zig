@@ -25,6 +25,7 @@ pub const Context = extern struct {
 
     entry: u64 = 0,
     stack: u64 = 0,
+    user_stack: u64 = 0,
     arg: u64 = 0,
 
 };
@@ -74,8 +75,7 @@ pub fn init_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, arg:
 
 pub fn init_user_thread_context(ctx: *Context, entry: VirtAddr, stack: VirtAddr, user_stack: VirtAddr, arg: u64) void {
 
-    _ = user_stack;
-    ctx.* = .{ .entry = entry, .stack = stack, .arg = arg };
+    ctx.* = .{ .entry = entry, .stack = stack, .user_stack = user_stack, .arg = arg };
 
 }
 

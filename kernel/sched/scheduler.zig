@@ -233,6 +233,7 @@ pub fn hand_off(from: *Thread, to: *Thread) void {
 
     const core = current_core();
 
+    to.blocked_on = null;
     core.current = null;
 
     reschedule(core, from, to, arch.now_ns(), .pending);
