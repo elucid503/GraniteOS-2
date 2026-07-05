@@ -27,6 +27,66 @@ const max_depth = 32;
 
 const interrupt_kind_shared = 0;
 
+/// Count `cpu@` nodes under `/cpus`, matching the kernel's DTB walk.
+pub fn core_count(dtb: usize) usize {
+
+    if (read_u32(dtb, 0) != magic) return 0;
+
+    const struct_offset = read_u32(dtb, 8);
+
+    var names: [max_depth][]const u8 = undefined;
+    names[0] = "";
+
+    var depth: usize = 0;
+    var count: usize = 0;
+    var position: usize = struct_offset;
+
+    while (true) {
+
+        const token = read_u32(dtb, position);
+        position += 4;
+
+        switch (token) {
+
+            token_begin_node => {
+
+                const name = cstring(dtb, position);
+                position += align4(name.len + 1);
+
+                depth += 1;
+                names[depth] = name;
+
+                if (starts_with(name, "cpu@") and equals(names[depth - 1], "cpus")) {
+
+                    count += 1;
+
+                }
+
+            },
+
+            token_end_node => {
+
+                depth -= 1;
+
+            },
+
+            token_prop => {
+
+                const length = read_u32(dtb, position);
+                position += 8 + align4(length);
+
+            },
+
+            token_nop => {},
+
+            else => return count,
+
+        }
+
+    }
+
+}
+
 /// Find the PL011 UART: its MMIO base from `reg` and its GIC INTID from `interrupts`.
 pub fn find_uart(dtb: usize) ?Uart {
 
@@ -219,9 +279,21 @@ fn equals(a: []const u8, b: []const u8) bool {
 
 }
 
+fn starts_with(haystack: []const u8, needle: []const u8) bool {
+
+    return std.mem.startsWith(u8, haystack, needle);
+
+}
+
 const testing = std.testing;
 
 const fixture = @embedFile("virt.dtb"); // The same QEMU `virt` tree the kernel parser is tested against.
+
+test "counts the cpu nodes on QEMU virt" {
+
+    try testing.expectEqual(@as(usize, 4), core_count(@intFromPtr(fixture)));
+
+}
 
 test "finds the PL011 window and its GIC line on QEMU virt" {
 

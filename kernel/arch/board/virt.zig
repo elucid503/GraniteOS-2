@@ -2,7 +2,8 @@
 
 pub const uart_base: usize = 0x0900_0000; // PL011 UART0 on QEMU `virt`.
 
-// GICv2 windows, used only when the DTB does not describe the interrupt controller.
+// GICv3 windows, used only when the DTB does not describe the interrupt controller.
 
 pub const gic_distributor_base: usize = 0x0800_0000;
-pub const gic_cpu_interface_base: usize = 0x0801_0000;
+pub const gic_redistributor_base: usize = 0x080a_0000;
+pub const redistributor_stride: usize = 0x2_0000;

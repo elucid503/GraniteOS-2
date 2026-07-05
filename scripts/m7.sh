@@ -45,7 +45,7 @@ qemu_args=()
 boot() {
 
     feed "$@" | timeout 120 qemu-system-aarch64 \
-        -machine virt -cpu cortex-a57 -smp 1 -m 256M -nographic \
+        -machine virt,gic-version=3 -cpu cortex-a57 -smp 1 -m 256M -nographic \
         -kernel zig-out/bin/granite-kernel.bin \
         -initrd zig-out/bin/bundle.img \
         "${qemu_args[@]}" 2>&1 || true

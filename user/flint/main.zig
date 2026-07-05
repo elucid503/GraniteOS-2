@@ -16,6 +16,7 @@ const marble_budget = 16 * 1024 * 1024;
 var bundle: lib.bundle.Bundle = undefined;
 var bundle_length: usize = 0;
 var bundle_offset: usize = 0;
+var machine_core_count: u64 = 1;
 
 var console_endpoint: Handle = 0;
 var naming_endpoint: Handle = 0;
@@ -71,6 +72,7 @@ fn run(arg: u64) !void {
 
     console_uart = lib.dtb.find_uart(dtb) orelse return error.NotFound;
     block_device = find_block_device(dtb);
+    machine_core_count = @max(1, lib.dtb.core_count(dtb));
 
     const bundle_base = try sys.map(cap.self_space, cap.flint.module, 0, sys.read);
     bundle = try lib.bundle.Bundle.open(bundle_base + bundle_offset, bundle_length);
@@ -319,6 +321,7 @@ fn spawn_marble() !void {
         .grants = &grants,
         .data3 = bundle_length,
         .data4 = bundle_offset,
+        .data5 = machine_core_count,
 
     });
 

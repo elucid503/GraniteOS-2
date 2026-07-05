@@ -10,8 +10,7 @@ cd "$root"
 
 zig build 2>&1
 
-# Input is fed one line at a time with pauses: QEMU's Windows stdio chardev drops any burst past the
-# serial mux buffer (~33 bytes), so a whole session piped at once gets truncated before the guest runs.
+# Input is fed one line at a time with pauses: QEMU's Windows stdio chardev drops any burst past the serial mux buffer (~33 bytes)
 
 feed() {
 
@@ -32,7 +31,7 @@ boot() {
     shift
 
     feed "$@" | timeout 90 qemu-system-aarch64 \
-        -machine virt -cpu cortex-a57 -smp "$cores" -m 256M -nographic \
+        -machine virt,gic-version=3 -cpu cortex-a57 -smp "$cores" -m 256M -nographic \
         -kernel zig-out/bin/granite-kernel.bin \
         -initrd zig-out/bin/bundle.img \
         2>&1 || true
@@ -56,13 +55,13 @@ check() {
 
 }
 
-# GICv2 tops out at 8 cores on `virt`; the point is that no count is special-cased.
+# The point is that no core count is special-cased.
 
 for cores in 1 2 4 8; do
 
     echo "--- $cores core(s) ---"
 
-    output="$(boot "$cores" 'stress 8' 'stress 8' 'echo still-works')"
+    output="$(boot "$cores" 'stress' 'stress' 'echo still-works')"
 
     echo "$output"
 
@@ -77,7 +76,7 @@ for cores in 1 2 4 8; do
     fi
 
     check "machine reports the count"  "$output" "Machine: $cores core"
-    check "stress run completed"       "$output" "stress: 8 workers done"
+    check "stress run completed"       "$output" "stress: $cores workers done"
     check "shell still responsive"     "$output" "still-works"
 
     if grep -qF -- "KERNEL PANIC" <<<"$output"; then

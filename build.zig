@@ -9,6 +9,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const test_build = b.option(bool, "test", "Exit QEMU via semihosting on halt/panic") orelse false;
     const smp = b.option(u64, "smp", "Core count for the QEMU run steps") orelse 4;
+    const memory = b.option(u64, "memory", "RAM in MiB for the QEMU run steps") orelse 256;
 
     const target = b.resolveTargetQuery(.{
 
@@ -142,6 +143,7 @@ pub fn build(b: *std.Build) void {
         .test_build = test_build,
         .disk = .{ .path = disk_path, .prepare = mkdisk_run },
         .smp = smp,
+        .memory = memory,
 
     });
 
@@ -153,6 +155,7 @@ pub fn build(b: *std.Build) void {
         .test_build = test_build,
         .disk = .{ .path = disk_path, .prepare = mkdisk_run },
         .smp = smp,
+        .memory = memory,
 
     });
 
@@ -164,6 +167,7 @@ pub fn build(b: *std.Build) void {
         .test_build = test_build,
         .disk = null,
         .smp = smp,
+        .memory = memory,
 
     });
 
@@ -175,6 +179,7 @@ pub fn build(b: *std.Build) void {
         .test_build = test_build,
         .disk = null,
         .smp = smp,
+        .memory = memory,
 
     });
 
@@ -313,6 +318,7 @@ const QemuStep = struct {
     test_build: bool,
     disk: ?QemuDisk,
     smp: u64,
+    memory: u64,
 
 };
 
@@ -321,10 +327,10 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
     const run = b.addSystemCommand(&.{
 
         "qemu-system-aarch64",
-        "-machine", "virt",
+        "-machine", "virt,gic-version=3",
         "-cpu",     "cortex-a57",
         "-smp",     b.fmt("{d}", .{step.smp}),
-        "-m",       "256M",
+        "-m",       b.fmt("{d}M", .{step.memory}),
         "-nographic",
 
     });

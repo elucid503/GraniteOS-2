@@ -46,6 +46,7 @@ const Pipeline = struct {
 
 var bundle: lib.bundle.Bundle = undefined;
 var supervisor: cap.Handle = 0;
+var machine_core_count: u64 = 1;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -70,6 +71,7 @@ fn run() !void {
 
     const bundle_base = try sys.map(cap.self_space, cap.marble.bundle, 0, sys.read);
     bundle = try lib.bundle.Bundle.open(bundle_base + @as(usize, @intCast(lib.start.word(4))), @intCast(lib.start.word(3)));
+    machine_core_count = @max(1, lib.start.word(proto.init.core_count_word));
     supervisor = try sys.create(.endpoint, 0, 0);
 
     var input = try lib.start.stdin();
@@ -322,6 +324,7 @@ fn spawn_stage(stage: *const Stage, index: usize, count: usize, rings: *[max_sta
         .args = stage.args(),
         .grants = grants[0..grant_count],
         .flags = flags,
+        .data5 = machine_core_count,
 
     });
 

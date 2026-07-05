@@ -57,7 +57,7 @@ pub const flush_tlb_page = mmu.flush_tlb_page;
 pub const free_table = mmu.free_table;
 pub const map_ram = mmu.map_ram;
 
-// Interrupt controller (GICv2 now; GICv3 is a sibling impl).
+// Interrupt controller (GICv3).
 
 pub const intctrl_init_primary = if (is_target) gic.init_primary else host.intctrl_init_primary;
 pub const intctrl_init_secondary = if (is_target) gic.init_secondary else host.intctrl_init_secondary;

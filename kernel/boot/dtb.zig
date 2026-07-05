@@ -151,7 +151,7 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange, cpu_out: []u64) Error!Machin
 
                     reg_offset[depth] = value;
 
-                } else if (equals(property, "compatible") and compatible_lists(dtb, value, length, "arm,cortex-a15-gic")) {
+                } else if (equals(property, "compatible") and compatible_lists(dtb, value, length, "arm,gic-v3")) {
 
                     is_gic[depth] = true;
 
@@ -211,7 +211,9 @@ fn read_sized(dtb: usize, value: usize, length: u32) u64 {
 
 }
 
-// A GICv2 `reg` lists (address, size) per window: distributor first, CPU interface second.
+// A GICv3 `reg` lists distributor first, then the redistributor region (one 128 KiB frame per core on `virt`).
+
+const redistributor_stride = 0x2_0000;
 
 fn read_intctrl(dtb: usize, offset: usize, addr_cells: u32, size_cells: u32) ?IntctrlWindows {
 
@@ -220,9 +222,15 @@ fn read_intctrl(dtb: usize, offset: usize, addr_cells: u32, size_cells: u32) ?In
     if (entry_words == 0) return null;
 
     const distributor = read_cells(dtb, offset, addr_cells);
-    const cpu_interface = read_cells(dtb, offset + entry_words * 4, addr_cells);
+    const redistributor = read_cells(dtb, offset + entry_words * 4, addr_cells);
 
-    return .{ .distributor = @intCast(distributor), .cpu_interface = @intCast(cpu_interface) };
+    return .{
+
+        .distributor = @intCast(distributor),
+        .redistributor = @intCast(redistributor),
+        .redistributor_stride = redistributor_stride,
+
+    };
 
 }
 
@@ -335,7 +343,7 @@ fn starts_with(haystack: []const u8, needle: []const u8) bool {
 
 const testing = std.testing;
 
-const fixture = @embedFile("virt.dtb"); // A real QEMU `virt` tree dumped with `-smp 4 -m 256M`.
+const fixture = @embedFile("virt.dtb"); // A real QEMU `virt` tree dumped with `gic-version=3 -smp 4 -m 256M`.
 
 test "parses the QEMU virt memory bank and core count" {
 
@@ -350,7 +358,7 @@ test "parses the QEMU virt memory bank and core count" {
 
 }
 
-test "discovers the GICv2 windows" {
+test "discovers the GICv3 windows" {
 
     var memory: [8]MemoryRange = undefined;
     var cpus: [8]u64 = undefined;
@@ -359,7 +367,25 @@ test "discovers the GICv2 windows" {
     const intctrl = machine.intctrl.?;
 
     try testing.expectEqual(@as(usize, 0x0800_0000), intctrl.distributor);
-    try testing.expectEqual(@as(usize, 0x0801_0000), intctrl.cpu_interface);
+    try testing.expectEqual(@as(usize, 0x080a_0000), intctrl.redistributor);
+    try testing.expectEqual(@as(usize, 0x2_0000), intctrl.redistributor_stride);
+
+}
+
+const fixture_sixteen = @embedFile("virt-16.dtb");
+
+test "discovers the GICv3 windows on QEMU virt with sixteen cores" {
+
+    var memory: [8]MemoryRange = undefined;
+    var cpus: [16]u64 = undefined;
+    const machine = try parse(@intFromPtr(fixture_sixteen), &memory, &cpus);
+
+    try testing.expectEqual(@as(usize, 16), machine.core_count);
+
+    const intctrl = machine.intctrl.?;
+
+    try testing.expectEqual(@as(usize, 0x0800_0000), intctrl.distributor);
+    try testing.expectEqual(@as(usize, 0x080a_0000), intctrl.redistributor);
 
 }
 

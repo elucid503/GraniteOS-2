@@ -1,5 +1,4 @@
-// Scheduler stress (M8): spin up worker threads that grind in parallel, so a multicore boot can be
-// pushed hard from the shell. Usage: `stress [workers]`.
+// Scheduler stress (M8): spin up worker threads that grind in parallel, so a multicore boot can be pushed hard from the shell. Usage: `stress [workers]`; the default matches the machine core count.
 
 const std = @import("std");
 
@@ -7,6 +6,7 @@ const lib = @import("lib");
 
 const sys = lib.sys;
 const cap = lib.cap;
+const proto = lib.proto;
 
 comptime {
 
@@ -17,7 +17,6 @@ comptime {
 const page_size = 4096;
 const stack_pages = 4;
 const max_workers = 32;
-const default_workers = 4;
 const grind_rounds = 3_000_000;
 
 var done: u64 = 0;
@@ -27,11 +26,11 @@ pub fn main(args: []const []const u8) u8 {
 
     const out = lib.start.stdout() catch return 1;
 
-    var workers: usize = default_workers;
+    var workers: usize = @intCast(@max(1, lib.start.word(proto.init.core_count_word)));
 
     if (args.len > 1) {
 
-        workers = parse_count(args[1]) orelse default_workers;
+        workers = parse_count(args[1]) orelse workers;
 
     }
 

@@ -8,7 +8,8 @@ pub const VirtAddr = usize;
 pub const IntctrlWindows = struct {
 
     distributor: PhysAddr,
-    cpu_interface: PhysAddr,
+    redistributor: PhysAddr,
+    redistributor_stride: usize,
 
 };
 

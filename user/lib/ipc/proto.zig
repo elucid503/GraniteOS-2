@@ -29,6 +29,9 @@ pub const init = struct {
     pub const stdout_ring: u64 = 1 << 1;
     pub const stderr_ring: u64 = 1 << 2;
 
+    // Init message data[5]: the machine's discovered core count, threaded from Flint through Marble.
+    pub const core_count_word: usize = 5;
+
 };
 
 // Name service interface (07-userspace-ddd.md Section 10.1), with M6 inline names.

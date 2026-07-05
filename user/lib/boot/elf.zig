@@ -45,6 +45,7 @@ pub const SpawnArgs = struct {
     flags: u64 = 0,
     data3: u64 = 0,
     data4: u64 = 0,
+    data5: u64 = 0,
 
 };
 
@@ -150,6 +151,7 @@ pub fn spawn_program(args: SpawnArgs) Error!Handle {
     message.data[2] = args.flags;
     message.data[3] = args.data3;
     message.data[4] = args.data4;
+    message.data[5] = args.data5;
     message.handles[0] = .{ .handle = init.region, .move = true };
     message.handle_count = 1;
 

@@ -13,7 +13,7 @@ zig build 2>&1
 session=$'help\necho hello\necho pipe-me | cat\nexit\n'
 
 output="$(printf '%s' "$session" | timeout 30 qemu-system-aarch64 \
-    -machine virt -cpu cortex-a57 -smp 1 -m 256M -nographic \
+    -machine virt,gic-version=3 -cpu cortex-a57 -smp 1 -m 256M -nographic \
     -kernel zig-out/bin/granite-kernel.bin \
     -initrd zig-out/bin/bundle.img 2>&1 || true)"
 

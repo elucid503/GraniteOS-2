@@ -30,7 +30,7 @@ pub const thread_stack_pages: usize = 8;
 pub const message_data_words: usize = 6;
 pub const message_handle_slots: usize = 4;
 
-// Highest interrupt line an Interrupt object can claim (GICv2 SPIs on `virt` sit well below this).
+// Highest interrupt line an Interrupt object can claim (GIC SPIs on `virt` sit well below this).
 
 pub const max_interrupt_lines: usize = 256;
 
