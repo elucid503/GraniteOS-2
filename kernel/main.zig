@@ -20,6 +20,7 @@ const interrupt_module = @import("object/interrupt.zig");
 const memory_authority = @import("authority/memory_authority.zig");
 const interrupt_authority = @import("authority/interrupt_authority.zig");
 const device_authority = @import("authority/device_authority.zig");
+const dma_authority = @import("authority/dma_authority.zig");
 const scheduler = @import("sched/scheduler.zig");
 
 pub const panic = std.debug.FullPanic(panic_path.at);
@@ -63,6 +64,7 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
     memory_authority.init();
     interrupt_authority.init();
     device_authority.init();
+    dma_authority.init();
     scheduler.init();
 
     console.debug_print("Scheduler: objects and runqueues ... Loaded\n");

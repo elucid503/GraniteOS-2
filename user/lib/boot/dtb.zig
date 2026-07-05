@@ -1,13 +1,17 @@
-// User-space device-tree reader (07-userspace-ddd.md Section 3): hardware discovery lives above the kernel now. M4 needs exactly one answer - where the PL011 lives and which line it raises - so this reads just that; the general parser grows with the drivers (M6+).
+// User-space device-tree reader (07-userspace-ddd.md Section 3): hardware discovery lives above the kernel now. The
+// walker collects every node matching a `compatible` string, so the same scan finds the PL011 (M4) and the
+// virtio-mmio transports (M7); it grows with the drivers.
 
 const std = @import("std");
 
-pub const Uart = struct {
+pub const Device = struct {
 
     base: usize,
     interrupt_line: u32, // GIC INTID, ready for create(.interrupt)
 
 };
+
+pub const Uart = Device;
 
 const magic = 0xd00dfeed;
 
@@ -26,7 +30,18 @@ const interrupt_kind_shared = 0;
 /// Find the PL011 UART: its MMIO base from `reg` and its GIC INTID from `interrupts`.
 pub fn find_uart(dtb: usize) ?Uart {
 
-    if (read_u32(dtb, 0) != magic) return null;
+    var found: [1]Device = undefined;
+
+    if (find_compatible(dtb, "arm,pl011", &found) == 0) return null;
+
+    return found[0];
+
+}
+
+/// Collect every node whose `compatible` list contains `wanted`, in tree order; returns how many were written.
+pub fn find_compatible(dtb: usize, wanted: []const u8, out: []Device) usize {
+
+    if (read_u32(dtb, 0) != magic) return 0;
 
     const struct_offset = read_u32(dtb, 8);
     const strings_offset = read_u32(dtb, 12);
@@ -38,12 +53,13 @@ pub fn find_uart(dtb: usize) ?Uart {
 
     var reg_offset: [max_depth]?usize = undefined;
     var interrupts_offset: [max_depth]?usize = undefined;
-    var is_uart: [max_depth]bool = undefined;
+    var matched: [max_depth]bool = undefined;
 
+    var found: usize = 0;
     var depth: usize = 0;
     var position: usize = struct_offset;
 
-    while (true) {
+    while (found < out.len) {
 
         const token = read_u32(dtb, position);
         position += 4;
@@ -59,17 +75,18 @@ pub fn find_uart(dtb: usize) ?Uart {
                 address_cells[depth] = address_cells[depth - 1];
                 reg_offset[depth] = null;
                 interrupts_offset[depth] = null;
-                is_uart[depth] = false;
+                matched[depth] = false;
 
             },
 
             token_end_node => {
 
-                if (is_uart[depth]) {
+                if (matched[depth]) {
 
-                    if (decode_uart(dtb, reg_offset[depth], interrupts_offset[depth], address_cells[depth - 1])) |uart| {
+                    if (decode_device(dtb, reg_offset[depth], interrupts_offset[depth], address_cells[depth - 1])) |device| {
 
-                        return uart;
+                        out[found] = device;
+                        found += 1;
 
                     }
 
@@ -100,9 +117,9 @@ pub fn find_uart(dtb: usize) ?Uart {
 
                     interrupts_offset[depth] = value;
 
-                } else if (equals(property, "compatible") and compatible_lists(dtb, value, length, "arm,pl011")) {
+                } else if (equals(property, "compatible") and compatible_lists(dtb, value, length, wanted)) {
 
-                    is_uart[depth] = true;
+                    matched[depth] = true;
 
                 }
 
@@ -110,15 +127,17 @@ pub fn find_uart(dtb: usize) ?Uart {
 
             token_nop => {},
 
-            else => return null,
+            else => return found,
 
         }
 
     }
 
+    return found;
+
 }
 
-fn decode_uart(dtb: usize, reg: ?usize, interrupts: ?usize, addr_cells: u32) ?Uart {
+fn decode_device(dtb: usize, reg: ?usize, interrupts: ?usize, addr_cells: u32) ?Device {
 
     const reg_at = reg orelse return null;
     const interrupts_at = interrupts orelse return null;
@@ -210,6 +229,32 @@ test "finds the PL011 window and its GIC line on QEMU virt" {
 
     try testing.expectEqual(@as(usize, 0x0900_0000), uart.base);
     try testing.expectEqual(@as(u32, 33), uart.interrupt_line);
+
+}
+
+test "collects the virtio-mmio transports on QEMU virt" {
+
+    var devices: [64]Device = undefined;
+    const count = find_compatible(@intFromPtr(fixture), "virtio,mmio", &devices);
+
+    try testing.expectEqual(@as(usize, 32), count);
+
+    // QEMU places the transports at 0xa000000 + 0x200 * n with SPIs 16 + n (INTID 48 + n), in some tree order.
+
+    var seen_first = false;
+
+    for (devices[0..count]) |device| {
+
+        if (device.base == 0xa00_0000) {
+
+            try testing.expectEqual(@as(u32, 48), device.interrupt_line);
+            seen_first = true;
+
+        }
+
+    }
+
+    try testing.expect(seen_first);
 
 }
 

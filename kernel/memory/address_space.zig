@@ -13,7 +13,7 @@ const PhysAddr = arch.PhysAddr;
 const Permissions = arch.Permissions;
 const page_size = config.page_size;
 
-const max_mappings = 8;
+const max_mappings = 64;
 
 // Kernel-chosen mappings land in the user window (config.user_space_base): above 512 GiB, clear of the kernel's
 // block-mapped identity range that every process root shares (06-kernel-ddd.md Section 6.3; arch/aarch64/mmu.zig).
@@ -70,6 +70,7 @@ pub const AddressSpace = struct {
 
         var effective = perms;
         effective.device = region.device;
+        effective.uncached = region.uncached;
 
         for (0..region.pages) |index| {
 

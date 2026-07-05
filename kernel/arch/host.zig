@@ -15,7 +15,8 @@ pub const Permissions = packed struct(u8) {
     execute: bool = false,
     user: bool = true,
     device: bool = false,
-    _pad: u3 = 0,
+    uncached: bool = false,
+    _pad: u2 = 0,
 
 };
 
@@ -53,6 +54,13 @@ pub fn restore_interrupts(state: InterruptState) void {
 }
 
 pub fn sync_instruction_cache() void {}
+
+pub fn clean_invalidate_data_cache(base: usize, length: usize) void {
+
+    _ = base;
+    _ = length;
+
+}
 
 pub fn halt() noreturn {
 

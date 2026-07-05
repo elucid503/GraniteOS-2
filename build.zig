@@ -1,6 +1,8 @@
-// Build the aarch64 freestanding kernel, M6 user module bundle, and QEMU `virt` run steps.
+// Build the aarch64 freestanding kernel, M7 user module bundle, the persistent disk image, and QEMU `virt` run steps.
 
 const std = @import("std");
+
+const disk_bytes = 64 * 1024 * 1024;
 
 pub fn build(b: *std.Build) void {
 
@@ -45,63 +47,105 @@ pub fn build(b: *std.Build) void {
     kernel.setLinkerScript(b.path("kernel/arch/aarch64/asm/linker.ld"));
     kernel.entry = .{ .symbol_name = "_start" };
 
+    // User modules are multithreaded since M7: pooled servers run worker threads (07-userspace-ddd.md Section 7.2).
+
     const user_lib = b.createModule(.{
 
         .root_source_file = b.path("user/lib/root.zig"),
         .target = target,
         .optimize = optimize,
-        .single_threaded = true,
+        .single_threaded = false,
         .pic = false,
 
     });
 
     const flint = user_program(b, target, optimize, user_lib, "granite-flint.elf", "user/flint/main.zig");
     const console = user_program(b, target, optimize, user_lib, "granite-console.elf", "user/drivers/console/main.zig");
+    const block = user_program(b, target, optimize, user_lib, "granite-block.elf", "user/drivers/block/main.zig");
     const marble = user_program(b, target, optimize, user_lib, "granite-marble.elf", "user/marble/main.zig");
     const naming = user_program(b, target, optimize, user_lib, "granite-naming.elf", "user/servers/naming/main.zig");
+    const filesystem = user_program(b, target, optimize, user_lib, "granite-filesystem.elf", "user/servers/filesystem/main.zig");
     const echo = user_program(b, target, optimize, user_lib, "granite-echo.elf", "user/programs/common/echo.zig");
     const cat = user_program(b, target, optimize, user_lib, "granite-cat.elf", "user/programs/common/cat.zig");
     const help = user_program(b, target, optimize, user_lib, "granite-help.elf", "user/programs/common/help.zig");
     const cat_via_name = user_program(b, target, optimize, user_lib, "granite-cat-via-name.elf", "user/programs/common/cat_via_name.zig");
+    const ls = user_program(b, target, optimize, user_lib, "granite-ls.elf", "user/programs/fs/ls.zig");
+    const view = user_program(b, target, optimize, user_lib, "granite-view.elf", "user/programs/fs/view.zig");
+    const write = user_program(b, target, optimize, user_lib, "granite-write.elf", "user/programs/fs/write.zig");
+    const create = user_program(b, target, optimize, user_lib, "granite-create.elf", "user/programs/fs/create.zig");
+    const mkdir = user_program(b, target, optimize, user_lib, "granite-mkdir.elf", "user/programs/fs/mkdir.zig");
+    const delete = user_program(b, target, optimize, user_lib, "granite-delete.elf", "user/programs/fs/delete.zig");
+    const rename = user_program(b, target, optimize, user_lib, "granite-rename.elf", "user/programs/fs/rename.zig");
 
     const flatten = host_tool(b, "flatten", "tools/flatten.zig");
     const bundle_tool = host_tool(b, "bundle", "tools/bundle.zig");
+    const mkdisk = host_tool(b, "mkdisk", "tools/mkdisk.zig");
 
     const kernel_image = flatten_image(b, flatten, kernel, "granite-kernel.bin");
     const flint_image = flatten_image(b, flatten, flint, "flint.bin");
-    const bundle_image = bundle_image_step(b, bundle_tool, .{
 
-        .flint = flint_image,
-        .console = console,
-        .marble = marble,
-        .naming = naming,
-        .echo = echo,
-        .cat = cat,
-        .help = help,
-        .cat_via_name = cat_via_name,
+    const bundle_run = b.addRunArtifact(bundle_tool);
+    const bundle_image = bundle_run.addOutputFileArg("bundle.img");
 
-    });
+    add_module(bundle_run, "flint", flint_image);
+    add_artifact_module(bundle_run, "console", console);
+    add_artifact_module(bundle_run, "block", block);
+    add_artifact_module(bundle_run, "marble", marble);
+    add_artifact_module(bundle_run, "naming", naming);
+    add_artifact_module(bundle_run, "filesystem", filesystem);
+    add_artifact_module(bundle_run, "echo", echo);
+    add_artifact_module(bundle_run, "cat", cat);
+    add_artifact_module(bundle_run, "help", help);
+    add_artifact_module(bundle_run, "cat-via-name", cat_via_name);
+    add_artifact_module(bundle_run, "ls", ls);
+    add_artifact_module(bundle_run, "view", view);
+    add_artifact_module(bundle_run, "write", write);
+    add_artifact_module(bundle_run, "create", create);
+    add_artifact_module(bundle_run, "mkdir", mkdir);
+    add_artifact_module(bundle_run, "delete", delete);
+    add_artifact_module(bundle_run, "rename", rename);
 
     b.installArtifact(kernel);
     b.getInstallStep().dependOn(&b.addInstallBinFile(kernel_image, "granite-kernel.bin").step);
     b.getInstallStep().dependOn(&b.addInstallBinFile(flint_image, "flint.bin").step);
     b.getInstallStep().dependOn(&b.addInstallBinFile(bundle_image, "bundle.img").step);
 
+    // The persistent virtio disk: created once, then reused across runs so the filesystem survives reboots.
+
+    const disk_path = b.pathFromRoot("disk.img");
+    const mkdisk_run = b.addRunArtifact(mkdisk);
+
+    mkdisk_run.addArg(disk_path);
+    mkdisk_run.addArg(b.fmt("{d}", .{disk_bytes}));
+    mkdisk_run.has_side_effects = true;
+
     add_qemu_step(b, kernel_image, bundle_image, .{
 
         .name = "qemu",
-        .description = "Boot the full M6 system under QEMU `virt`",
+        .description = "Boot the full M7 system under QEMU `virt` with the persistent disk",
         .debug = false,
         .test_build = test_build,
+        .disk = .{ .path = disk_path, .prepare = mkdisk_run },
 
     });
 
     add_qemu_step(b, kernel_image, bundle_image, .{
 
         .name = "qemu-debug",
-        .description = "Boot the full M6 system under QEMU `virt`, halted, with a gdb stub on :1234",
+        .description = "Boot the full M7 system under QEMU `virt`, halted, with a gdb stub on :1234",
         .debug = true,
         .test_build = test_build,
+        .disk = .{ .path = disk_path, .prepare = mkdisk_run },
+
+    });
+
+    add_qemu_step(b, kernel_image, bundle_image, .{
+
+        .name = "qemu-nodisk",
+        .description = "Boot the full system without a disk (the filesystem reports unavailable)",
+        .debug = false,
+        .test_build = test_build,
+        .disk = null,
 
     });
 
@@ -111,6 +155,7 @@ pub fn build(b: *std.Build) void {
         .description = "Boot the kernel without an initrd (halts after initialization)",
         .debug = false,
         .test_build = test_build,
+        .disk = null,
 
     });
 
@@ -172,7 +217,7 @@ fn user_program(
         .target = target,
         .optimize = optimize,
         .code_model = .small,
-        .single_threaded = true,
+        .single_threaded = false,
         .pic = false,
 
     });
@@ -220,38 +265,6 @@ fn flatten_image(b: *std.Build, flatten: *std.Build.Step.Compile, image: *std.Bu
 
 }
 
-const BundleInputs = struct {
-
-    flint: std.Build.LazyPath,
-    console: *std.Build.Step.Compile,
-    marble: *std.Build.Step.Compile,
-    naming: *std.Build.Step.Compile,
-    echo: *std.Build.Step.Compile,
-    cat: *std.Build.Step.Compile,
-    help: *std.Build.Step.Compile,
-    cat_via_name: *std.Build.Step.Compile,
-
-};
-
-fn bundle_image_step(b: *std.Build, bundle_tool: *std.Build.Step.Compile, inputs: BundleInputs) std.Build.LazyPath {
-
-    const run = b.addRunArtifact(bundle_tool);
-
-    const output = run.addOutputFileArg("bundle.img");
-
-    add_module(run, "flint", inputs.flint);
-    add_artifact_module(run, "console", inputs.console);
-    add_artifact_module(run, "marble", inputs.marble);
-    add_artifact_module(run, "naming", inputs.naming);
-    add_artifact_module(run, "echo", inputs.echo);
-    add_artifact_module(run, "cat", inputs.cat);
-    add_artifact_module(run, "help", inputs.help);
-    add_artifact_module(run, "cat-via-name", inputs.cat_via_name);
-
-    return output;
-
-}
-
 fn add_module(run: *std.Build.Step.Run, name: []const u8, file: std.Build.LazyPath) void {
 
     run.addArg(name);
@@ -266,12 +279,20 @@ fn add_artifact_module(run: *std.Build.Step.Run, name: []const u8, artifact: *st
 
 }
 
+const QemuDisk = struct {
+
+    path: []const u8,
+    prepare: *std.Build.Step.Run,
+
+};
+
 const QemuStep = struct {
 
     name: []const u8,
     description: []const u8,
     debug: bool,
     test_build: bool,
+    disk: ?QemuDisk,
 
 };
 
@@ -307,6 +328,15 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
 
         run.addArg("-initrd");
         run.addFileArg(image);
+
+    }
+
+    if (step.disk) |disk| {
+
+        run.addArgs(&.{ "-drive", b.fmt("if=none,format=raw,id=granite-disk,file={s}", .{disk.path}) });
+        run.addArgs(&.{ "-device", "virtio-blk-device,drive=granite-disk" });
+
+        run.step.dependOn(&disk.prepare.step);
 
     }
 

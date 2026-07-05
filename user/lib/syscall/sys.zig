@@ -56,6 +56,8 @@ pub const CreateKind = enum(u64) {
     interrupt, // arg_a = line, arg_b = InterruptAuthority handle
     memory_authority, // arg_a = budget bytes, arg_b = parent MemoryAuthority handle
     device_region, // arg_a = physical base, arg_b = length, arg_c = DeviceAuthority handle
+    dma_region, // arg_a = length, arg_b = DmaAuthority handle; physical base returns in x1
+    thread, // arg_a = AddressSpace handle (the caller's own), arg_b = entry VA, arg_c = stack top VA
 
 };
 
@@ -77,6 +79,37 @@ pub fn create(kind: CreateKind, arg_a: u64, arg_b: u64) Error!Handle {
 pub fn create_device_region(base: u64, length: u64, authority: Handle) Error!Handle {
 
     return handle(invoke(.create, @intFromEnum(CreateKind.device_region), base, length, authority, 0));
+
+}
+
+pub const DmaRegion = struct {
+
+    region: Handle,
+    physical_base: u64,
+
+};
+
+/// A contiguous, DMA-capable buffer (06-kernel-ddd.md Section 16.3): the one syscall with a second return register,
+/// carrying the physical base the driver writes into device descriptors.
+pub fn create_dma(length: u64, authority: Handle) Error!DmaRegion {
+
+    var physical_base: u64 = 0;
+
+    const result = invoke_two(.create, @intFromEnum(CreateKind.dma_region), length, authority, &physical_base);
+
+    return .{
+
+        .region = try handle(result),
+        .physical_base = physical_base,
+
+    };
+
+}
+
+/// A suspended worker thread in this process (05-server-protocol.md worker pools); `start` admits it.
+pub fn create_thread(entry: usize, stack_top: usize) Error!Handle {
+
+    return handle(invoke(.create, @intFromEnum(CreateKind.thread), cap.self_space, entry, stack_top, 0));
 
 }
 
@@ -207,6 +240,33 @@ fn invoke(number: Number, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) i64 {
           [a3] "{x3}" (a3),
           [a4] "{x4}" (a4),
         : .{ .memory = true });
+
+}
+
+// The two-register variant: x0 carries the signed result, x1 an extra success value (the DMA physical base).
+
+fn invoke_two(number: Number, a0: u64, a1: u64, a2: u64, extra: *u64) i64 {
+
+    if (comptime builtin.target.cpu.arch != .aarch64) {
+
+        @panic("user syscalls are target-only");
+
+    }
+
+    var second: u64 = undefined;
+
+    const result = asm volatile ("svc #0"
+        : [result] "={x0}" (-> i64),
+          [second] "={x1}" (second),
+        : [number] "{x8}" (@intFromEnum(number)),
+          [a0] "{x0}" (a0),
+          [a1] "{x1}" (a1),
+          [a2] "{x2}" (a2),
+        : .{ .memory = true });
+
+    extra.* = second;
+
+    return result;
 
 }
 

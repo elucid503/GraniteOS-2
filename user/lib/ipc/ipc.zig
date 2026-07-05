@@ -78,6 +78,58 @@ pub const Dispatch = *const fn (badge: u64, method: u64, in: *const Message, out
 /// The canonical single-threaded server loop (05-server-protocol.md): receive, dispatch, reply.
 pub fn serve(endpoint: Handle, dispatch: Dispatch) noreturn {
 
+    serve_loop(endpoint, dispatch);
+
+}
+
+// Worker pools (05-server-protocol.md): N threads all `receive` on the same endpoint, so a request blocked
+// downstream does not stall other clients. Every request carries its own one-shot reply handle, so workers share no
+// per-request state; the server guards its own data structures with a `Lock`.
+
+const worker_stack_pages = 16;
+const page_size = 4096;
+
+var pool_endpoint: Handle = 0;
+var pool_dispatch: Dispatch = undefined;
+
+/// The pooled server loop: start `workers - 1` sibling threads on the same endpoint, then serve on this one.
+/// Worker stacks come from the standard memory-authority grant (cap.memory).
+pub fn serve_pool(endpoint: Handle, workers: usize, dispatch: Dispatch) noreturn {
+
+    pool_endpoint = endpoint;
+    pool_dispatch = dispatch;
+
+    var started: usize = 1;
+
+    while (started < workers) : (started += 1) {
+
+        start_worker(cap.memory) catch break;
+
+    }
+
+    serve_loop(endpoint, dispatch);
+
+}
+
+fn start_worker(authority: Handle) Error!void {
+
+    const stack = try sys.create(.region, worker_stack_pages * page_size, authority);
+    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
+
+    const thread = try sys.create_thread(@intFromPtr(&worker_entry), base + worker_stack_pages * page_size);
+
+    try sys.start(thread);
+
+}
+
+fn worker_entry() callconv(.c) noreturn {
+
+    serve_loop(pool_endpoint, pool_dispatch);
+
+}
+
+fn serve_loop(endpoint: Handle, dispatch: Dispatch) noreturn {
+
     var in = Message.zeroed;
 
     while (true) {
@@ -92,6 +144,29 @@ pub fn serve(endpoint: Handle, dispatch: Dispatch) noreturn {
     }
 
 }
+
+/// A yielding mutual-exclusion lock for a pooled server's own data structures (05-server-protocol.md).
+pub const Lock = struct {
+
+    state: u32 = 0,
+
+    pub fn acquire(self: *Lock) void {
+
+        while (@atomicRmw(u32, &self.state, .Xchg, 1, .acquire) != 0) {
+
+            sys.yield();
+
+        }
+
+    }
+
+    pub fn release(self: *Lock) void {
+
+        @atomicStore(u32, &self.state, 0, .release);
+
+    }
+
+};
 
 fn decoded(message: Message) Error!Message {
 

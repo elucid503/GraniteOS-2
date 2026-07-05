@@ -206,7 +206,8 @@ fn deliver(source: *Thread, dest: *Thread, is_call: bool) Error!void {
 fn transfer_slot(source: *Thread, dest: *Thread, slot: @import("message.zig").HandleSlot) Error!@import("message.zig").HandleSlot {
 
     const target = try source.process.handles.resolve(slot.handle);
-    const copied = try dest.process.handles.insert(target);
+    const badge = try source.process.handles.badge_of(slot.handle);
+    const copied = try dest.process.handles.insert_badged(target, badge);
 
     if (slot.move) source.process.handles.close(slot.handle) catch {};
 
@@ -278,6 +279,42 @@ test "deliver moves a handle across processes and copies the data words" {
 
     try testing.expectEqual(region, try receiver_process.handles.resolve_as(receiver.staged.handles[0].handle, .region));
     try testing.expectError(error.BadHandle, sender_process.handles.resolve(sender_handle));
+
+}
+
+test "deliver preserves a badged endpoint handle across processes" {
+
+    const pool = ipc_pool(256);
+    defer std.heap.page_allocator.free(pool);
+
+    const sender_process = try Process.create(try address_space.AddressSpace.create());
+    const receiver_process = try Process.create(try address_space.AddressSpace.create());
+
+    const endpoint = try Endpoint.create();
+
+    const sender_handle = try sender_process.handles.insert_badged(&endpoint.header, 42);
+    var receiver_handle: ?Handle = null;
+    defer {
+
+        if (receiver_handle) |handle| receiver_process.handles.close(handle) catch {};
+        sender_process.handles.close(sender_handle) catch {};
+
+        if (endpoint.header.release()) object.destroy(&endpoint.header);
+
+    }
+
+    var sender = bare_thread(sender_process);
+    var receiver = bare_thread(receiver_process);
+
+    sender.staged.handles[0] = .{ .handle = sender_handle, .move = false };
+    sender.staged.handle_count = 1;
+
+    try deliver(&sender, &receiver, false);
+
+    receiver_handle = receiver.staged.handles[0].handle;
+    try testing.expectEqual(endpoint, try receiver_process.handles.resolve_as(receiver_handle.?, .endpoint));
+    try testing.expectEqual(@as(u64, 42), try receiver_process.handles.badge_of(receiver_handle.?));
+    try testing.expectEqual(@as(u64, 42), try sender_process.handles.badge_of(sender_handle));
 
 }
 

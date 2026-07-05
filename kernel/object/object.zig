@@ -14,6 +14,7 @@ pub const Kind = enum(u8) {
     memory_authority,
     interrupt_authority,
     device_authority,
+    dma_authority,
 
 };
 
@@ -50,6 +51,7 @@ const Interrupt = @import("interrupt.zig").Interrupt;
 const MemoryAuthority = @import("../authority/memory_authority.zig").MemoryAuthority;
 const InterruptAuthority = @import("../authority/interrupt_authority.zig").InterruptAuthority;
 const DeviceAuthority = @import("../authority/device_authority.zig").DeviceAuthority;
+const DmaAuthority = @import("../authority/dma_authority.zig").DmaAuthority;
 
 pub fn TypeOf(comptime kind: Kind) type {
 
@@ -65,6 +67,7 @@ pub fn TypeOf(comptime kind: Kind) type {
         .memory_authority => MemoryAuthority,
         .interrupt_authority => InterruptAuthority,
         .device_authority => DeviceAuthority,
+        .dma_authority => DmaAuthority,
 
     };
 
@@ -84,6 +87,7 @@ pub fn destroy(object: *Object) void {
         .memory_authority => container(MemoryAuthority, object).destroy(),
         .interrupt_authority => container(InterruptAuthority, object).destroy(),
         .device_authority => container(DeviceAuthority, object).destroy(),
+        .dma_authority => container(DmaAuthority, object).destroy(),
 
     }
 

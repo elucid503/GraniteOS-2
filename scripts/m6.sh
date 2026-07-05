@@ -41,7 +41,7 @@ check "console driver came up"        "Console: PL011 driver ... Loaded"
 check "marble reached prompt"          "marble [/] >"
 check "external echo launched"        "hello"
 check "pipeline produced output"      "pipe-me"
-check "help lists programs"           "GraniteOS-2 - Available Programs"
+check "help lists programs"           "GraniteOS - Available Programs"
 check "name service lookup works"     "cat-via-name: resolved console"
 check "supervisor restart path"       "Exiting MARBLE..."
 

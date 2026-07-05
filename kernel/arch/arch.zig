@@ -34,6 +34,7 @@ pub const enable_interrupts = cpu.enable_interrupts;
 pub const disable_interrupts = cpu.disable_interrupts;
 pub const restore_interrupts = cpu.restore_interrupts;
 pub const sync_instruction_cache = cpu.sync_instruction_cache;
+pub const clean_invalidate_data_cache = cpu.clean_invalidate_data_cache;
 pub const halt = cpu.halt;
 
 // Thread context.

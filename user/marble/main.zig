@@ -251,7 +251,7 @@ fn run_pipeline(pipeline: *const Pipeline) !void {
 
         const badge = try sys.receive(supervisor, &message);
 
-        if (badge >= 1 and badge <= @as(u64, @intCast(pipeline.count))) {
+        if (badge >= 1 and badge <= @as(u64, @intCast(pipeline.count)) and message.data[0] == proto.supervisor.death) {
 
             received += 1;
 

@@ -14,6 +14,7 @@ const process_module = @import("../object/process.zig");
 const memory_authority = @import("../authority/memory_authority.zig");
 const interrupt_authority = @import("../authority/interrupt_authority.zig");
 const device_authority = @import("../authority/device_authority.zig");
+const dma_authority = @import("../authority/dma_authority.zig");
 
 const Region = region_module.Region;
 const AddressSpace = address_space.AddressSpace;
@@ -34,6 +35,7 @@ const image_permissions = arch.Permissions{ .read = true, .write = true, .execut
 // The bundle's fixed handle order; user/lib/cap/cap.zig relies on these indices.
 
 // 0: root MemoryAuthority   1: InterruptAuthority   2: DeviceAuthority   3: DTB Region   4: boot-module Region
+// 5: DmaAuthority
 
 /// Build the first AddressSpace, raw-map Flint from the initrd, pre-load its HandleTable with the capability bundle,
 /// and start its first thread. `arg` (x0) carries the DTB's byte offset into its page-aligned Region.
@@ -70,6 +72,7 @@ pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
     const memory = try memory_authority.MemoryAuthority.create_root(frames.stats().free * page_size);
     const interrupts = try interrupt_authority.InterruptAuthority.create();
     const devices = try device_authority.DeviceAuthority.create();
+    const dma = try dma_authority.DmaAuthority.create();
 
     const grants = [_]process_module.Grant{
 
@@ -78,6 +81,7 @@ pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
         .{ .object = &devices.header },
         .{ .object = &dtb_region.header },
         .{ .object = &modules.header },
+        .{ .object = &dma.header },
 
     };
 

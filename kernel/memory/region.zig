@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const arch = @import("../arch/arch.zig");
 const config = @import("../config.zig");
 const frames = @import("frames.zig");
 const slab = @import("slab.zig");
@@ -26,6 +27,7 @@ pub const Region = struct {
 
     copy_on_write: bool,
     device: bool,
+    uncached: bool,
 
     // RAM regions own their frames; device windows and wrapped boot spans only view physical memory.
     owns_frames: bool,
@@ -51,11 +53,25 @@ pub const Region = struct {
 
             .copy_on_write = false,
             .device = false,
+            .uncached = false,
 
             .owns_frames = true,
             .authority = null,
 
         };
+
+        return region;
+
+    }
+
+    /// A RAM region intended for device DMA. It owns ordinary contiguous frames, but user mappings use the
+    /// non-cacheable normal-memory attribute so descriptors, rings, and bounce buffers are visible to hardware
+    /// without cache maintenance.
+    pub fn create_dma(length: usize) Error!*Region {
+
+        const region = try create(length);
+        arch.clean_invalidate_data_cache(region.base, region.pages * page_size);
+        region.uncached = true;
 
         return region;
 
@@ -77,6 +93,7 @@ pub const Region = struct {
 
             .copy_on_write = false,
             .device = true,
+            .uncached = false,
 
             .owns_frames = false,
             .authority = null,
@@ -103,6 +120,7 @@ pub const Region = struct {
 
             .copy_on_write = false,
             .device = false,
+            .uncached = false,
 
             .owns_frames = false,
             .authority = null,

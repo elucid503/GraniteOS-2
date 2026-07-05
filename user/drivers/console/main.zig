@@ -138,7 +138,16 @@ fn attach(badge: u64, in: *const Message) i64 {
 
     const session = session_for(badge) orelse return -7;
 
+    if (session.base != 0) {
+
+        sys.unmap(cap.self_space, session.base) catch {};
+        session.base = 0;
+        session.capacity = 0;
+
+    }
+
     session.base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
+
     session.capacity = @intCast(in.data[1]);
 
     return 0;

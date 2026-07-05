@@ -52,7 +52,7 @@ pub const Number = enum(u64) {
 };
 
 // `create` kinds, in this ABI's own numbering (03-syscall-abi.md appendix); the numbers are append-only. The gated
-// kinds carry the granting authority's handle as their last argument. DMA regions arrive with M7.
+// kinds carry the granting authority's handle as their last argument.
 
 pub const CreateKind = enum(u64) {
 
@@ -63,6 +63,8 @@ pub const CreateKind = enum(u64) {
     interrupt, // x1 = line, x2 = InterruptAuthority handle
     memory_authority, // x1 = budget bytes, x2 = parent MemoryAuthority handle
     device_region, // x1 = physical base, x2 = length, x3 = DeviceAuthority handle
+    dma_region, // x1 = length, x2 = DmaAuthority handle; returns the physical base in x1
+    thread, // x1 = AddressSpace handle (the caller's own), x2 = entry VA, x3 = stack top VA
 
 };
 
@@ -95,7 +97,7 @@ fn run(frame: *SyscallFrame) Error!u64 {
 
     return switch (number) {
 
-        .create => create(a0, a1, a2, a3),
+        .create => create(frame, a0, a1, a2, a3),
         .spawn => spawn(a0, a1, a2, a3, a4),
         .close => close(a0),
         .start => start(a0),
@@ -119,7 +121,7 @@ fn run(frame: *SyscallFrame) Error!u64 {
 
 // Lifecycle
 
-fn create(kind_raw: u64, arg_a: u64, arg_b: u64, arg_c: u64) Error!u64 {
+fn create(frame: *SyscallFrame, kind_raw: u64, arg_a: u64, arg_b: u64, arg_c: u64) Error!u64 {
 
     const kind = std.meta.intToEnum(CreateKind, kind_raw) catch return error.Invalid;
 
@@ -132,6 +134,8 @@ fn create(kind_raw: u64, arg_a: u64, arg_b: u64, arg_c: u64) Error!u64 {
         .interrupt => &(try create_interrupt(arg_a, arg_b)).header,
         .memory_authority => &(try create_memory_authority(arg_a, arg_b)).header,
         .device_region => &(try create_device_region(arg_a, arg_b, arg_c)).header,
+        .dma_region => &(try create_dma_region(frame, arg_a, arg_b)).header,
+        .thread => &(try create_thread(arg_a, arg_b, arg_c)).header,
 
     };
 
@@ -192,6 +196,39 @@ fn create_device_region(base: u64, length: u64, authority_raw: u64) Error!*Regio
     if (!authority.allows(base, length)) return error.NotAllowed;
 
     return Region.create_device(base, length);
+
+}
+
+// A DMA buffer is contiguous RAM whose physical base the driver must know (06-kernel-ddd.md Section 16.3): the one
+// place a syscall uses a second return register, so the verb count stays at 17.
+
+fn create_dma_region(frame: *SyscallFrame, length: u64, authority_raw: u64) Error!*Region {
+
+    const authority = try resolve_as(authority_raw, .dma_authority);
+
+    const pages = (length + page_size - 1) / page_size;
+
+    if (!authority.allows(pages)) return error.NotAllowed;
+
+    const region = try Region.create_dma(length);
+
+    frame.registers[1] = region.base;
+
+    return region;
+
+}
+
+// A worker thread for a server pool (05-server-protocol.md): it lives in the calling process, begins suspended, and
+// `start` admits it. The space handle must name the caller's own AddressSpace.
+
+fn create_thread(space_raw: u64, entry: u64, stack_top: u64) Error!*Thread {
+
+    const space = try resolve_space(space_raw);
+
+    if (space != current_process().address_space) return error.NotAllowed;
+    if (entry == 0 or stack_top == 0) return error.Invalid;
+
+    return Thread.create_user(current_process(), entry, stack_top, 0);
 
 }
 

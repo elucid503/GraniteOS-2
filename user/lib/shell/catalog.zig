@@ -27,6 +27,18 @@ pub const bundled = [_]Entry{
 
 };
 
+pub const filesystem = [_]Entry{
+
+    .{ .name = "ls", .description = "List a directory" },
+    .{ .name = "view", .description = "Print a file's contents" },
+    .{ .name = "write", .description = "Write text (or stdin) into a file" },
+    .{ .name = "create", .description = "Create an empty file" },
+    .{ .name = "mkdir", .description = "Create a directory" },
+    .{ .name = "delete", .description = "Remove a file or empty directory" },
+    .{ .name = "rename", .description = "Move a file or directory" },
+
+};
+
 pub fn write_help(out: *stream.Stream) io.Error!void {
 
     try io.writeln(out, "");
@@ -36,6 +48,8 @@ pub fn write_help(out: *stream.Stream) io.Error!void {
     try write_category(out, "builtins", &builtins);
     try io.writeln(out, "");
     try write_category(out, "common", &bundled);
+    try io.writeln(out, "");
+    try write_category(out, "filesystem", &filesystem);
     try io.writeln(out, "");
 
 }
@@ -57,6 +71,7 @@ pub fn write_about(out: *stream.Stream) io.Error!void {
     try io.writeln(out, "  - User-space drivers and servers");
     try io.writeln(out, "  - Ring-stream pipeline support");
     try io.writeln(out, "  - Bundled ELF program loading");
+    try io.writeln(out, "  - virtio-blk driver + Strata filesystem");
     try io.writeln(out, "  - FLINT startup program");
     try io.writeln(out, "  - MARBLE shell");
     try io.writeln(out, "");

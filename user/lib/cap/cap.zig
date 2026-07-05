@@ -37,6 +37,7 @@ pub const flint = struct {
     pub const devices: Handle = 2; // DeviceAuthority
     pub const dtb: Handle = 3; // read-only DTB Region
     pub const module: Handle = 4; // read-only module bundle Region
+    pub const dma: Handle = 5; // DmaAuthority (M7)
 
 };
 
@@ -65,6 +66,7 @@ pub const driver = struct {
     pub const endpoint: Handle = stdin; // requests arrive here
     pub const device: Handle = reserved_grants; // MMIO window Region
     pub const interrupt: Handle = reserved_grants + 1; // the hardware line
+    pub const dma: Handle = reserved_grants + 2; // DmaAuthority sub-grant (DMA-capable drivers only)
 
 };
 
@@ -78,5 +80,11 @@ pub const marble = struct {
 pub const server = struct {
 
     pub const endpoint: Handle = stdin;
+
+};
+
+pub const filesystem = struct {
+
+    pub const block: Handle = reserved_grants; // badged endpoint to the block driver
 
 };

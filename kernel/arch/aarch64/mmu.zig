@@ -27,10 +27,12 @@ const user_execute_never: u64 = 1 << 54; // UXN
 
 const attribute_device: u64 = 0 << 2;
 const attribute_normal: u64 = 1 << 2;
+const attribute_normal_uncached: u64 = 2 << 2;
 
-// MAIR_EL1: attr0 = Device-nGnRnE (0x00), attr1 = Normal write-back (0xff).
+// MAIR_EL1: attr0 = Device-nGnRnE (0x00), attr1 = Normal write-back (0xff),
+// attr2 = Normal non-cacheable (0x44) for DMA buffers shared with devices.
 
-const memory_attributes: u64 = 0x00 | (0xff << 8);
+const memory_attributes: u64 = 0x00 | (0xff << 8) | (0x44 << 16);
 
 // TCR_EL1: 48-bit TTBR0, 4 KiB granule, write-back inner-shareable walks, TTBR1 disabled, 40-bit physical output.
 
@@ -169,7 +171,11 @@ pub const Permissions = packed struct(u8) {
     // Device/MMIO mapping: non-cacheable, non-gathering, never executable (06-kernel-ddd.md Section 16.3).
     device: bool = false,
 
-    _pad: u3 = 0,
+    // RAM used for DMA rings/buffers: normal memory, but non-cacheable so device writes and CPU writes are visible
+    // without explicit cache maintenance.
+    uncached: bool = false,
+
+    _pad: u2 = 0,
 };
 
 const page_descriptor: u64 = descriptor_valid | (1 << 1);
@@ -379,7 +385,7 @@ fn leaf_attributes(perms: Permissions) u64 {
 
     }
 
-    var attributes = access_flag | shareable_inner | attribute_normal;
+    var attributes = access_flag | shareable_inner | (if (perms.uncached) attribute_normal_uncached else attribute_normal);
 
     if (perms.user) {
 

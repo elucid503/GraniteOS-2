@@ -32,6 +32,37 @@ pub fn sync_instruction_cache() void {
 
 }
 
+/// Clean and invalidate data-cache lines covering a physical range currently reachable through the kernel's
+/// identity map. Used before remapping recycled RAM as uncached DMA memory, so old cacheable free-list writes cannot
+/// later evict over device-visible ring contents.
+pub fn clean_invalidate_data_cache(base: usize, length: usize) void {
+
+    if (length == 0) return;
+
+    const ctr = asm volatile ("mrs %[out], ctr_el0"
+        : [out] "=r" (-> u64),
+    );
+
+    const shift: u6 = @intCast((ctr >> 16) & 0xf);
+    const line_size = @as(usize, 4) << shift;
+    const mask = line_size - 1;
+
+    var address = base & ~mask;
+    const end = (base + length + mask) & ~mask;
+
+    while (address < end) : (address += line_size) {
+
+        asm volatile ("dc civac, %[addr]"
+            :
+            : [addr] "r" (address),
+            : .{ .memory = true });
+
+    }
+
+    asm volatile ("dsb ish" ::: .{ .memory = true });
+
+}
+
 // The prior IRQ-mask state, so nested disable/restore pairs compose (06-kernel-ddd.md Section 5).
 
 pub const InterruptState = usize;
