@@ -161,7 +161,7 @@ pub fn arm_deadline(ns_from_now: u64) void {
 
 }
 
-pub fn disarm_deadline() void {}
+pub fn stop() void {}
 
 pub fn intctrl_init_primary(windows: ?types.IntctrlWindows) void {
 

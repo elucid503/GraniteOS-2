@@ -88,3 +88,37 @@ pub const filesystem = struct {
     pub const block: Handle = reserved_grants; // badged endpoint to the block driver
 
 };
+
+// The input server owns every virtio-input transport at once (in-process drivers, 07-userspace-ddd.md
+// Section 12.4): init word 3 carries the device count `n`, the windows sit at `devices..devices+n`, the
+// matching interrupts at `devices+n..devices+2n`, the DmaAuthority sub-grant follows at `devices+2n`,
+// and init word 4 packs each transport's in-page offset as 16 bits per device.
+
+pub const input = struct {
+
+    pub const devices: Handle = reserved_grants;
+
+    pub fn dma(count: usize) Handle {
+
+        return @intCast(devices + 2 * count);
+
+    }
+
+};
+
+pub const compositor = struct {
+
+    pub const display: Handle = reserved_grants; // badged endpoint to the display driver
+    pub const input: Handle = reserved_grants + 1; // badged endpoint to the input server
+    pub const bundle: Handle = reserved_grants + 2; // read-only module bundle Region (fonts ride in it)
+
+};
+
+// GUI clients reach the compositor through the name service; their one extra grant is the bundle the
+// fonts load from.
+
+pub const gui = struct {
+
+    pub const bundle: Handle = reserved_grants;
+
+};

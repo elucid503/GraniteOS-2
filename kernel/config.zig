@@ -2,9 +2,11 @@
 
 pub const page_size: usize = 4096;
 
-// Largest buddy block the frame allocator tracks: 2^frame_max_order pages (here 4 MiB).
+// Largest buddy block the frame allocator tracks: 2^frame_max_order pages (here 16 MiB). Regions and DMA
+// backings are physically contiguous, and M9's scanout needs width*height*4 in one run - 16 MiB covers a
+// 2560x1600 display.
 
-pub const frame_max_order: usize = 10;
+pub const frame_max_order: usize = 12;
 
 // Scheduling (06-kernel-ddd.md Section 10): MLFQ levels with growing quanta, plus the periodic anti-starvation boost.
 

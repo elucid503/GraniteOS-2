@@ -1,0 +1,943 @@
+// Display server / compositor (07-userspace-ddd.md Section 12.3): the policy layer over the display driver.
+// It owns the screen, allocates window surfaces as shared Regions, composites them into the scanout with
+// damage tracking (a cached back buffer, then one row-copy of the damaged band into the uncached
+// framebuffer), and manages stacking, focus, and title-bar dragging. Input arrives over the input server's
+// event ring; the hardware cursor plane means pointer motion costs one IPC, not a recomposite. Everything
+// idles blocked in `receive` with a bound notification - no frame timer, no polling.
+
+const lib = @import("lib");
+
+const cap = lib.cap;
+const events = lib.events;
+const gfx = lib.gfx;
+const ipc = lib.ipc;
+const proto = lib.proto;
+const sys = lib.sys;
+
+const manager_module = @import("manager.zig");
+
+const Handle = cap.Handle;
+const Manager = manager_module.Manager;
+const Message = ipc.Message;
+const Rect = gfx.Rect;
+const Window = manager_module.Window;
+
+comptime {
+
+    _ = lib.start;
+
+}
+
+const input_bit: u64 = 1 << 0;
+const display_bit: u64 = 1 << 1;
+
+const input_ring_capacity: u32 = 512;
+
+// Theme
+
+const color_wallpaper = gfx.rgb(30, 33, 42);
+const color_border = gfx.rgb(16, 17, 22);
+const color_title_focused = gfx.rgb(64, 106, 190);
+const color_title_blurred = gfx.rgb(52, 56, 68);
+const color_title_text = gfx.rgb(240, 243, 248);
+const color_close = gfx.rgb(178, 72, 72);
+
+var screen_width: u32 = 0;
+var screen_height: u32 = 0;
+var stride_bytes: u32 = 0;
+
+// The scanout (uncached DMA) and the cached back buffer everything composes into.
+
+var fb_region: Handle = 0;
+var fb_base: usize = 0;
+var fb: gfx.Surface = undefined;
+
+var back_region: Handle = 0;
+var back_base: usize = 0;
+var back: gfx.Surface = undefined;
+
+var title_font: ?lib.font.Font = null;
+
+var manager = Manager{};
+
+// Per-window surface bookkeeping, indexed like manager.windows.
+
+const Surfaces = struct {
+
+    region: [manager_module.max_windows]Handle = [_]Handle{0} ** manager_module.max_windows,
+    base: [manager_module.max_windows]usize = [_]usize{0} ** manager_module.max_windows,
+    width: [manager_module.max_windows]u32 = [_]u32{0} ** manager_module.max_windows,
+    height: [manager_module.max_windows]u32 = [_]u32{0} ** manager_module.max_windows,
+
+};
+
+var surfaces = Surfaces{};
+
+// Per-client event rings, keyed by the badge the name service minted for the client.
+
+const ClientExtra = struct {
+
+    notification: Handle = 0,
+
+};
+
+const Sessions = lib.session.Sessions(ClientExtra, 16);
+
+var sessions: Sessions = .{};
+
+// Input state.
+
+var input_ring: events.Ring = undefined;
+var pointer_x: i32 = 0;
+var pointer_y: i32 = 0;
+
+var drag_id: u32 = 0;
+var drag_dx: i32 = 0;
+var drag_dy: i32 = 0;
+
+var damage: Rect = Rect.empty;
+
+pub fn main(_: []const []const u8) u8 {
+
+    run() catch |failure| {
+
+        lib.log.fmt("Compositor: failed: {s}\n", .{@errorName(failure)});
+
+        return 1;
+
+    };
+
+    return 0;
+
+}
+
+fn run() !void {
+
+    try load_font();
+    try acquire_display();
+    try attach_input();
+    try upload_cursor();
+
+    // Flint already registered "window" against this endpoint; clients queue here until the loop starts.
+
+    manager.resize_screen(screen_width, screen_height);
+
+    pointer_x = @intCast(screen_width / 2);
+    pointer_y = @intCast(screen_height / 2);
+
+    move_cursor();
+
+    add_damage(screen_bounds());
+    try composite();
+
+    lib.log.fmt("Compositor: {d}x{d} ... Loaded\n", .{ screen_width, screen_height });
+
+    var in = Message.zeroed;
+
+    while (true) {
+
+        const badge = sys.receive(cap.stdin, &in) catch continue;
+
+        if (badge == cap.notification_wake) {
+
+            const bits = in.data[0];
+
+            if (bits & input_bit != 0) drain_input();
+            if (bits & display_bit != 0) handle_mode_change();
+
+        } else {
+
+            var out = Message.zeroed;
+            out.data[0] = @bitCast(dispatch(badge, in.data[0], &in, &out));
+
+            sys.reply(in.reply, &out) catch {};
+
+        }
+
+        composite() catch {};
+
+    }
+
+}
+
+// Startup wiring
+
+fn load_font() !void {
+
+    const length: usize = @intCast(lib.start.word(3));
+    const offset: usize = @intCast(lib.start.word(4));
+
+    const base = try sys.map(cap.self_space, cap.compositor.bundle, 0, sys.read);
+    const bundle = try lib.bundle.Bundle.open(base + offset, length);
+
+    const bytes = bundle.find("font") orelse return error.NotFound;
+
+    title_font = lib.font.Font.parse(bytes) catch return error.Invalid;
+
+}
+
+fn acquire_display() !void {
+
+    const wake = try sys.create(.notification, 0, 0);
+
+    try sys.configure(cap.self_thread, .bound_notification, wake);
+
+    const mode = try ipc.request(cap.compositor.display, proto.display.mode_info, &.{}, &.{});
+
+    screen_width = @intCast(mode.data[1] >> 32);
+    screen_height = @truncate(mode.data[1]);
+    stride_bytes = @intCast(mode.data[2]);
+
+    try map_scanout();
+    try build_back_buffer();
+
+    _ = try ipc.request(cap.compositor.display, proto.display.attach_events, &.{display_bit}, &.{
+
+        .{ .handle = wake, .move = false },
+
+    });
+
+    input_wake = wake;
+
+}
+
+var input_wake: Handle = 0;
+
+fn attach_input() !void {
+
+    const region = try sys.create(.region, events.ring_bytes(input_ring_capacity), cap.memory);
+    const base = try sys.map(cap.self_space, region, 0, sys.read | sys.write);
+
+    input_ring = events.Ring.init(base, input_ring_capacity);
+
+    _ = try ipc.request(cap.compositor.input, proto.input.attach, &.{ input_ring_capacity, input_bit }, &.{
+
+        .{ .handle = region, .move = false },
+        .{ .handle = input_wake, .move = false },
+
+    });
+
+}
+
+fn map_scanout() !void {
+
+    const reply = try ipc.request(cap.compositor.display, proto.display.map_framebuffer, &.{}, &.{});
+
+    if (reply.handle_count < 1) return error.Invalid;
+
+    if (fb_base != 0) sys.unmap(cap.self_space, fb_base) catch {};
+    if (fb_region != 0) sys.close(fb_region) catch {};
+
+    fb_region = reply.handles[0].handle;
+    fb_base = try sys.map(cap.self_space, fb_region, 0, sys.read | sys.write);
+    fb = gfx.Surface.from_base(fb_base, screen_width, screen_height, stride_bytes);
+
+}
+
+fn build_back_buffer() !void {
+
+    if (back_base != 0) sys.unmap(cap.self_space, back_base) catch {};
+    if (back_region != 0) sys.close(back_region) catch {};
+
+    const bytes = @as(usize, screen_width) * screen_height * 4;
+
+    back_region = try sys.create(.region, bytes, cap.memory);
+    back_base = try sys.map(cap.self_space, back_region, 0, sys.read | sys.write);
+    back = gfx.Surface.from_base(back_base, screen_width, screen_height, screen_width * 4);
+
+}
+
+// The classic arrow, rasterized into a 64x64 ARGB Region for the device's cursor plane.
+
+const arrow = [_][]const u8{
+
+    "X           ",
+    "XX          ",
+    "X.X         ",
+    "X..X        ",
+    "X...X       ",
+    "X....X      ",
+    "X.....X     ",
+    "X......X    ",
+    "X.......X   ",
+    "X........X  ",
+    "X.....XXXXX ",
+    "X..X..X     ",
+    "X.X X..X    ",
+    "XX  X..X    ",
+    "X    X..X   ",
+    "     X..X   ",
+    "      X..X  ",
+    "      X..X  ",
+    "       XX   ",
+
+};
+
+fn upload_cursor() !void {
+
+    const side = proto.display.cursor_size;
+    const bytes = side * side * 4;
+
+    const region = try sys.create(.region, bytes, cap.memory);
+    const base = try sys.map(cap.self_space, region, 0, sys.read | sys.write);
+    const pixels: [*]u32 = @ptrFromInt(base);
+
+    @memset(pixels[0 .. side * side], 0);
+
+    for (arrow, 0..) |row, y| {
+
+        for (row, 0..) |cell, x| {
+
+            pixels[y * side + x] = switch (cell) {
+
+                'X' => 0xff00_0000,
+                '.' => 0xffff_ffff,
+
+                else => 0,
+
+            };
+
+        }
+
+    }
+
+    sys.unmap(cap.self_space, base) catch {};
+
+    _ = try ipc.request(cap.compositor.display, proto.display.set_cursor, &.{0}, &.{
+
+        .{ .handle = region, .move = true },
+
+    });
+
+    sys.close(region) catch {};
+
+}
+
+// Window interface
+
+fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
+
+    return switch (method) {
+
+        proto.identify => identify(out),
+        proto.window.create => create_window(badge, in, out),
+        proto.window.present => present(badge, in),
+        proto.window.set_title => set_title(badge, in),
+        proto.window.destroy => destroy_window(badge, in.data[1]),
+        proto.window.attach_events => attach_events(badge, in),
+        proto.window.resize => resize_window(badge, in, out),
+
+        else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
+
+    };
+
+}
+
+fn identify(out: *Message) i64 {
+
+    out.data[1] = proto.window.interface_id;
+    out.data[2] = proto.window.version;
+
+    return 0;
+
+}
+
+fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
+
+    var title_bytes: [proto.window.max_title]u8 = undefined;
+    const title = lib.window.unpack_title(.{ in.data[3], in.data[4], in.data[5] }, &title_bytes);
+
+    const width = lib.window.unpack_high(in.data[1]);
+    const height = lib.window.unpack_low(in.data[1]);
+
+    const previous_focus = manager.focus;
+    const window = manager.create(badge, width, height, in.data[2], title) orelse return -3;
+
+    const slot = slot_of(window);
+
+    surfaces.region[slot] = 0;
+    surfaces.base[slot] = 0;
+
+    if (allocate_surface(window, slot)) |failure| {
+
+        _ = manager.destroy(window.id);
+
+        return failure;
+
+    }
+
+    notify_focus(previous_focus, window.id);
+    add_damage(window.frame());
+
+    out.data[1] = window.id;
+    out.data[2] = lib.window.pack_pair(window.width, window.height);
+    out.data[3] = window.width * 4;
+    out.handles[0] = .{ .handle = surfaces.region[slot], .move = false };
+    out.handle_count = 1;
+
+    return 0;
+
+}
+
+fn allocate_surface(window: *Window, slot: usize) ?i64 {
+
+    const bytes = @as(usize, window.width) * window.height * 4;
+
+    const region = sys.create(.region, bytes, cap.memory) catch return -3;
+    const base = sys.map(cap.self_space, region, 0, sys.read | sys.write) catch {
+
+        sys.close(region) catch {};
+
+        return -3;
+
+    };
+
+    const pixels: [*]u8 = @ptrFromInt(base);
+    @memset(pixels[0..bytes], 0);
+
+    surfaces.region[slot] = region;
+    surfaces.base[slot] = base;
+    surfaces.width[slot] = window.width;
+    surfaces.height[slot] = window.height;
+
+    return null;
+
+}
+
+fn release_surface(slot: usize) void {
+
+    if (surfaces.base[slot] != 0) sys.unmap(cap.self_space, surfaces.base[slot]) catch {};
+    if (surfaces.region[slot] != 0) sys.close(surfaces.region[slot]) catch {};
+
+    surfaces.base[slot] = 0;
+    surfaces.region[slot] = 0;
+    surfaces.width[slot] = 0;
+    surfaces.height[slot] = 0;
+
+}
+
+fn present(badge: u64, in: *const Message) i64 {
+
+    const window = owned_window(badge, in.data[1]) orelse return -7;
+    const content = window.content();
+
+    const local = Rect{
+
+        .x = @intCast(@min(in.data[2] >> 32, window.width)),
+        .y = @intCast(@min(in.data[2] & 0xffff_ffff, window.height)),
+
+        .w = @intCast(@min(in.data[3] >> 32, window.width)),
+        .h = @intCast(@min(in.data[3] & 0xffff_ffff, window.height)),
+
+    };
+
+    add_damage(local.translated(content.x, content.y).intersect(content));
+
+    composite() catch return -7;
+
+    return 0;
+
+}
+
+fn set_title(badge: u64, in: *const Message) i64 {
+
+    const window = owned_window(badge, in.data[1]) orelse return -7;
+
+    var title_bytes: [proto.window.max_title]u8 = undefined;
+
+    window.set_title(lib.window.unpack_title(.{ in.data[3], in.data[4], in.data[5] }, &title_bytes));
+
+    add_damage(window.frame());
+
+    return 0;
+
+}
+
+fn destroy_window(badge: u64, id: u64) i64 {
+
+    const window = owned_window(badge, id) orelse return -7;
+    const slot = slot_of(window);
+
+    if (drag_id == window.id) drag_id = 0;
+
+    release_surface(slot);
+
+    if (manager.destroy(window.id)) |dead| add_damage(dead);
+
+    if (manager.focused()) |now| send_to_owner(now, .{
+
+        .kind = events.kind_window_focus,
+        .code = 0,
+        .window = now.id,
+
+        .x = 0,
+        .y = 0,
+
+        .value = 0,
+
+    });
+
+    return 0;
+
+}
+
+fn attach_events(badge: u64, in: *const Message) i64 {
+
+    if (in.handle_count < 2) return -7;
+
+    const session = sessions.open(badge);
+
+    session.base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
+    session.capacity = @intCast(events.ring_bytes(@intCast(in.data[1])));
+
+    if (session.extra.notification != 0) sys.close(session.extra.notification) catch {};
+
+    session.extra.notification = in.handles[1].handle;
+
+    return 0;
+
+}
+
+fn resize_window(badge: u64, in: *const Message, out: *Message) i64 {
+
+    const window = owned_window(badge, in.data[1]) orelse return -7;
+    const slot = slot_of(window);
+
+    const width = @max(manager_module.min_content, lib.window.unpack_high(in.data[2]));
+    const height = @max(manager_module.min_content, lib.window.unpack_low(in.data[2]));
+
+    add_damage(window.frame());
+    release_surface(slot);
+
+    if (window.flags & proto.window.flag_fullscreen != 0) {
+
+        window.width = screen_width;
+        window.height = screen_height;
+
+    } else {
+
+        window.width = width;
+        window.height = height;
+
+    }
+
+    if (allocate_surface(window, slot)) |failure| return failure;
+
+    add_damage(window.frame());
+
+    out.data[1] = in.data[1];
+    out.data[2] = lib.window.pack_pair(window.width, window.height);
+    out.data[3] = window.width * 4;
+    out.handles[0] = .{ .handle = surfaces.region[slot], .move = false };
+    out.handle_count = 1;
+
+    return 0;
+
+}
+
+fn owned_window(badge: u64, id: u64) ?*Window {
+
+    const window = manager.by_id(@intCast(id)) orelse return null;
+
+    if (window.owner != badge) return null;
+
+    return window;
+
+}
+
+fn slot_of(window: *Window) usize {
+
+    return (@intFromPtr(window) - @intFromPtr(&manager.windows[0])) / @sizeOf(Window);
+
+}
+
+// Input routing
+
+fn drain_input() void {
+
+    var moved = false;
+
+    while (input_ring.pop()) |event| {
+
+        switch (event.kind) {
+
+            events.kind_pointer_move => {
+
+                pointer_x = scale(event.x, screen_width);
+                pointer_y = scale(event.y, screen_height);
+                moved = true;
+
+                handle_pointer_move();
+
+            },
+
+            events.kind_button_down => handle_button_down(event),
+            events.kind_button_up => handle_button_up(event),
+
+            events.kind_key_down, events.kind_key_up => {
+
+                if (manager.focused()) |window| forward(window, event);
+
+            },
+
+            events.kind_scroll => {
+
+                if (window_under_pointer()) |window| forward(window, event);
+
+            },
+
+            else => {},
+
+        }
+
+    }
+
+    // One cursor-plane move per batch, after the last motion event.
+
+    if (moved) move_cursor();
+
+}
+
+fn handle_pointer_move() void {
+
+    if (drag_id != 0) {
+
+        if (manager.move(drag_id, pointer_x - drag_dx, pointer_y - drag_dy)) |moved| add_damage(moved);
+
+        return;
+
+    }
+
+    if (window_under_pointer()) |window| {
+
+        forward(window, .{
+
+            .kind = events.kind_pointer_move,
+            .code = 0,
+            .window = window.id,
+
+            .x = pointer_x,
+            .y = pointer_y,
+
+            .value = 0,
+
+        });
+
+    }
+
+}
+
+fn handle_button_down(event: events.Event) void {
+
+    const hit = manager.hit_test(pointer_x, pointer_y) orelse return;
+    const window = manager.by_id(hit.id) orelse return;
+
+    focus_and_raise(window);
+
+    switch (hit.region) {
+
+        .close => send_to_owner(window, .{
+
+            .kind = events.kind_window_close,
+            .code = 0,
+            .window = window.id,
+
+            .x = 0,
+            .y = 0,
+
+            .value = 0,
+
+        }),
+
+        .title => {
+
+            drag_id = window.id;
+            drag_dx = pointer_x - window.x;
+            drag_dy = pointer_y - window.y;
+
+        },
+
+        .content => forward(window, event),
+
+    }
+
+}
+
+fn handle_button_up(event: events.Event) void {
+
+    if (drag_id != 0) {
+
+        drag_id = 0;
+
+        return;
+
+    }
+
+    if (window_under_pointer()) |window| forward(window, event);
+
+}
+
+fn focus_and_raise(window: *Window) void {
+
+    const previous = manager.focus;
+
+    if (previous == window.id) return;
+
+    manager.focus = window.id;
+    manager.raise(window.id);
+
+    notify_focus(previous, window.id);
+
+    // Both title bars repaint, and the raise may reveal any part of the frame.
+
+    if (manager.by_id(previous)) |old| add_damage(old.frame());
+
+    add_damage(window.frame());
+
+}
+
+fn notify_focus(previous: u32, current: u32) void {
+
+    if (previous == current) return;
+
+    if (manager.by_id(previous)) |old| send_to_owner(old, .{
+
+        .kind = events.kind_window_blur,
+        .code = 0,
+        .window = old.id,
+
+        .x = 0,
+        .y = 0,
+
+        .value = 0,
+
+    });
+
+    if (manager.by_id(current)) |now| send_to_owner(now, .{
+
+        .kind = events.kind_window_focus,
+        .code = 0,
+        .window = now.id,
+
+        .x = 0,
+        .y = 0,
+
+        .value = 0,
+
+    });
+
+}
+
+fn window_under_pointer() ?*Window {
+
+    const hit = manager.hit_test(pointer_x, pointer_y) orelse return null;
+
+    if (hit.region != .content) return null;
+
+    return manager.by_id(hit.id);
+
+}
+
+/// Forward an input event to the window's owner, translated into content-local coordinates.
+fn forward(window: *Window, event: events.Event) void {
+
+    const content = window.content();
+
+    var routed = event;
+
+    routed.window = window.id;
+
+    if (event.kind == events.kind_pointer_move or event.kind == events.kind_button_down or
+        event.kind == events.kind_button_up or event.kind == events.kind_scroll)
+    {
+
+        routed.x = pointer_x - content.x;
+        routed.y = pointer_y - content.y;
+
+    }
+
+    send_to_owner(window, routed);
+
+}
+
+fn send_to_owner(window: *Window, event: events.Event) void {
+
+    const session = sessions.find(window.owner) orelse return;
+
+    if (session.base == 0) return;
+
+    const ring = events.Ring.open(session.base);
+
+    if (ring.push(event)) {
+
+        sys.notify(session.extra.notification, proto.window.ring_bit) catch {};
+
+    }
+
+}
+
+fn scale(normalized: i32, extent: u32) i32 {
+
+    if (extent == 0) return 0;
+
+    const range: i64 = @intCast(proto.input.pointer_range);
+    const scaled = @divTrunc(@as(i64, normalized) * (@as(i64, extent) - 1), range);
+
+    return @intCast(@max(0, @min(@as(i64, extent) - 1, scaled)));
+
+}
+
+fn move_cursor() void {
+
+    _ = ipc.request(cap.compositor.display, proto.display.move_cursor, &.{
+
+        lib.window.pack_pair(@intCast(pointer_x), @intCast(pointer_y)),
+
+    }, &.{}) catch {};
+
+}
+
+// A mode change: refetch the mode, remap the scanout, rebuild the back buffer, tell fullscreen clients,
+// repaint the world.
+
+fn handle_mode_change() void {
+
+    const mode = ipc.request(cap.compositor.display, proto.display.mode_info, &.{}, &.{}) catch return;
+
+    screen_width = @intCast(mode.data[1] >> 32);
+    screen_height = @truncate(mode.data[1]);
+    stride_bytes = @intCast(mode.data[2]);
+
+    map_scanout() catch return;
+    build_back_buffer() catch return;
+
+    manager.resize_screen(screen_width, screen_height);
+
+    pointer_x = @min(pointer_x, @as(i32, @intCast(screen_width - 1)));
+    pointer_y = @min(pointer_y, @as(i32, @intCast(screen_height - 1)));
+
+    var index: usize = 0;
+
+    while (index < manager.count) : (index += 1) {
+
+        const window = manager.stacked(index);
+
+        if (window.flags & proto.window.flag_fullscreen == 0) continue;
+
+        send_to_owner(window, .{
+
+            .kind = events.kind_window_resize,
+            .code = 0,
+            .window = window.id,
+
+            .x = @intCast(screen_width),
+            .y = @intCast(screen_height),
+
+            .value = 0,
+
+        });
+
+    }
+
+    add_damage(screen_bounds());
+    composite() catch {};
+
+}
+
+// Compositing
+
+fn add_damage(rect: Rect) void {
+
+    damage = damage.cover(rect.intersect(screen_bounds()));
+
+}
+
+fn screen_bounds() Rect {
+
+    return .{ .x = 0, .y = 0, .w = @intCast(screen_width), .h = @intCast(screen_height) };
+
+}
+
+fn composite() !void {
+
+    if (damage.is_empty()) return;
+
+    const region = damage;
+
+    damage = Rect.empty;
+
+    back.fill_rect(region, color_wallpaper);
+
+    var index: usize = 0;
+
+    while (index < manager.count) : (index += 1) {
+
+        const window = manager.stacked(index);
+
+        if (window.frame().intersect(region).is_empty()) continue;
+
+        draw_window(window, region);
+
+    }
+
+    // One pass into the uncached scanout: only the damaged band's rows move.
+
+    fb.blit(region.x, region.y, &back, region);
+    gfx.fence();
+
+    _ = try ipc.request(cap.compositor.display, proto.display.flush, &.{
+
+        lib.window.pack_pair(@intCast(region.x), @intCast(region.y)),
+        lib.window.pack_pair(@intCast(region.w), @intCast(region.h)),
+
+    }, &.{});
+
+}
+
+fn draw_window(window: *Window, clip: Rect) void {
+
+    const slot = slot_of(window);
+    const content = window.content();
+
+    if (window.decorated()) {
+
+        const frame = window.frame();
+        const focused = manager.focus == window.id;
+
+        back.fill_rect(frame, color_border);
+        back.fill_rect(window.title_bar(), if (focused) color_title_focused else color_title_blurred);
+
+        if (title_font) |*font| {
+
+            const bar = window.title_bar();
+            const text = window.title[0..window.title_length];
+            const baseline = bar.y + @divTrunc(bar.h - @as(i32, @intCast(font.height)), 2);
+
+            font.draw(&back, bar.x + 8, baseline, text, color_title_text);
+
+        }
+
+        const box = window.close_box();
+
+        back.fill_rounded_rect(box, 3, color_close);
+        back.line(box.x + 5, box.y + 5, box.x + box.w - 6, box.y + box.h - 6, color_title_text);
+        back.line(box.x + box.w - 6, box.y + 5, box.x + 5, box.y + box.h - 6, color_title_text);
+
+    }
+
+    if (surfaces.base[slot] == 0) return;
+
+    // A host resize updates the window before the client reallocates its surface; skip stale bytes.
+    if (surfaces.width[slot] != window.width or surfaces.height[slot] != window.height) return;
+
+    const surface = gfx.Surface.from_base(surfaces.base[slot], surfaces.width[slot], surfaces.height[slot], surfaces.width[slot] * 4);
+    const visible = content.intersect(clip);
+
+    if (visible.is_empty()) return;
+
+    // Client pixels were written in another process; publish before the compositor reads the shared Region.
+    gfx.fence();
+
+    back.blit(visible.x, visible.y, &surface, visible.translated(-content.x, -content.y));
+
+}

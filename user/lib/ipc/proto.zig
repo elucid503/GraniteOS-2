@@ -143,6 +143,83 @@ pub const filesystem = struct {
 
 };
 
+// Display interface (07-userspace-ddd.md Section 10.6), spoken by the virtio-gpu display driver. The compositor is
+// its one client: it maps the scanout Region once and pushes damage rectangles through `flush`. `attach_events`
+// extends the table so a host-side window resize (a mode change) can wake the compositor through a Notification;
+// the cursor methods expose the device's hardware cursor plane, so pointer motion never forces a recomposite.
+
+pub const display = struct {
+
+    pub const interface_id: u32 = 0x4449_5350; // "DISP"
+    pub const version: u32 = 1;
+
+    pub const mode_info: u16 = 1; // request: -                                  reply: (width<<32)|height, stride bytes, pixel format
+    pub const map_framebuffer: u16 = 2; // request: -                                  reply: byte length, scanout Region in handle 0
+    pub const flush: u16 = 3; // request: (x<<32)|y, (w<<32)|h                reply: status
+    pub const attach_events: u16 = 4; // request: bits, Notification in handle 0      reply: status
+    pub const set_cursor: u16 = 5; // request: (hot_x<<32)|hot_y, image Region in handle 0   reply: status
+    pub const move_cursor: u16 = 6; // request: (x<<32)|y                           reply: status
+
+    // The one pixel format v1 serves: 32-bit little-endian XRGB (blue in the low byte).
+    pub const format_xrgb: u64 = 1;
+
+    // The Notification bit `attach_events` signals when the display mode changes.
+    pub const mode_bit: u64 = 1;
+
+    // Cursor images are fixed 64x64 ARGB (the virtio-gpu cursor plane size).
+    pub const cursor_size: usize = 64;
+
+};
+
+// Window interface (07-userspace-ddd.md Section 10.7), spoken by the compositor. A client renders into the surface
+// Region `create` returns and `present`s a damage rectangle; the compositor blits visible windows into the
+// framebuffer. `attach_events` extends the table with a per-client event ring (a shared Region of
+// `events.Event` records plus a Notification), carrying input routed to the client's windows and window
+// lifecycle events; `resize` extends it so fullscreen clients can follow display mode changes.
+
+pub const window = struct {
+
+    pub const interface_id: u32 = 0x574e_4457; // "WNDW"
+    pub const version: u32 = 1;
+
+    pub const create: u16 = 1; // request: (w<<32)|h, flags, title in words 3-5   reply: window id, (w<<32)|h, stride bytes, surface Region in handle 0
+    pub const present: u16 = 2; // request: window id, (x<<32)|y, (w<<32)|h        reply: status
+    pub const set_title: u16 = 3; // request: window id, title in words 3-5          reply: status
+    pub const destroy: u16 = 4; // request: window id                              reply: status
+    pub const attach_events: u16 = 5; // request: ring capacity in events, ring Region in handle 0, Notification in handle 1   reply: status
+    pub const resize: u16 = 6; // request: window id, (w<<32)|h                   reply: (w<<32)|h, stride bytes, surface Region in handle 0
+
+    pub const flag_undecorated: u64 = 1; // no title bar or border
+    pub const flag_fullscreen: u64 = 2; // sized to the screen, tracks mode changes
+
+    // Titles ride inline in message words 3-5, NUL-padded.
+    pub const max_title: usize = 24;
+
+    // The Notification bit the compositor signals when it pushes into a client's event ring.
+    pub const ring_bit: u64 = 1;
+
+};
+
+// Input interface (07-userspace-ddd.md Section 10.8), spoken by the input server. Events are delivered through a
+// shared event ring plus a Notification, so the client blocks in its endpoint receive rather than polling; the
+// docs' `next_event`/`set_focus` numbers stay reserved for pull-mode clients. Pointer positions are normalized
+// to `pointer_range` on both axes; the compositor scales them to the live mode.
+
+pub const input = struct {
+
+    pub const interface_id: u32 = 0x494e_5054; // "INPT"
+    pub const version: u32 = 1;
+
+    pub const next_event: u16 = 1; // reserved (05-server-protocol.md: methods are append-only)
+    pub const set_focus: u16 = 2; // reserved
+    pub const attach: u16 = 3; // request: ring capacity in events, notify bits (0 = ring_bit), ring Region in handle 0, Notification in handle 1   reply: status
+
+    pub const ring_bit: u64 = 1;
+
+    pub const pointer_range: u64 = 65535;
+
+};
+
 // The process-supervision (death) convention (07-userspace-ddd.md Section 10.4): a child's runtime `send`s a one-way
 // death message here on exit; the spawner (Flint) receives these to reap and restart. The sender's badge
 // identifies the child; data[1] carries its exit status.

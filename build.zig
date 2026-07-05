@@ -94,10 +94,16 @@ pub fn build(b: *std.Build) void {
     const rename = user_program(b, target, optimize, user_lib, "granite-rename.elf", "user/programs/fs/rename.zig");
     const perms = user_program(b, target, optimize, user_lib, "granite-perms.elf", "user/programs/fs/perms.zig");
     const stress = user_program(b, target, optimize, user_lib, "granite-stress.elf", "user/programs/common/stress.zig");
+    const display = user_program(b, target, optimize, user_lib, "granite-display.elf", "user/drivers/display/main.zig");
+    const input = user_program(b, target, optimize, user_lib, "granite-input.elf", "user/servers/input/main.zig");
+    const compositor = user_program(b, target, optimize, user_lib, "granite-compositor.elf", "user/servers/display/main.zig");
+    const welcome = user_program(b, target, optimize, user_lib, "granite-welcome.elf", "user/programs/gui/welcome.zig");
+    const demo = user_program(b, target, optimize, user_lib, "granite-demo.elf", "user/programs/gui/demo.zig");
 
     const flatten = host_tool(b, "flatten", "tools/flatten.zig");
     const bundle_tool = host_tool(b, "bundle", "tools/bundle.zig");
     const seedisk = host_seedisk(b);
+    const qemu_runner = host_tool(b, "qemu-run", "tools/qemu-run.zig");
 
     const kernel_image = flatten_image(b, flatten, kernel, "granite-kernel.bin");
     const flint_image = flatten_image(b, flatten, flint, "flint.bin");
@@ -129,6 +135,16 @@ pub fn build(b: *std.Build) void {
     add_artifact_module(bundle_run, "rename", rename);
     add_artifact_module(bundle_run, "perms", perms);
     add_artifact_module(bundle_run, "stress", stress);
+    add_artifact_module(bundle_run, "display", display);
+    add_artifact_module(bundle_run, "input", input);
+    add_artifact_module(bundle_run, "compositor", compositor);
+    add_artifact_module(bundle_run, "welcome", welcome);
+    add_artifact_module(bundle_run, "demo", demo);
+
+    // The GUI's fonts ride in the bundle as plain modules: real PSF font files (user/fonts/, BSD-licensed Spleen).
+
+    add_module(bundle_run, "font", b.path("user/fonts/spleen-8x16.psfu"));
+    add_module(bundle_run, "font-title", b.path("user/fonts/spleen-16x32.psfu"));
 
     b.installArtifact(kernel);
     b.getInstallStep().dependOn(&b.addInstallBinFile(kernel_image, "granite-kernel.bin").step);
@@ -172,7 +188,7 @@ pub fn build(b: *std.Build) void {
         .smp = smp,
         .memory = memory,
 
-    });
+    }, null);
 
     add_qemu_step(b, kernel_image, bundle_image, .{
 
@@ -184,7 +200,20 @@ pub fn build(b: *std.Build) void {
         .smp = smp,
         .memory = memory,
 
-    });
+    }, null);
+
+    add_qemu_step(b, kernel_image, bundle_image, .{
+
+        .name = "qemu-gui",
+        .description = "Boot the full system with the virtio-gpu display and virtio-input devices (M9)",
+        .debug = false,
+        .test_build = test_build,
+        .disk = .{ .path = disk_path, .prepare = seedisk_run },
+        .smp = smp,
+        .memory = memory,
+        .gui = true,
+
+    }, qemu_runner);
 
     add_qemu_step(b, kernel_image, bundle_image, .{
 
@@ -196,7 +225,7 @@ pub fn build(b: *std.Build) void {
         .smp = smp,
         .memory = memory,
 
-    });
+    }, null);
 
     add_qemu_step(b, kernel_image, null, .{
 
@@ -208,7 +237,7 @@ pub fn build(b: *std.Build) void {
         .smp = smp,
         .memory = memory,
 
-    });
+    }, null);
 
     const kernel_tests = b.addTest(.{
 
@@ -384,21 +413,55 @@ const QemuStep = struct {
     disk: ?QemuDisk,
     smp: u64,
     memory: u64,
+    gui: bool = false,
 
 };
 
-fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.LazyPath, step: QemuStep) void {
+fn add_qemu_step(
+    b: *std.Build,
+    kernel: std.Build.LazyPath,
+    initrd: ?std.Build.LazyPath,
+    step: QemuStep,
+    qemu_runner: ?*std.Build.Step.Compile,
+) void {
 
-    const run = b.addSystemCommand(&.{
+    const run = if (step.gui) blk: {
 
-        "qemu-system-aarch64",
+        const gui_run = b.addRunArtifact(qemu_runner.?);
+
+        gui_run.has_side_effects = true;
+        gui_run.addArg("qemu-system-aarch64");
+
+        break :blk gui_run;
+
+    } else blk: {
+
+        break :blk b.addSystemCommand(&.{"qemu-system-aarch64"});
+
+    };
+
+    run.addArgs(&.{
         "-machine", "virt,gic-version=3",
         "-cpu",     "cortex-a57",
         "-smp",     b.fmt("{d}", .{step.smp}),
         "-m",       b.fmt("{d}M", .{step.memory}),
-        "-nographic",
-
     });
+
+    // GUI boots open a host display window with the serial console on stdio; everything else is headless.
+
+    if (step.gui) {
+
+        run.addArgs(&.{ "-display", "sdl" });
+        run.addArgs(&.{ "-device", "virtio-gpu-device" });
+        run.addArgs(&.{ "-device", "virtio-keyboard-device" });
+        run.addArgs(&.{ "-device", "virtio-tablet-device" });
+        run.addArgs(&.{ "-serial", "mon:stdio" });
+
+    } else {
+
+        run.addArg("-nographic");
+
+    }
 
     if (step.test_build) {
 

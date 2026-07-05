@@ -311,7 +311,14 @@ fn put_text(text: []const u8) void {
 
 fn put_byte(byte: u8) void {
 
-    while (register(flags).* & transmit_full != 0) {}
+    // PL011 TX is polled; yield while the host chardev drains - a tight spin here blocks the console
+    // server's reply and every caller waiting on stream.write (including drivers mid-startup).
+
+    while (register(flags).* & transmit_full != 0) {
+
+        sys.yield();
+
+    }
 
     register(data).* = byte;
 
