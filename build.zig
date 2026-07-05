@@ -2,7 +2,8 @@
 
 const std = @import("std");
 
-const disk_bytes = 64 * 1024 * 1024;
+const bytes_per_mib = 1024 * 1024;
+const default_disk_mib = 64;
 
 pub fn build(b: *std.Build) void {
 
@@ -10,6 +11,12 @@ pub fn build(b: *std.Build) void {
     const test_build = b.option(bool, "test", "Exit QEMU via semihosting on halt/panic") orelse false;
     const smp = b.option(u64, "smp", "Core count for the QEMU run steps") orelse 4;
     const memory = b.option(u64, "memory", "RAM in MiB for the QEMU run steps") orelse 256;
+    const disk = b.option(u64, "disk", "Disk size in MiB for the persistent QEMU disk") orelse default_disk_mib;
+
+    if (disk == 0) @panic("-Ddisk must be at least 1 MiB");
+    if (disk > std.math.maxInt(u64) / bytes_per_mib) @panic("-Ddisk is too large");
+
+    const disk_bytes = disk * bytes_per_mib;
 
     const target = b.resolveTargetQuery(.{
 
@@ -76,6 +83,7 @@ pub fn build(b: *std.Build) void {
     const hello = user_program(b, target, optimize, user_lib, "granite-hello.elf", "user/programs/common/hello.zig");
     const clear = user_program(b, target, optimize, user_lib, "granite-clear.elf", "user/programs/common/clear.zig");
     const wc = user_program(b, target, optimize, user_lib, "granite-wc.elf", "user/programs/common/wc.zig");
+    const status = user_program(b, target, optimize, user_lib, "granite-status.elf", "user/programs/common/status.zig");
     const location = user_program(b, target, optimize, user_lib, "granite-location.elf", "user/programs/location/location.zig");
     const ls = user_program(b, target, optimize, user_lib, "granite-ls.elf", "user/programs/fs/ls.zig");
     const view = user_program(b, target, optimize, user_lib, "granite-view.elf", "user/programs/fs/view.zig");
@@ -110,6 +118,7 @@ pub fn build(b: *std.Build) void {
     add_artifact_module(bundle_run, "hello", hello);
     add_artifact_module(bundle_run, "clear", clear);
     add_artifact_module(bundle_run, "wc", wc);
+    add_artifact_module(bundle_run, "status", status);
     add_artifact_module(bundle_run, "location", location);
     add_artifact_module(bundle_run, "ls", ls);
     add_artifact_module(bundle_run, "view", view);
@@ -128,7 +137,7 @@ pub fn build(b: *std.Build) void {
 
     // The persistent virtio disk: created once, then reused across runs so the filesystem survives reboots.
 
-    const disk_path = b.pathFromRoot("disk.img");
+    const disk_path = b.pathFromRoot(if (disk == default_disk_mib) "disk.img" else b.fmt("disk-{d}M.img", .{disk}));
     const seedisk_run = b.addRunArtifact(seedisk);
 
     seedisk_run.addArg(disk_path);
@@ -140,6 +149,7 @@ pub fn build(b: *std.Build) void {
     add_seed_program(seedisk_run, "hello", hello);
     add_seed_program(seedisk_run, "clear", clear);
     add_seed_program(seedisk_run, "wc", wc);
+    add_seed_program(seedisk_run, "status", status);
     add_seed_program(seedisk_run, "stress", stress);
     add_seed_program(seedisk_run, "location", location);
     add_seed_program(seedisk_run, "ls", ls);

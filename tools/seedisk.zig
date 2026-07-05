@@ -9,7 +9,7 @@ const block_size = format.block_size;
 const FileDevice = struct {
 
     file: std.fs.File,
-    blocks: u32,
+    blocks: u64,
 
     pub fn read_block(self: *FileDevice, index: u32, out: *[block_size]u8) !void {
 
@@ -32,7 +32,7 @@ const FileDevice = struct {
 
     }
 
-    pub fn block_count(self: *FileDevice) u32 {
+    pub fn block_count(self: *FileDevice) u64 {
 
         return self.blocks;
 
@@ -64,7 +64,19 @@ pub fn main() !void {
 
     const file = std.fs.cwd().createFile(path, .{ .read = true, .exclusive = true }) catch |failure| {
 
-        if (failure == error.PathAlreadyExists) return;
+        if (failure == error.PathAlreadyExists) {
+
+            const existing = try std.fs.cwd().openFile(path, .{});
+            defer existing.close();
+
+            const actual = try existing.getEndPos();
+
+            if (actual == size) return;
+
+            std.debug.print("seedisk: existing disk '{s}' is {d} bytes, requested {d}; remove it to recreate at the new size\n", .{ path, actual, size });
+            return error.InvalidSize;
+
+        }
 
         return failure;
 
@@ -77,7 +89,7 @@ pub fn main() !void {
     var device = FileDevice{
 
         .file = file,
-        .blocks = @intCast(size / block_size),
+        .blocks = size / block_size,
 
     };
 

@@ -87,6 +87,7 @@ pub const filesystem = struct {
     pub const mkdir: u16 = 10; // request: path offset, path length            reply: status
     pub const set_permissions: u16 = 11; // request: path offset, path length, mask      reply: status
     pub const attach: u16 = 12; // request: capacity, buffer Region              reply: status
+    pub const info: u16 = 13; // request: buffer offset                         reply: status
 
     pub const kind_file: u64 = 1;
     pub const kind_directory: u64 = 2;
@@ -123,6 +124,20 @@ pub const filesystem = struct {
         length: u64,
 
         name: [48]u8,
+
+    };
+
+    pub const Info = extern struct {
+
+        sector_size: u64,
+        sectors_per_block: u64,
+        block_size: u64,
+        block_count: u64,
+
+        used_blocks: u64,
+        free_blocks: u64,
+        inode_count: u64,
+        reserved: u64,
 
     };
 

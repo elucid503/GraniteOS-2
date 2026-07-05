@@ -91,6 +91,7 @@ pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
         (@as(u64, @intCast(module_offset)) << 16) |
         (dtb_address - dtb_page);
     const flint = try Process.spawn(space, image_base, stack_top, &grants, flint_arg);
+    flint.set_name("flint");
     _ = flint.header.release();
 
 }

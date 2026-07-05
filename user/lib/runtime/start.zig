@@ -35,6 +35,8 @@ export fn user_enter() callconv(.c) noreturn {
     var argv_storage: [max_args][]const u8 = undefined;
     const args = receive_init(&argv_storage) catch exit_with(1);
 
+    if (args.len > 0) sys.set_name(base_name(args[0])) catch {};
+
     supervise_via(cap.supervisor);
 
     const status = @import("root").main(args);
@@ -67,6 +69,22 @@ pub fn word(index: usize) u64 {
 pub fn cwd() []const u8 {
 
     return init_cwd;
+
+}
+
+fn base_name(path: []const u8) []const u8 {
+
+    var index = path.len;
+
+    while (index > 0) {
+
+        index -= 1;
+
+        if (path[index] == '/') return path[index + 1 ..];
+
+    }
+
+    return path;
 
 }
 

@@ -1,4 +1,4 @@
-// Typed wrappers for the 17 kernel verbs (07-userspace-ddd.md Section 3.1; 03-syscall-abi.md): number in x8, arguments in x0-x5, signed result in x0.
+// Typed wrappers for the kernel verbs (07-userspace-ddd.md Section 3.1; 03-syscall-abi.md): number in x8, arguments in x0-x5, signed result in x0.
 
 const builtin = @import("builtin");
 
@@ -42,6 +42,8 @@ const Number = enum(u64) {
     bind,
     acknowledge,
     copy,
+    inspect,
+    set_name,
 
 };
 
@@ -218,6 +220,18 @@ pub fn acknowledge(interrupt: Handle) Error!void {
 pub fn copy(target: Handle, badge: u64) Error!Handle {
 
     return handle(invoke(.copy, target, badge, 0, 0, 0));
+
+}
+
+pub fn inspect(kind: u64, out_ptr: usize, capacity: usize) Error!usize {
+
+    return @intCast(try check(invoke(.inspect, kind, out_ptr, capacity, 0, 0)));
+
+}
+
+pub fn set_name(name: []const u8) Error!void {
+
+    _ = try check(invoke(.set_name, @intFromPtr(name.ptr), name.len, 0, 0, 0));
 
 }
 

@@ -8,6 +8,7 @@ const std = @import("std");
 
 const config = @import("../config.zig");
 const arch = @import("../arch/arch.zig");
+const inspect = @import("../inspect.zig");
 const object = @import("../object/object.zig");
 const runqueue = @import("runqueue.zig");
 const spinlock = @import("../sync/spinlock.zig");
@@ -130,6 +131,116 @@ pub fn online_count() usize {
     }
 
     return count;
+
+}
+
+pub fn scheduler_snapshot(out: *inspect.SchedulerSnapshot) void {
+
+    out.* = .{
+
+        .core_count = @intCast(core_count),
+        .online_count = @intCast(online_count()),
+        .level_count = @intCast(config.scheduling_levels),
+        .reserved = 0,
+
+        .quanta_ns = config.level_quanta_ns,
+        .boost_interval_ns = config.boost_interval_ns,
+
+        .cores = [_]inspect.QueueStats{empty_queue_stats()} ** config.max_cores,
+
+    };
+
+    for (cores[0..core_count], 0..) |*core, index| {
+
+        core.lock.lock();
+
+        var stats = empty_queue_stats();
+        stats.online = @intFromBool(@atomicLoad(bool, &core.online, .acquire));
+        stats.driver = core.driver_queue.count();
+
+        if (core.current) |thread| {
+
+            stats.current_pid = thread.process.pid;
+            stats.current_tid = thread.id;
+
+        }
+
+        for (&core.levels, 0..) |*level, level_index| {
+
+            stats.levels[level_index] = level.count();
+
+        }
+
+        core.lock.unlock();
+
+        out.cores[index] = stats;
+
+    }
+
+}
+
+pub fn cpu_snapshot(out: *inspect.CpuSnapshot) void {
+
+    out.* = .{
+
+        .core_count = @intCast(core_count),
+        .online_count = @intCast(online_count()),
+        .current_core = arch.core_id(),
+        .max_cores = @intCast(config.max_cores),
+
+        .cores = [_]inspect.CpuInfo{empty_cpu_info()} ** config.max_cores,
+
+    };
+
+    for (cores[0..core_count], 0..) |*core, index| {
+
+        var info = inspect.CpuInfo{
+
+            .id = core.id,
+            .online = @intFromBool(@atomicLoad(bool, &core.online, .acquire)),
+            .current_pid = 0,
+            .current_tid = 0,
+
+        };
+
+        if (core.current) |thread| {
+
+            info.current_pid = thread.process.pid;
+            info.current_tid = thread.id;
+
+        }
+
+        out.cores[index] = info;
+
+    }
+
+}
+
+fn empty_queue_stats() inspect.QueueStats {
+
+    return .{
+
+        .current_pid = 0,
+        .current_tid = 0,
+        .online = 0,
+        .driver = 0,
+
+        .levels = [_]u32{0} ** config.scheduling_levels,
+
+    };
+
+}
+
+fn empty_cpu_info() inspect.CpuInfo {
+
+    return .{
+
+        .id = 0,
+        .online = 0,
+        .current_pid = 0,
+        .current_tid = 0,
+
+    };
 
 }
 

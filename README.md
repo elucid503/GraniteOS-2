@@ -20,6 +20,10 @@ zig build qemu-debug # boot halted with a gdb stub on :1234
 zig build test # run the host unit tests for the arch-independent core
 ```
 
+QEMU run steps accept `-Dsmp=<cores>`, `-Dmemory=<MiB>`, and `-Ddisk=<MiB>`
+to size the virtual machine and persistent disk image. The default disk is
+`disk.img`; non-default sizes use `disk-<MiB>M.img`.
+
 `zig build qemu` boots, discovers the machine from the device tree, logs each subsystem
 as it comes up (memory, interrupts, objects and scheduler), then hands off to Flint.
 Flint loads bundled ELF programs for the name service, console driver, Marble (the

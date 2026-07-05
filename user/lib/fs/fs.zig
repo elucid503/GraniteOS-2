@@ -298,6 +298,16 @@ pub const Client = struct {
 
     }
 
+    pub fn info(self: *Client) Error!proto.filesystem.Info {
+
+        _ = try ipc.request(self.endpoint, proto.filesystem.info, &.{payload_offset}, &.{});
+
+        const record: *const proto.filesystem.Info = @ptrFromInt(self.base + payload_offset);
+
+        return record.*;
+
+    }
+
     pub fn mkdir(self: *Client, path: []const u8) Error!void {
 
         const span = try self.put_path(path);

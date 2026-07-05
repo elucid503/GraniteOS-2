@@ -1,8 +1,9 @@
 // Process (06-kernel-ddd.md Section 7.2): the resource container - one AddressSpace, a HandleTable, and its threads. The memory-authority budget (hierarchical-lite, Section 11) arrives with M4.
 
-const config = @import("../config.zig");
+const inspect = @import("../inspect.zig");
 const slab = @import("../memory/slab.zig");
 const object = @import("object.zig");
+const spinlock = @import("../sync/spinlock.zig");
 
 const AddressSpace = @import("../memory/address_space.zig").AddressSpace;
 const HandleTable = @import("../cap/handle_table.zig").HandleTable;
@@ -12,6 +13,9 @@ const Error = @import("../error.zig").Error;
 const VirtAddr = @import("../types.zig").VirtAddr;
 
 var cache: slab.Cache(Process) = .{};
+var list_lock: spinlock.SpinLock = .{};
+var list_head: ?*Process = null;
+var next_pid: u32 = 1;
 
 // One pre-placed capability: the object plus the badge it should carry in the child's table, so a
 // badged endpoint survives the grant (the child cannot mint its own badge before it exists).
@@ -26,9 +30,16 @@ pub const Grant = struct {
 pub const Process = struct {
 
     header: object.Object,
+    pid: u32,
+    name_len: u8,
+    name: [inspect.process_name_bytes]u8,
+
     address_space: *AddressSpace,
     handles: HandleTable,
     threads: ?*Thread,
+    thread_count: u32,
+
+    next_global: ?*Process,
 
     pub fn create(space: *AddressSpace) Error!*Process {
 
@@ -38,15 +49,24 @@ pub const Process = struct {
         process.* = .{
 
             .header = .{ .kind = .process },
+            .pid = @atomicRmw(u32, &next_pid, .Add, 1, .monotonic),
+            .name_len = 0,
+            .name = [_]u8{0} ** inspect.process_name_bytes,
+
             .address_space = space,
             .handles = undefined,
             .threads = null,
+            .thread_count = 0,
+
+            .next_global = null,
 
         };
 
         try process.handles.init();
 
         space.header.retain();
+
+        link_global(process);
 
         return process;
 
@@ -76,6 +96,8 @@ pub const Process = struct {
 
     pub fn destroy(self: *Process) void {
 
+        unlink_global(self);
+
         self.handles.deinit();
 
         if (self.address_space.header.release()) self.address_space.destroy();
@@ -84,10 +106,137 @@ pub const Process = struct {
 
     }
 
+    pub fn set_name(self: *Process, name: []const u8) void {
+
+        const length = @min(name.len, inspect.process_name_bytes);
+
+        const saved = list_lock.acquire();
+        defer list_lock.release(saved);
+
+        self.name = [_]u8{0} ** inspect.process_name_bytes;
+        @memcpy(self.name[0..length], name[0..length]);
+        self.name_len = @intCast(length);
+
+    }
+
 };
+
+pub fn note_thread_created(process: *Process) void {
+
+    _ = @atomicRmw(u32, &process.thread_count, .Add, 1, .monotonic);
+
+}
+
+pub fn note_thread_destroyed(process: *Process) void {
+
+    _ = @atomicRmw(u32, &process.thread_count, .Sub, 1, .monotonic);
+
+}
+
+pub fn snapshot(out: *inspect.ProcessSnapshot) void {
+
+    out.* = .{
+
+        .count = 0,
+        .capacity = @intCast(inspect.max_processes),
+        .total_threads = 0,
+        .total_handles = 0,
+
+        .processes = [_]inspect.ProcessInfo{empty_process_info()} ** inspect.max_processes,
+
+    };
+
+    const saved = list_lock.acquire();
+    defer list_lock.release(saved);
+
+    var cursor = list_head;
+
+    while (cursor) |process| {
+
+        var by_kind: [inspect.object_kind_slots]u32 = undefined;
+        const handles = process.handles.stats(&by_kind);
+        const threads = @atomicLoad(u32, &process.thread_count, .monotonic);
+
+        out.total_threads += threads;
+        out.total_handles += handles;
+
+        if (out.count < inspect.max_processes) {
+
+            out.processes[@intCast(out.count)] = .{
+
+                .pid = process.pid,
+                .name_len = @intCast(process.name_len),
+                .thread_count = threads,
+                .handle_count = handles,
+
+                .name = process.name,
+                .handles_by_kind = by_kind,
+
+            };
+
+        }
+
+        out.count += 1;
+        cursor = process.next_global;
+
+    }
+
+}
+
+fn link_global(process: *Process) void {
+
+    const saved = list_lock.acquire();
+    defer list_lock.release(saved);
+
+    process.next_global = list_head;
+    list_head = process;
+
+}
+
+fn unlink_global(process: *Process) void {
+
+    const saved = list_lock.acquire();
+    defer list_lock.release(saved);
+
+    var link = &list_head;
+
+    while (link.*) |candidate| {
+
+        if (candidate == process) {
+
+            link.* = process.next_global;
+            process.next_global = null;
+            return;
+
+        }
+
+        link = &candidate.next_global;
+
+    }
+
+}
+
+fn empty_process_info() inspect.ProcessInfo {
+
+    return .{
+
+        .pid = 0,
+        .name_len = 0,
+        .thread_count = 0,
+        .handle_count = 0,
+
+        .name = [_]u8{0} ** inspect.process_name_bytes,
+        .handles_by_kind = [_]u32{0} ** inspect.object_kind_slots,
+
+    };
+
+}
 
 pub fn init() void {
 
     cache.init();
+    list_lock = .{};
+    list_head = null;
+    next_pid = 1;
 
 }

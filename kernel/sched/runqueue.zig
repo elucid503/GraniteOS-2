@@ -57,6 +57,22 @@ pub const RunQueue = struct {
 
     }
 
+    pub fn count(self: *const RunQueue) u32 {
+
+        var total: u32 = 0;
+        var link = self.head;
+
+        while (link) |thread| {
+
+            total += 1;
+            link = thread.queue_link.next;
+
+        }
+
+        return total;
+
+    }
+
 };
 
 const testing = @import("std").testing;

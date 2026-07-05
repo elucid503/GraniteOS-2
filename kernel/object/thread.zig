@@ -11,7 +11,8 @@ const scheduler = @import("../sched/scheduler.zig");
 const runqueue = @import("../sched/runqueue.zig");
 const ipc_sync = @import("../sync/ipc.zig");
 
-const Process = @import("process.zig").Process;
+const process_module = @import("process.zig");
+const Process = process_module.Process;
 const Message = @import("../ipc/message.zig").Message;
 const Notification = @import("notification.zig").Notification;
 const Endpoint = @import("endpoint.zig").Endpoint;
@@ -22,6 +23,7 @@ const VirtAddr = arch.VirtAddr;
 const page_size = config.page_size;
 
 var cache: slab.Cache(Thread) = .{};
+var next_tid: u32 = 1;
 
 pub const ThreadState = enum {
 
@@ -46,6 +48,8 @@ pub const Attribute = enum(u8) {
 pub const Thread = struct {
 
     header: object.Object,
+    id: u32,
+
     process: *Process,
     context: arch.Context,
     state: ThreadState,
@@ -215,6 +219,8 @@ pub const Thread = struct {
 
         frames.free_contiguous(self.stack_base, config.thread_stack_pages);
 
+        process_module.note_thread_destroyed(self.process);
+
         if (self.process.header.release()) object.destroy(&self.process.header);
 
         cache.free(self);
@@ -258,6 +264,8 @@ fn alloc(process: *Process) Error!*Thread {
     thread.* = .{
 
         .header = .{ .kind = .thread },
+        .id = @atomicRmw(u32, &next_tid, .Add, 1, .monotonic),
+
         .process = process,
         .context = undefined,
         .state = .suspended,
@@ -295,6 +303,8 @@ fn alloc(process: *Process) Error!*Thread {
 
     ipc_sync.lock.release(saved);
 
+    process_module.note_thread_created(process);
+
     process.header.retain();
 
     return thread;
@@ -305,6 +315,8 @@ fn free(thread: *Thread) void {
 
     frames.free_contiguous(thread.stack_base, config.thread_stack_pages);
     thread.unlink();
+
+    process_module.note_thread_destroyed(thread.process);
 
     if (thread.process.header.release()) object.destroy(&thread.process.header);
 
@@ -321,5 +333,6 @@ fn kernel_stack_top(thread: *Thread) VirtAddr {
 pub fn init() void {
 
     cache.init();
+    next_tid = 1;
 
 }

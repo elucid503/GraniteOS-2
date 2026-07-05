@@ -28,8 +28,7 @@ const max_path = 512;
 const max_sessions = 16;
 const max_open_files = 16;
 
-// The block driver reached through the granted, badged endpoint; one shared one-block session buffer, plus a
-// direct-mapped write-through block cache (07-userspace-ddd.md Section 7.2).
+// The block driver reached through the granted, badged endpoint; one shared one-block session buffer, plus a direct-mapped write-through block cache (07-userspace-ddd.md Section 7.2).
 
 const cache_slots = 64;
 
@@ -45,7 +44,7 @@ const CacheEntry = struct {
 const CachedDisk = struct {
 
     session_base: usize = 0,
-    blocks: u32 = 0,
+    blocks: u64 = 0,
 
     cache: [cache_slots]CacheEntry = [_]CacheEntry{.{}} ** cache_slots,
 
@@ -64,7 +63,7 @@ const CachedDisk = struct {
 
         const reply = try ipc.request(cap.filesystem.block, proto.block.capacity, &.{}, &.{});
 
-        self.blocks = @intCast(reply.data[1] / sectors_per_block);
+        self.blocks = reply.data[1] / sectors_per_block;
 
         if (self.blocks == 0) return error.Invalid;
 
@@ -127,7 +126,7 @@ const CachedDisk = struct {
 
     }
 
-    pub fn block_count(self: *CachedDisk) u32 {
+    pub fn block_count(self: *CachedDisk) u64 {
 
         return self.blocks;
 
@@ -240,6 +239,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.filesystem.mkdir => mkdir(badge, in),
         proto.filesystem.set_permissions => set_permissions(badge, in),
         proto.filesystem.attach => attach(badge, in),
+        proto.filesystem.info => info(badge, in),
 
         else => -7,
 
@@ -429,17 +429,17 @@ fn stat(badge: u64, in: *const Message) i64 {
     const path = copy_path(session, in.data[1], in.data[2], &path_buffer) orelse return -7;
     const span = session_span(session, in.data[3], @sizeOf(proto.filesystem.Stat)) orelse return -7;
 
-    const info = volume.stat(path) catch |failure| return status_of(failure);
+    const stat_info = volume.stat(path) catch |failure| return status_of(failure);
 
     const record = proto.filesystem.Stat{
 
-        .kind = @intFromEnum(info.kind),
-        .permissions = info.permissions,
+        .kind = @intFromEnum(stat_info.kind),
+        .permissions = stat_info.permissions,
 
-        .length = info.length,
+        .length = stat_info.length,
 
-        .created_ns = info.created_ns,
-        .modified_ns = info.modified_ns,
+        .created_ns = stat_info.created_ns,
+        .modified_ns = stat_info.modified_ns,
 
     };
 
@@ -457,6 +457,32 @@ fn set_permissions(badge: u64, in: *const Message) i64 {
     const path = copy_path(session, in.data[1], in.data[2], &path_buffer) orelse return -7;
 
     volume.set_permissions(path, @truncate(in.data[3])) catch |failure| return status_of(failure);
+
+    return 0;
+
+}
+
+fn info(badge: u64, in: *const Message) i64 {
+
+    const session = session_for(badge) orelse return -7;
+    const span = session_span(session, in.data[1], @sizeOf(proto.filesystem.Info)) orelse return -7;
+    const space = volume.space_info() catch |failure| return status_of(failure);
+
+    const record = proto.filesystem.Info{
+
+        .sector_size = @intCast(proto.block.sector_size),
+        .sectors_per_block = @intCast(sectors_per_block),
+        .block_size = @intCast(block_size),
+        .block_count = space.block_count,
+
+        .used_blocks = space.used_blocks,
+        .free_blocks = space.free_blocks,
+        .inode_count = space.inode_count,
+        .reserved = 0,
+
+    };
+
+    @memcpy(span[0..@sizeOf(proto.filesystem.Info)], std.mem.asBytes(&record));
 
     return 0;
 

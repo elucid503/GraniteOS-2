@@ -3,6 +3,7 @@
 const arch = @import("../arch/arch.zig");
 const config = @import("../config.zig");
 const err = @import("../error.zig");
+const inspect = @import("../inspect.zig");
 const object = @import("../object/object.zig");
 const scheduler = @import("../sched/scheduler.zig");
 const transfer = @import("../ipc/transfer.zig");
@@ -48,6 +49,8 @@ pub const Number = enum(u64) {
     bind,
     acknowledge,
     copy,
+    inspect,
+    set_name,
 
 };
 
@@ -114,6 +117,8 @@ fn run(frame: *SyscallFrame) Error!u64 {
         .bind => bind(a0, a1, a2),
         .acknowledge => acknowledge(a0),
         .copy => copy(a0, a1),
+        .inspect => inspect_call(a0, a1, a2),
+        .set_name => set_name(a0, a1),
 
     };
 
@@ -200,7 +205,7 @@ fn create_device_region(base: u64, length: u64, authority_raw: u64) Error!*Regio
 }
 
 // A DMA buffer is contiguous RAM whose physical base the driver must know (06-kernel-ddd.md Section 16.3): the one
-// place a syscall uses a second return register, so the verb count stays at 17.
+// place a syscall uses a second return register, keeping the core ABI small.
 
 fn create_dma_region(frame: *SyscallFrame, length: u64, authority_raw: u64) Error!*Region {
 
@@ -472,6 +477,48 @@ fn copy(handle_raw: u64, badge: u64) Error!u64 {
 
 }
 
+// Inspection
+
+fn inspect_call(kind_raw: u64, out_ptr: u64, capacity: u64) Error!u64 {
+
+    const kind = std.meta.intToEnum(inspect.Kind, kind_raw) catch return error.Invalid;
+
+    return switch (kind) {
+
+        .scheduler => write_snapshot(inspect.SchedulerSnapshot, out_ptr, capacity, scheduler.scheduler_snapshot),
+        .processes => write_snapshot(inspect.ProcessSnapshot, out_ptr, capacity, process_module.snapshot),
+        .cpu => write_snapshot(inspect.CpuSnapshot, out_ptr, capacity, scheduler.cpu_snapshot),
+
+    };
+
+}
+
+fn write_snapshot(comptime T: type, out_ptr: u64, capacity: u64, fill: *const fn (*T) void) Error!u64 {
+
+    if (capacity < @sizeOf(T)) return error.Invalid;
+
+    var snapshot: T = undefined;
+
+    fill(&snapshot);
+    try copy_to_user(@intCast(out_ptr), std.mem.asBytes(&snapshot));
+
+    return @intCast(@sizeOf(T));
+
+}
+
+fn set_name(name_ptr: u64, length_raw: u64) Error!u64 {
+
+    var name: [inspect.process_name_bytes]u8 = undefined;
+    const amount: usize = @intCast(@min(length_raw, @as(u64, inspect.process_name_bytes)));
+
+    try copy_from_user(@intCast(name_ptr), name[0..amount]);
+
+    current_process().set_name(name[0..amount]);
+
+    return 0;
+
+}
+
 // Context
 
 fn current_thread() *Thread {
@@ -559,6 +606,12 @@ fn write_message(from: *Thread, message_ptr: VirtAddr) Error!void {
 fn copy_from_user(va: VirtAddr, dest: []u8) Error!void {
 
     try copy_from_user_of(current_thread(), va, dest);
+
+}
+
+fn copy_to_user(va: VirtAddr, source: []const u8) Error!void {
+
+    try copy_to_user_of(current_thread(), va, source);
 
 }
 

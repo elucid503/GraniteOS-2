@@ -19,6 +19,7 @@ const name = "marble";
 const root_dir = "/";
 
 // The default filesystem layout (07-userspace-ddd.md Section 8): programs live under one directory, the shell opens in another.
+
 const programs_dir = "/root/programs";
 const home_dir = "/root/user";
 
@@ -28,6 +29,7 @@ const max_args = 8;
 const max_path = 512;
 
 // A whole ELF image is loaded before the loader picks out its segments; sized comfortably above the largest program.
+
 const max_program = 1024 * 1024;
 const child_budget = 1 * 1024 * 1024;
 const pipe_capacity = 4096;
@@ -62,8 +64,7 @@ var files: ?lib.fs.Client = null;
 var cwd_storage: [max_path]u8 = undefined;
 var cwd: []const u8 = root_dir;
 
-// A missing program is loaded from disk into this scratch image before spawning; spawn_program copies it out
-// synchronously, so one buffer serves every stage in turn.
+// A missing program is loaded from disk into this scratch image before spawning; spawn_program copies it out synchronously, so one buffer serves every stage in turn.
 var load_buffer: [max_program]u8 = undefined;
 
 // How the shell locates a command: an installed file on the search path, or a module baked into the boot bundle.
@@ -96,12 +97,14 @@ pub fn main(_: []const []const u8) u8 {
 fn run() !void {
 
     const bundle_base = try sys.map(cap.self_space, cap.marble.bundle, 0, sys.read);
+
     bundle = try lib.bundle.Bundle.open(bundle_base + @as(usize, @intCast(lib.start.word(4))), @intCast(lib.start.word(3)));
     machine_core_count = @max(1, lib.start.word(proto.init.core_count_word));
     supervisor = try sys.create(.endpoint, 0, 0);
 
     var input = try lib.start.stdin();
     const out = try lib.start.stdout();
+
     var line: [max_line]u8 = undefined;
 
     if (lib.fs.Client.connect(cap.memory)) |client| {
@@ -119,9 +122,13 @@ fn run() !void {
 
     while (true) {
 
-        try write_prompt(out);
+        const length = try lib.line.read(&input, out, &line, .{
 
-        const length = try input.read(&line);
+            .shell = name,
+            .cwd = cwd,
+            .files = if (files) |*client| client else null,
+
+        });
 
         const pipeline = parse(line[0..length]) catch |failure| {
 
@@ -234,6 +241,8 @@ fn set_cwd(path: []const u8) void {
     @memcpy(cwd_storage[0..path.len], path);
     cwd = cwd_storage[0..path.len];
 
+    if (files) |*client| client.cwd = cwd;
+
 }
 
 fn write_banner(out: *lib.stream.Stream) !void {
@@ -243,15 +252,6 @@ fn write_banner(out: *lib.stream.Stream) !void {
     try lib.io.writeln(out, "");
     try lib.io.writeln(out, "Type 'help' for available commands, 'exit' to relaunch.");
     try lib.io.writeln(out, "");
-
-}
-
-fn write_prompt(out: *lib.stream.Stream) !void {
-
-    try lib.io.write(out, name);
-    try lib.io.write(out, " [");
-    try lib.io.write(out, cwd);
-    try lib.io.write(out, "] > ");
 
 }
 

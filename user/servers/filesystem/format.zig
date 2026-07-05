@@ -1,9 +1,4 @@
-// Strata: the GraniteOS on-disk format (07-userspace-ddd.md Section 7.1) - a conventional indexed filesystem:
-// superblock, block bitmap, inode table, data blocks. Directories are files of fixed-size {name, inode} records;
-// large files grow through single- and double-indirect blocks. All writes are write-through (decision #19 v1).
-//
-// This module is pure format logic over a generic block device, so it is host-testable (zig build test); the
-// server (main.zig) supplies a device backed by the block driver and its cache.
+// Strata: the GraniteOS on-disk format (07-userspace-ddd.md Section 7.1) - a conventional indexed filesystem: superblock, block bitmap, inode table, data blocks.
 
 const std = @import("std");
 
@@ -18,6 +13,9 @@ pub const pointers_per_block = block_size / 4;
 pub const direct_blocks = 12;
 pub const max_name = 48;
 pub const root_inode: u32 = 1;
+
+// Strata v1 stores block pointers as u32, so larger devices are accepted but only this prefix is formatted.
+pub const max_volume_blocks: u64 = std.math.maxInt(u32);
 
 pub const Kind = enum(u8) {
 
@@ -120,6 +118,15 @@ pub const ListEntry = struct {
 
 };
 
+pub const SpaceInfo = struct {
+
+    block_count: u64,
+    used_blocks: u64,
+    free_blocks: u64,
+    inode_count: u64,
+
+};
+
 comptime {
 
     std.debug.assert(@sizeOf(Inode) == inode_size);
@@ -131,7 +138,7 @@ comptime {
 const inode_cache_slots = 32;
 const name_cache_slots = 64;
 
-/// The volume logic over a `Device` providing `read_block`, `write_block`, and `block_count`.
+/// The volume logic over a `Device` providing `read_block`, `write_block`, and a u64 `block_count`.
 pub fn Volume(comptime Device: type) type {
 
     return struct {
@@ -177,16 +184,17 @@ pub fn Volume(comptime Device: type) type {
             const super = std.mem.bytesToValue(Superblock, block[0..@sizeOf(Superblock)]);
 
             if (super.magic != magic or super.version != format_version) return error.Invalid;
-            if (super.block_count == 0 or super.block_count > device.block_count()) return error.Invalid;
+            if (super.block_count == 0 or @as(u64, super.block_count) > device.block_count()) return error.Invalid;
 
             return started(device, super);
 
         }
 
-        /// Write a fresh, empty volume across the whole device.
+        /// Write a fresh, empty volume across the device's Strata-addressable range.
         pub fn format(device: *Device) Error!Self {
 
-            const blocks = device.block_count();
+            const device_blocks = device.block_count();
+            const blocks = @min(device_blocks, max_volume_blocks);
 
             if (blocks < 16) return error.Invalid;
 
@@ -426,6 +434,21 @@ pub fn Volume(comptime Device: type) type {
             }
 
             return found;
+
+        }
+
+        pub fn space_info(self: *Self) Error!SpaceInfo {
+
+            const used = try self.used_blocks();
+
+            return .{
+
+                .block_count = @intCast(self.super.block_count),
+                .used_blocks = used,
+                .free_blocks = @as(u64, self.super.block_count) - used,
+                .inode_count = @intCast(self.super.inode_count),
+
+            };
 
         }
 
@@ -943,6 +966,42 @@ pub fn Volume(comptime Device: type) type {
 
         }
 
+        fn used_blocks(self: *Self) Error!u64 {
+
+            var block: [block_size]u8 = undefined;
+            var bitmap_index: u32 = 0;
+            var used: u64 = 0;
+            var remaining: u64 = @intCast(self.super.block_count);
+
+            while (bitmap_index < self.super.bitmap_blocks and remaining > 0) : (bitmap_index += 1) {
+
+                try self.read_device(self.super.bitmap_start + bitmap_index, &block);
+
+                const covered = @min(remaining, block_size * 8);
+                const full_bytes: usize = @intCast(covered / 8);
+                const partial_bits: u3 = @intCast(covered % 8);
+
+                for (block[0..full_bytes]) |byte| {
+
+                    used += @intCast(@popCount(byte));
+
+                }
+
+                if (partial_bits != 0) {
+
+                    const mask = (@as(u8, 1) << partial_bits) - 1;
+                    used += @intCast(@popCount(block[full_bytes] & mask));
+
+                }
+
+                remaining -= covered;
+
+            }
+
+            return used;
+
+        }
+
         fn alloc_inode(self: *Self) Error!u32 {
 
             var block: [block_size]u8 = undefined;
@@ -1061,7 +1120,7 @@ const MemoryDevice = struct {
 
     }
 
-    fn block_count(self: *MemoryDevice) u32 {
+    fn block_count(self: *MemoryDevice) u64 {
 
         return @intCast(self.storage.len);
 
@@ -1070,6 +1129,61 @@ const MemoryDevice = struct {
 };
 
 const TestVolume = Volume(MemoryDevice);
+
+const sparse_bitmap_blocks = 8;
+
+const SparseDevice = struct {
+
+    blocks: u64,
+    superblock: [block_size]u8 = [_]u8{0} ** block_size,
+    bitmaps: [sparse_bitmap_blocks][block_size]u8 = [_][block_size]u8{[_]u8{0} ** block_size} ** sparse_bitmap_blocks,
+
+    fn read_block(self: *SparseDevice, index: u32, out: *[block_size]u8) !void {
+
+        if (index == 0) {
+
+            out.* = self.superblock;
+            return;
+
+        }
+
+        if (index -| 1 < sparse_bitmap_blocks) {
+
+            out.* = self.bitmaps[index - 1];
+            return;
+
+        }
+
+        @memset(out[0..], 0);
+
+    }
+
+    fn write_block(self: *SparseDevice, index: u32, data: *const [block_size]u8) !void {
+
+        if (index == 0) {
+
+            self.superblock = data.*;
+            return;
+
+        }
+
+        if (index -| 1 < sparse_bitmap_blocks) {
+
+            self.bitmaps[index - 1] = data.*;
+
+        }
+
+    }
+
+    fn block_count(self: *SparseDevice) u64 {
+
+        return self.blocks;
+
+    }
+
+};
+
+const SparseVolume = Volume(SparseDevice);
 
 fn test_device(blocks: usize) !MemoryDevice {
 
@@ -1101,6 +1215,16 @@ test "format then open finds the same geometry and an empty root" {
     var entries: [4]ListEntry = undefined;
 
     try testing.expectEqual(@as(usize, 0), try reopened.list("/", &entries));
+
+}
+
+test "format caps volumes to the current block pointer address space" {
+
+    var device = SparseDevice{ .blocks = max_volume_blocks + 1024 };
+
+    const volume = try SparseVolume.format(&device);
+
+    try testing.expectEqual(@as(u32, std.math.maxInt(u32)), volume.super.block_count);
 
 }
 

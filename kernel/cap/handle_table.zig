@@ -2,6 +2,7 @@
 
 const config = @import("../config.zig");
 const frames = @import("../memory/frames.zig");
+const inspect = @import("../inspect.zig");
 const object = @import("../object/object.zig");
 const spinlock = @import("../sync/spinlock.zig");
 
@@ -141,6 +142,30 @@ pub const HandleTable = struct {
         // The release (and a possible destroy chain) runs outside the lock, so teardown can close other handles.
 
         if (target.release()) object.destroy(target);
+
+    }
+
+    pub fn stats(self: *HandleTable, by_kind: *[inspect.object_kind_slots]u32) u32 {
+
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
+
+        by_kind.* = [_]u32{0} ** inspect.object_kind_slots;
+
+        var total: u32 = 0;
+
+        for (self.entries) |*entry| {
+
+            const target = entry.target orelse continue;
+            const kind: usize = @intFromEnum(target.kind);
+
+            if (kind < by_kind.len) by_kind[kind] += 1;
+
+            total += 1;
+
+        }
+
+        return total;
 
     }
 
