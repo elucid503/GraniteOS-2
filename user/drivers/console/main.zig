@@ -40,20 +40,21 @@ const rx_bit: u64 = 1; // the notification bit the interrupt is bound to
 var uart: usize = 0;
 var rx_notification: Handle = 0;
 
-// Per-client shared buffers (05-server-protocol.md): attached once, then reused by every read/write. Badges are the
-// Session badges; Flint uses 0, Marble uses 1.
+// Per-client shared buffers (05-server-protocol.md): attached once, then reused by every read/write. Sessions are keyed
+// by the caller's badge — small ones granted by Flint/Marble, larger ones minted per lookup by the name service.
 
 const max_sessions = 16;
 
-const Session = struct {
+const Mode = struct {
 
-    base: usize = 0,
-    capacity: usize = 0,
     mode: u64 = proto.stream.mode_cooked,
 
 };
 
-var sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions;
+const Sessions = lib.session.Sessions(Mode, max_sessions);
+const Session = Sessions.Session;
+
+var sessions: Sessions = .{};
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -137,15 +138,7 @@ fn attach(badge: u64, in: *const Message) i64 {
 
     if (in.handle_count < 1) return -7;
 
-    const session = session_for(badge) orelse return -7;
-
-    if (session.base != 0) {
-
-        sys.unmap(cap.self_space, session.base) catch {};
-        session.base = 0;
-        session.capacity = 0;
-
-    }
+    const session = sessions.open(badge);
 
     session.base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
 
@@ -160,7 +153,7 @@ fn read(badge: u64, offset: u64, capacity: u64) i64 {
     const session = session_for(badge) orelse return -7;
     const span = session_span(badge, offset, capacity) orelse return -7;
 
-    if (session.mode == proto.stream.mode_raw) return read_raw(span);
+    if (session.extra.mode == proto.stream.mode_raw) return read_raw(span);
 
     return read_cooked(span);
 
@@ -259,7 +252,7 @@ fn set_mode(badge: u64, mode: u64) i64 {
 
     if (mode != proto.stream.mode_cooked and mode != proto.stream.mode_raw) return -7;
 
-    session.mode = mode;
+    session.extra.mode = mode;
 
     return 0;
 
@@ -280,9 +273,7 @@ fn session_span(badge: u64, offset: u64, length: u64) ?[]u8 {
 
 fn session_for(badge: u64) ?*Session {
 
-    if (badge >= max_sessions) return null;
-
-    return &sessions[@intCast(badge)];
+    return sessions.find(badge);
 
 }
 

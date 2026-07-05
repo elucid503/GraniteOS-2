@@ -160,18 +160,18 @@ const OpenFile = struct {
 
 };
 
-const Session = struct {
+const Files = struct {
 
-    base: usize = 0,
-    capacity: usize = 0,
-
-    files: [max_open_files]OpenFile = [_]OpenFile{.{}} ** max_open_files,
+    table: [max_open_files]OpenFile = [_]OpenFile{.{}} ** max_open_files,
 
 };
 
+const Sessions = lib.session.Sessions(Files, max_sessions);
+const Session = Sessions.Session;
+
 var disk: CachedDisk = .{};
 var volume: Volume = undefined;
-var sessions: [max_sessions]Session = [_]Session{.{}} ** max_sessions;
+var sessions: Sessions = .{};
 
 // One coarse lock over the volume, cache, and session tables; requests serialize inside the pool but every worker
 // still shields its own caller from a crash mid-request.
@@ -260,11 +260,10 @@ fn attach(badge: u64, in: *const Message) i64 {
 
     if (in.handle_count < 1) return -7;
 
-    const session = session_for(badge) orelse return -7;
+    const session = sessions.open(badge);
 
     session.base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
     session.capacity = @intCast(in.data[1]);
-    session.files = [_]OpenFile{.{}} ** max_open_files;
 
     return 0;
 
@@ -295,7 +294,7 @@ fn open(badge: u64, in: *const Message) i64 {
 
     }
 
-    for (&session.files, 0..) |*file, id| {
+    for (&session.extra.table, 0..) |*file, id| {
 
         if (file.used) continue;
 
@@ -496,9 +495,7 @@ fn path_call(badge: u64, in: *const Message, kind: format.Kind, action: *const f
 
 fn session_for(badge: u64) ?*Session {
 
-    if (badge >= max_sessions) return null;
-
-    return &sessions[@intCast(badge)];
+    return sessions.find(badge);
 
 }
 
@@ -508,7 +505,7 @@ fn file_for(badge: u64, id: u64) ?*OpenFile {
 
     if (id >= max_open_files) return null;
 
-    const file = &session.files[@intCast(id)];
+    const file = &session.extra.table[@intCast(id)];
 
     return if (file.used) file else null;
 

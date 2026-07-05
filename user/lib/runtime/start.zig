@@ -14,6 +14,7 @@ const max_args = 16;
 var supervisor: ?cap.Handle = null;
 var init_flags: u64 = 0;
 var init_words: [6]u64 = [_]u64{0} ** 6;
+var init_cwd: []const u8 = "/";
 var server_stdio: ?stream.Stream = null;
 var stdout_stream: ?stream.Stream = null;
 
@@ -59,6 +60,13 @@ pub fn flags() u64 {
 pub fn word(index: usize) u64 {
 
     return init_words[index];
+
+}
+
+/// The working directory the spawner launched this program in; relative paths resolve against it (fs.zig).
+pub fn cwd() []const u8 {
+
+    return init_cwd;
 
 }
 
@@ -151,6 +159,18 @@ fn receive_init(argv_storage: *[max_args][]const u8) sys.Error![]const []const u
         cursor += 1;
 
     }
+
+    // The spawner appends its working directory as one trailing string; the mapped region outlives main, so slicing it is safe.
+
+    const cwd_start = cursor;
+
+    while (cursor < length and bytes[cursor] != 0) {
+
+        cursor += 1;
+
+    }
+
+    if (cursor > cwd_start) init_cwd = bytes[cwd_start..cursor];
 
     return argv_storage[0..argc];
 

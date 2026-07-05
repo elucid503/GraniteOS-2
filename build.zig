@@ -89,7 +89,7 @@ pub fn build(b: *std.Build) void {
 
     const flatten = host_tool(b, "flatten", "tools/flatten.zig");
     const bundle_tool = host_tool(b, "bundle", "tools/bundle.zig");
-    const mkdisk = host_tool(b, "mkdisk", "tools/mkdisk.zig");
+    const seedisk = host_seedisk(b);
 
     const kernel_image = flatten_image(b, flatten, kernel, "granite-kernel.bin");
     const flint_image = flatten_image(b, flatten, flint, "flint.bin");
@@ -129,11 +129,28 @@ pub fn build(b: *std.Build) void {
     // The persistent virtio disk: created once, then reused across runs so the filesystem survives reboots.
 
     const disk_path = b.pathFromRoot("disk.img");
-    const mkdisk_run = b.addRunArtifact(mkdisk);
+    const seedisk_run = b.addRunArtifact(seedisk);
 
-    mkdisk_run.addArg(disk_path);
-    mkdisk_run.addArg(b.fmt("{d}", .{disk_bytes}));
-    mkdisk_run.has_side_effects = true;
+    seedisk_run.addArg(disk_path);
+    seedisk_run.addArg(b.fmt("{d}", .{disk_bytes}));
+    add_seed_program(seedisk_run, "echo", echo);
+    add_seed_program(seedisk_run, "cat", cat);
+    add_seed_program(seedisk_run, "help", help);
+    add_seed_program(seedisk_run, "about", about);
+    add_seed_program(seedisk_run, "hello", hello);
+    add_seed_program(seedisk_run, "clear", clear);
+    add_seed_program(seedisk_run, "wc", wc);
+    add_seed_program(seedisk_run, "stress", stress);
+    add_seed_program(seedisk_run, "location", location);
+    add_seed_program(seedisk_run, "ls", ls);
+    add_seed_program(seedisk_run, "view", view);
+    add_seed_program(seedisk_run, "write", write);
+    add_seed_program(seedisk_run, "create", create);
+    add_seed_program(seedisk_run, "mkdir", mkdir);
+    add_seed_program(seedisk_run, "delete", delete);
+    add_seed_program(seedisk_run, "rename", rename);
+    add_seed_program(seedisk_run, "perms", perms);
+    seedisk_run.has_side_effects = true;
 
     add_qemu_step(b, kernel_image, bundle_image, .{
 
@@ -141,7 +158,7 @@ pub fn build(b: *std.Build) void {
         .description = "Boot the full M7 system under QEMU `virt` with the persistent disk",
         .debug = false,
         .test_build = test_build,
-        .disk = .{ .path = disk_path, .prepare = mkdisk_run },
+        .disk = .{ .path = disk_path, .prepare = seedisk_run },
         .smp = smp,
         .memory = memory,
 
@@ -153,7 +170,7 @@ pub fn build(b: *std.Build) void {
         .description = "Boot the full M7 system under QEMU `virt`, halted, with a gdb stub on :1234",
         .debug = true,
         .test_build = test_build,
-        .disk = .{ .path = disk_path, .prepare = mkdisk_run },
+        .disk = .{ .path = disk_path, .prepare = seedisk_run },
         .smp = smp,
         .memory = memory,
 
@@ -244,6 +261,9 @@ fn user_program(
         .single_threaded = false,
         .pic = false,
 
+        // Programs are loaded from the module bundle and installed to disk; strip debug info so the images stay small.
+        .strip = true,
+
     });
 
     module.addImport("lib", user_lib);
@@ -279,6 +299,35 @@ fn host_tool(b: *std.Build, name: []const u8, root: []const u8) *std.Build.Step.
 
 }
 
+fn host_seedisk(b: *std.Build) *std.Build.Step.Compile {
+
+    const format_module = b.createModule(.{
+
+        .root_source_file = b.path("user/servers/filesystem/format.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+
+    });
+
+    const root_module = b.createModule(.{
+
+        .root_source_file = b.path("tools/seedisk.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+
+    });
+
+    root_module.addImport("format", format_module);
+
+    return b.addExecutable(.{
+
+        .name = "seedisk",
+        .root_module = root_module,
+
+    });
+
+}
+
 fn flatten_image(b: *std.Build, flatten: *std.Build.Step.Compile, image: *std.Build.Step.Compile, name: []const u8) std.Build.LazyPath {
 
     const run = b.addRunArtifact(flatten);
@@ -300,6 +349,12 @@ fn add_artifact_module(run: *std.Build.Step.Run, name: []const u8, artifact: *st
 
     run.addArg(name);
     run.addArtifactArg(artifact);
+
+}
+
+fn add_seed_program(run: *std.Build.Step.Run, name: []const u8, artifact: *std.Build.Step.Compile) void {
+
+    add_artifact_module(run, name, artifact);
 
 }
 

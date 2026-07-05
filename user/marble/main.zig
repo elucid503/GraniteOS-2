@@ -18,9 +18,17 @@ comptime {
 const name = "marble";
 const root_dir = "/";
 
+// The default filesystem layout (07-userspace-ddd.md Section 8): programs live under one directory, the shell opens in another.
+const programs_dir = "/root/programs";
+const home_dir = "/root/user";
+
 const max_line = 256;
 const max_stages = 4;
 const max_args = 8;
+const max_path = 512;
+
+// A whole ELF image is loaded before the loader picks out its segments; sized comfortably above the largest program.
+const max_program = 1024 * 1024;
 const child_budget = 1 * 1024 * 1024;
 const pipe_capacity = 4096;
 
@@ -47,6 +55,24 @@ const Pipeline = struct {
 var bundle: lib.bundle.Bundle = undefined;
 var supervisor: cap.Handle = 0;
 var machine_core_count: u64 = 1;
+
+// The filesystem, connected once at startup, or null when no disk is present (the shell still runs, from the bundle).
+var files: ?lib.fs.Client = null;
+
+var cwd_storage: [max_path]u8 = undefined;
+var cwd: []const u8 = root_dir;
+
+// A missing program is loaded from disk into this scratch image before spawning; spawn_program copies it out
+// synchronously, so one buffer serves every stage in turn.
+var load_buffer: [max_program]u8 = undefined;
+
+// How the shell locates a command: an installed file on the search path, or a module baked into the boot bundle.
+const Resolved = union(enum) {
+
+    disk: []const u8,
+    bundled: []const u8,
+
+};
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -78,6 +104,17 @@ fn run() !void {
     const out = try lib.start.stdout();
     var line: [max_line]u8 = undefined;
 
+    if (lib.fs.Client.connect(cap.memory)) |client| {
+
+        files = client;
+
+        ensure_layout();
+        install_programs(out);
+
+        set_cwd(home_dir);
+
+    } else |_| {}
+
     try write_banner(out);
 
     while (true) {
@@ -97,13 +134,105 @@ fn run() !void {
 
         if (pipeline.count == 1) {
 
-            if (try run_builtin(&pipeline.stages[0], out)) continue;
+            if (run_builtin(&pipeline.stages[0], out) catch continue) continue;
 
         }
 
-        try run_pipeline(&pipeline);
+        // A failed command reports and returns to the prompt; the shell never tears down over one bad line.
+
+        run_pipeline(&pipeline) catch |failure| {
+
+            report_command_error(out, failure);
+
+        };
 
     }
+
+}
+
+// Create the default directory layout, tolerating the common case where a previous boot already made it.
+
+fn ensure_layout() void {
+
+    if (files) |*client| {
+
+        client.mkdir("/root") catch {};
+        client.mkdir(programs_dir) catch {};
+        client.mkdir(home_dir) catch {};
+
+    }
+
+}
+
+// Install every bundled user program into the search path, once, so the executables are real, discoverable files.
+// Only a fresh disk pays the copy; a note prints when it happens, since writing the whole set takes a moment.
+
+fn install_programs(out: *lib.stream.Stream) void {
+
+    var installed: usize = 0;
+
+    for (lib.catalog.common) |entry| installed += @intFromBool(install_program(entry.name));
+    for (lib.catalog.location) |entry| installed += @intFromBool(install_program(entry.name));
+    for (lib.catalog.filesystem) |entry| installed += @intFromBool(install_program(entry.name));
+
+    if (installed != 0) {
+
+        lib.io.print(out, "MARBLE: installed {d} programs into {s}\n", .{ installed, programs_dir }) catch {};
+
+    }
+
+}
+
+fn install_program(program: []const u8) bool {
+
+    const client = if (files) |*handle| handle else return false;
+    const image = bundle.find(program) orelse return false;
+
+    var path_buffer: [max_path]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buffer, "{s}/{s}", .{ programs_dir, program }) catch return false;
+
+    // Already installed from an earlier boot: leave the on-disk copy untouched.
+
+    if (client.stat(path)) |_| {
+
+        return false;
+
+    } else |failure| {
+
+        if (failure != error.NotFound) return false;
+
+    }
+
+    write_program(client, path, image) catch return false;
+
+    return true;
+
+}
+
+fn write_program(client: *lib.fs.Client, path: []const u8, image: []const u8) !void {
+
+    const file = try client.open_path(path, proto.filesystem.open_create | proto.filesystem.open_truncate);
+    defer client.close_file(file) catch {};
+
+    var offset: usize = 0;
+
+    while (offset < image.len) {
+
+        const chunk = @min(image.len - offset, lib.fs.payload_capacity);
+        const written = try client.write(file, offset, image[offset .. offset + chunk]);
+
+        if (written == 0) return error.Invalid;
+
+        offset += written;
+
+    }
+
+}
+
+fn set_cwd(path: []const u8) void {
+
+    @memcpy(cwd_storage[0..path.len], path);
+    cwd = cwd_storage[0..path.len];
 
 }
 
@@ -121,7 +250,7 @@ fn write_prompt(out: *lib.stream.Stream) !void {
 
     try lib.io.write(out, name);
     try lib.io.write(out, " [");
-    try lib.io.write(out, root_dir);
+    try lib.io.write(out, cwd);
     try lib.io.write(out, "] > ");
 
 }
@@ -137,6 +266,25 @@ fn report_parse_error(out: *lib.stream.Stream, failure: anyerror) !void {
     };
 
     try lib.io.writeln(out, message);
+
+}
+
+fn report_command_error(out: *lib.stream.Stream, failure: anyerror) void {
+
+    const message = switch (failure) {
+
+        error.NotFound => "command not found",
+        error.NoMemory => "out of memory",
+        error.Gone => "service unavailable",
+
+        else => "command failed",
+
+    };
+
+    lib.io.write(out, name) catch {};
+    lib.io.write(out, ": ") catch {};
+    lib.io.write(out, message) catch {};
+    lib.io.write(out, "\n") catch {};
 
 }
 
@@ -223,9 +371,17 @@ fn run_builtin(stage: *const Stage, out: *lib.stream.Stream) !bool {
 
     }
 
+    if (equals(command, "cd")) {
+
+        try change_directory(stage, out);
+
+        return true;
+
+    }
+
     if (equals(command, "location")) {
 
-        try lib.io.writeln(out, root_dir);
+        try lib.io.writeln(out, cwd);
 
         return true;
 
@@ -242,7 +398,67 @@ fn run_builtin(stage: *const Stage, out: *lib.stream.Stream) !bool {
 
 }
 
+// cd resolves its target against the current directory, then confirms it is a directory before adopting it.
+
+fn change_directory(stage: *const Stage, out: *lib.stream.Stream) !void {
+
+    const target = if (stage.argc > 1) stage.argv[1] else home_dir;
+
+    const client = if (files) |*handle| handle else {
+
+        try lib.io.writeln(out, "cd: filesystem unavailable");
+        return;
+
+    };
+
+    var buffer: [max_path]u8 = undefined;
+
+    const absolute = lib.fs.canonicalize(cwd, target, &buffer) catch {
+
+        try lib.io.print(out, "cd: {s}: invalid path\n", .{target});
+        return;
+
+    };
+
+    const info = client.stat(absolute) catch |failure| {
+
+        try lib.io.print(out, "cd: {s}: {s}\n", .{ target, lib.fs.describe(failure) });
+        return;
+
+    };
+
+    if (info.kind != proto.filesystem.kind_directory) {
+
+        try lib.io.print(out, "cd: {s}: not a directory\n", .{target});
+        return;
+
+    }
+
+    set_cwd(absolute);
+
+}
+
 fn run_pipeline(pipeline: *const Pipeline) !void {
+
+    // Resolve every stage before spawning any: a missing program aborts the whole pipeline cleanly, and no half-wired
+    // pipeline is ever left waiting on a stage that never launched.
+
+    var resolved: [max_stages]Resolved = undefined;
+    var path_storage: [max_stages][max_path]u8 = undefined;
+
+    for (0..pipeline.count) |index| {
+
+        resolved[index] = resolve(pipeline.stages[index].argv[0], &path_storage[index]) orelse {
+
+            const out = try lib.start.stdout();
+
+            try lib.io.print(out, "{s}: {s}: command not found\n", .{ name, pipeline.stages[index].argv[0] });
+
+            return;
+
+        };
+
+    }
 
     var rings: [max_stages - 1]lib.stream.Ring.Pair = undefined;
 
@@ -258,7 +474,7 @@ fn run_pipeline(pipeline: *const Pipeline) !void {
 
     for (0..pipeline.count) |index| {
 
-        _ = try spawn_stage(&pipeline.stages[index], index, pipeline.count, &rings);
+        _ = try spawn_stage(&pipeline.stages[index], resolved[index], index, pipeline.count, &rings);
 
     }
 
@@ -279,9 +495,83 @@ fn run_pipeline(pipeline: *const Pipeline) !void {
 
 }
 
-fn spawn_stage(stage: *const Stage, index: usize, count: usize, rings: *[max_stages - 1]lib.stream.Ring.Pair) !cap.Handle {
+// Find a command: an installed file on the search path (loaded from disk), else a module in the boot bundle. A name
+// with a slash is a path taken relative to the working directory; a bare name is looked up under the programs directory.
 
-    const image = bundle.find(stage.argv[0]) orelse return unknown(stage.argv[0]);
+fn resolve(command: []const u8, path_buffer: *[max_path]u8) ?Resolved {
+
+    if (has_slash(command)) {
+
+        const client = if (files) |*handle| handle else return null;
+        const absolute = lib.fs.canonicalize(cwd, command, path_buffer) catch return null;
+
+        if (is_program_file(client, absolute)) return .{ .disk = absolute };
+
+        return null;
+
+    }
+
+    if (files) |*client| {
+
+        const path = std.fmt.bufPrint(path_buffer, "{s}/{s}", .{ programs_dir, command }) catch return null;
+
+        if (is_program_file(client, path)) return .{ .disk = path };
+
+    }
+
+    if (bundle.find(command)) |image| return .{ .bundled = image };
+
+    return null;
+
+}
+
+fn is_program_file(client: *lib.fs.Client, path: []const u8) bool {
+
+    const info = client.stat(path) catch return false;
+
+    return info.kind == proto.filesystem.kind_file;
+
+}
+
+// Read an installed executable off the search path into the shared image buffer, ready to hand to the loader.
+
+fn load_from_disk(path: []const u8) ![]const u8 {
+
+    const client = if (files) |*handle| handle else return error.Gone;
+
+    const info = try client.stat(path);
+    const length: usize = @intCast(info.length);
+
+    if (length > load_buffer.len) return error.NoMemory;
+
+    const file = try client.open_path(path, 0);
+    defer client.close_file(file) catch {};
+
+    var offset: usize = 0;
+
+    while (offset < length) {
+
+        const read = try client.read(file, offset, load_buffer[offset..length]);
+
+        if (read == 0) break;
+
+        offset += read;
+
+    }
+
+    return load_buffer[0..offset];
+
+}
+
+fn spawn_stage(stage: *const Stage, source: Resolved, index: usize, count: usize, rings: *[max_stages - 1]lib.stream.Ring.Pair) !cap.Handle {
+
+    const image = switch (source) {
+
+        .disk => |path| try load_from_disk(path),
+        .bundled => |bytes| bytes,
+
+    };
+
     const memory = try sys.create(.memory_authority, child_budget, cap.memory);
     const init_endpoint = try sys.create(.endpoint, 0, 0);
     const report = try sys.copy(supervisor, @intCast(index + 1));
@@ -325,21 +615,15 @@ fn spawn_stage(stage: *const Stage, index: usize, count: usize, rings: *[max_sta
         .grants = grants[0..grant_count],
         .flags = flags,
         .data5 = machine_core_count,
+        .cwd = cwd,
 
     });
 
 }
 
-fn unknown(command: []const u8) error{NotFound} {
+fn has_slash(command: []const u8) bool {
 
-    const out = lib.start.stdout() catch return error.NotFound;
-
-    lib.io.write(out, name) catch {};
-    lib.io.write(out, ": unknown command: ") catch {};
-    lib.io.write(out, command) catch {};
-    lib.io.write(out, "\n") catch {};
-
-    return error.NotFound;
+    return std.mem.indexOfScalar(u8, command, '/') != null;
 
 }
 

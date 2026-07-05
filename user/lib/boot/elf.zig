@@ -47,6 +47,9 @@ pub const SpawnArgs = struct {
     data4: u64 = 0,
     data5: u64 = 0,
 
+    // The spawner's working directory, which the child's runtime resolves relative paths against (07-userspace-ddd.md Section 8).
+    cwd: []const u8 = "/",
+
 };
 
 pub fn load(image: []const u8, authority: Handle) Error!Loaded {
@@ -141,7 +144,7 @@ fn image_span(image: []const u8, program_header_offset: usize, program_header_si
 pub fn spawn_program(args: SpawnArgs) Error!Handle {
 
     const loaded = try load(args.image, args.authority);
-    const init = try build_args(args.authority, args.args);
+    const init = try build_args(args.authority, args.args, args.cwd);
     const child = try sys.spawn(loaded.space, loaded.entry, loaded.stack, args.grants);
 
     var message = ipc.Message.zeroed;
@@ -168,9 +171,12 @@ const PackedArgs = struct {
 
 };
 
-fn build_args(authority: Handle, args: []const []const u8) Error!PackedArgs {
+// argv rides as `argc` NUL-terminated strings; the working directory follows as one more trailing string, so no
+// init data-word is spent on it (07-userspace-ddd.md Section 3.3).
 
-    var length: usize = 0;
+fn build_args(authority: Handle, args: []const []const u8, cwd: []const u8) Error!PackedArgs {
+
+    var length: usize = cwd.len + 1;
 
     for (args) |arg| {
 
@@ -192,6 +198,11 @@ fn build_args(authority: Handle, args: []const []const u8) Error!PackedArgs {
         cursor += 1;
 
     }
+
+    @memcpy(bytes[cursor .. cursor + cwd.len], cwd);
+    cursor += cwd.len;
+    bytes[cursor] = 0;
+    cursor += 1;
 
     try sys.unmap(cap.self_space, base);
 

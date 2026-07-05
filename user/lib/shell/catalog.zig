@@ -15,6 +15,7 @@ pub const builtins = [_]Entry{
     .{ .name = "help", .description = "List available commands" },
     .{ .name = "about", .description = "About GraniteOS" },
     .{ .name = "clear", .description = "Clear the terminal screen" },
+    .{ .name = "cd", .description = "Change the working directory" },
     .{ .name = "location", .description = "Print the current directory" },
     .{ .name = "exit", .description = "Relaunch Marble" },
 

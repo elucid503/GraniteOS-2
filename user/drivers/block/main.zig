@@ -57,8 +57,6 @@ const queue_size = 8;
 
 const descriptor_next: u16 = 1;
 const descriptor_write: u16 = 2;
-const avail_no_interrupt: u16 = 1;
-
 const Descriptor = extern struct {
 
     addr: u64,
@@ -175,7 +173,7 @@ fn run() !void {
     @memset(dma_bytes[0 .. dma_pages * page_size], 0);
 
     const avail: *volatile Avail = @ptrFromInt(dma_base + avail_offset);
-    avail.flags = avail_no_interrupt;
+    avail.flags = 0;
 
     try init_device();
 
@@ -378,24 +376,23 @@ fn transfer(kind: u32, sector: u64) i64 {
 
     const used: *volatile Used = @ptrFromInt(dma_base + used_offset);
 
-    var polls: usize = 0;
-
-    while (polls < 1_000_000) : (polls += 1) {
+    while (true) {
 
         barrier();
 
-        if (used.idx == last_used) continue;
+        if (used.idx != last_used) {
 
-        last_used = used.idx;
+            last_used = used.idx;
+            acknowledge_device_status();
+
+            return if (status_byte.* == 0) 0 else -7;
+
+        }
+
         acknowledge_device_status();
-
-        return if (status_byte.* == 0) 0 else -7;
+        sys.yield();
 
     }
-
-    acknowledge_device_status();
-
-    return -7;
 
 }
 

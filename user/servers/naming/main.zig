@@ -95,6 +95,14 @@ const Table = struct {
 
 var table: Table = .{};
 
+// Every lookup hands back a distinctly badged copy of the service endpoint, so badge-keyed servers can tell their
+// clients apart (05-server-protocol.md). Minting starts above the low badges Flint and Marble assign by hand in their
+// grant lists, so a granted session and a looked-up one never collide on the same server.
+
+const first_minted_badge: u64 = 64;
+
+var next_badge: u64 = first_minted_badge;
+
 pub fn main(_: []const []const u8) u8 {
 
     ipc.serve(cap.server.endpoint, dispatch);
@@ -145,7 +153,12 @@ fn lookup(in: *const Message, out: *Message) i64 {
     const name = decode_name(in, &name_buffer) orelse return -7;
     const endpoint = table.lookup(name) orelse return -6;
 
-    out.handles[0] = .{ .handle = endpoint, .move = false };
+    next_badge += 1;
+    const badged = sys.copy(endpoint, next_badge) catch return -3;
+
+    // move: the minted copy is a throwaway that belongs to the caller, so it must not linger in this table.
+
+    out.handles[0] = .{ .handle = badged, .move = true };
     out.handle_count = 1;
 
     return 0;

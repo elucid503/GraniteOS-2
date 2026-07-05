@@ -18,8 +18,87 @@ const path_offset = 0;
 const path_capacity = 4096;
 const payload_offset = 4096;
 
+// Canonical paths are bounded by the server's own path limit (servers/filesystem/main.zig max_path).
+const max_abs = 512;
+
 /// The largest span one read/write/list call can move through the session buffer.
 pub const payload_capacity = 4096;
+
+/// Resolve `path` against absolute `base`, collapsing "." and ".." into a canonical absolute path written to `out`.
+/// A leading "/" makes `path` absolute; otherwise it extends `base`. The filesystem server itself is path-stateless,
+/// so this is where a client's working directory (07-userspace-ddd.md Section 8) is applied.
+pub fn canonicalize(base: []const u8, path: []const u8, out: []u8) Error![]const u8 {
+
+    if (path.len == 0) return error.Invalid;
+
+    var length: usize = 0;
+
+    if (path[0] != '/') {
+
+        var seed = base;
+
+        if (seed.len > 0 and seed[seed.len - 1] == '/') seed = seed[0 .. seed.len - 1];
+
+        if (seed.len > 0) {
+
+            if (seed.len > out.len) return error.Invalid;
+
+            @memcpy(out[0..seed.len], seed);
+            length = seed.len;
+
+        }
+
+    }
+
+    var components = std.mem.tokenizeScalar(u8, path, '/');
+
+    while (components.next()) |component| {
+
+        if (component.len == 1 and component[0] == '.') continue;
+
+        if (component.len == 2 and component[0] == '.' and component[1] == '.') {
+
+            length = pop_component(out[0..length]);
+            continue;
+
+        }
+
+        if (length + 1 + component.len > out.len) return error.Invalid;
+
+        out[length] = '/';
+        length += 1;
+
+        @memcpy(out[length .. length + component.len], component);
+        length += component.len;
+
+    }
+
+    if (length == 0) {
+
+        out[0] = '/';
+        return out[0..1];
+
+    }
+
+    return out[0..length];
+
+}
+
+fn pop_component(path: []const u8) usize {
+
+    var index = path.len;
+
+    while (index > 0) {
+
+        index -= 1;
+
+        if (path[index] == '/') return index;
+
+    }
+
+    return 0;
+
+}
 
 const builtin = @import("builtin");
 
@@ -85,6 +164,9 @@ pub const Client = struct {
 
     base: usize,
 
+    // The working directory relative paths resolve against, taken from the runtime's init message.
+    cwd: []const u8,
+
     /// Resolve the "filesystem" service through the name service and open a session with it.
     pub fn connect(authority: Handle) Error!Client {
 
@@ -110,6 +192,8 @@ pub const Client = struct {
             .buffer = buffer,
 
             .base = base,
+
+            .cwd = start.cwd(),
 
         };
 
@@ -172,15 +256,20 @@ pub const Client = struct {
 
     pub fn rename(self: *Client, old: []const u8, new: []const u8) Error!void {
 
-        if (old.len == 0 or new.len == 0) return error.Invalid;
-        if (old.len + new.len > path_capacity) return error.Invalid;
+        var old_scratch: [max_abs]u8 = undefined;
+        var new_scratch: [max_abs]u8 = undefined;
+
+        const from = try canonicalize(self.cwd, old, &old_scratch);
+        const to = try canonicalize(self.cwd, new, &new_scratch);
+
+        if (from.len + to.len > path_capacity) return error.Invalid;
 
         const bytes: [*]u8 = @ptrFromInt(self.base + path_offset);
 
-        @memcpy(bytes[0..old.len], old);
-        @memcpy(bytes[old.len .. old.len + new.len], new);
+        @memcpy(bytes[0..from.len], from);
+        @memcpy(bytes[from.len .. from.len + to.len], to);
 
-        _ = try ipc.request(self.endpoint, proto.filesystem.rename, &.{ path_offset, old.len, path_offset + old.len, new.len }, &.{});
+        _ = try ipc.request(self.endpoint, proto.filesystem.rename, &.{ path_offset, from.len, path_offset + from.len, to.len }, &.{});
 
     }
 
@@ -234,16 +323,17 @@ pub const Client = struct {
 
     fn put_path(self: *Client, path: []const u8) Error!Span {
 
-        if (path.len == 0 or path.len > path_capacity) return error.Invalid;
+        var scratch: [max_abs]u8 = undefined;
+        const absolute = try canonicalize(self.cwd, path, &scratch);
 
         const bytes: [*]u8 = @ptrFromInt(self.base + path_offset);
 
-        @memcpy(bytes[0..path.len], path);
+        @memcpy(bytes[0..absolute.len], absolute);
 
         return .{
 
             .offset = path_offset,
-            .length = path.len,
+            .length = absolute.len,
 
         };
 

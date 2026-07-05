@@ -30,6 +30,12 @@ pub fn word(_: usize) u64 {
 
 }
 
+pub fn cwd() []const u8 {
+
+    return "/";
+
+}
+
 pub fn stdin() sys.Error!stream.Stream {
 
     return error.Invalid;
