@@ -103,6 +103,13 @@ pub fn enable_boot_mapping(dtb: usize) void {
 
 }
 
+/// Switch a secondary core's MMU on over the tables the primary already built; runs before `main_secondary`.
+pub fn enable_secondary() void {
+
+    activate(@intFromPtr(&level0_table));
+
+}
+
 // Map the 1 GiB block holding `address` as normal cacheable memory, executable at EL1 (UXN keeps EL0 out).
 
 fn map_normal(address: usize) void {
@@ -272,11 +279,14 @@ pub fn activate_space(root: PhysAddr) void {
 
 }
 
+// The inner-shareable (`is`) TLBI broadcasts to every core, so an unmap on one core is the cross-core
+// TLB shootdown (06-kernel-ddd.md Section 16.2) with no IPI round-trip.
+
 pub fn flush_tlb_page(va: VirtAddr) void {
 
     asm volatile (
         \\ dsb ishst
-        \\ tlbi vaae1, %[page]
+        \\ tlbi vaae1is, %[page]
         \\ dsb ish
         \\ isb
         :
@@ -303,7 +313,7 @@ pub fn map_ram(ranges: []const frames.MemoryRange) void {
 
     asm volatile (
         \\ dsb ish
-        \\ tlbi vmalle1
+        \\ tlbi vmalle1is
         \\ dsb ish
         \\ isb
         ::: .{ .memory = true });

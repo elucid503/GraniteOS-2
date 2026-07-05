@@ -1,8 +1,11 @@
 // IPC transfer (06-kernel-ddd.md Section 9): the synchronous rendezvous behind send/receive/call/reply.
+// Queue and thread-state manipulation happens under the kernel-wide IPC lock, released before any switch;
+// a blocking thread marks its context stale first, so a cross-core waker cannot run it mid-switch.
 
 const object = @import("../object/object.zig");
 const arch = @import("../arch/arch.zig");
 const scheduler = @import("../sched/scheduler.zig");
+const ipc_sync = @import("../sync/ipc.zig");
 
 const Thread = @import("../object/thread.zig").Thread;
 const Endpoint = @import("../object/endpoint.zig").Endpoint;
@@ -21,11 +24,23 @@ pub fn send(from: *Thread, endpoint: *Endpoint) Error!void {
 
     const core = scheduler.current_core();
 
+    ipc_sync.lock.lock();
+
     if (endpoint.receivers.pop()) |receiver| {
 
-        try deliver(from, receiver, false);
+        deliver(from, receiver, false) catch |err| {
+
+            endpoint.receivers.push(receiver);
+            ipc_sync.lock.unlock();
+
+            return err;
+
+        };
+
         receiver.observed_badge = from.send_badge;
         scheduler.unblock(core, receiver);
+
+        ipc_sync.lock.unlock();
 
         return;
 
@@ -34,9 +49,13 @@ pub fn send(from: *Thread, endpoint: *Endpoint) Error!void {
     from.is_call = false;
     from.ipc_aborted = false;
     from.state = .blocked_send;
+    from.blocked_on = &endpoint.header;
+    scheduler.defer_dispatch(from);
     endpoint.senders.push(from);
 
-    scheduler.block(core, from, &endpoint.header);
+    ipc_sync.lock.unlock();
+
+    scheduler.block(core, from);
 
     if (from.ipc_aborted) {
 
@@ -55,26 +74,46 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
 
     const core = scheduler.current_core();
 
+    ipc_sync.lock.lock();
+
     from.is_call = true;
     from.awaiting_reply = true;
     from.ipc_aborted = false;
 
     if (endpoint.receivers.pop()) |receiver| {
 
-        try deliver(from, receiver, true);
+        deliver(from, receiver, true) catch |err| {
+
+            endpoint.receivers.push(receiver);
+            from.awaiting_reply = false;
+            ipc_sync.lock.unlock();
+
+            return err;
+
+        };
+
         receiver.observed_badge = from.send_badge;
+        receiver.blocked_on = null;
 
         from.state = .blocked_receive;
         from.blocked_on = &endpoint.header;
+        scheduler.defer_dispatch(from);
+        scheduler.donate(from, receiver);
+
+        ipc_sync.lock.unlock();
 
         scheduler.hand_off(from, receiver);
 
     } else {
 
         from.state = .blocked_send;
+        from.blocked_on = &endpoint.header;
+        scheduler.defer_dispatch(from);
         endpoint.senders.push(from);
 
-        scheduler.block(core, from, &endpoint.header);
+        ipc_sync.lock.unlock();
+
+        scheduler.block(core, from);
 
     }
 
@@ -99,6 +138,8 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
     const core = scheduler.current_core();
 
+    ipc_sync.lock.lock();
+
     // The first receive on an endpoint registers the thread as one of its servers (06-kernel-ddd.md Section 9).
 
     if (into.serving == null) {
@@ -110,12 +151,31 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
     if (endpoint.senders.pop()) |sender| {
 
-        try deliver(sender, into, sender.is_call);
+        deliver(sender, into, sender.is_call) catch |err| {
+
+            endpoint.senders.push(sender);
+            ipc_sync.lock.unlock();
+
+            return err;
+
+        };
+
         into.observed_badge = sender.send_badge;
 
-        // A plain sender completes once its message is taken; a caller stays blocked for its reply.
+        // A plain sender completes once its message is taken; a caller stays blocked for its reply,
+        // lending this server its scheduling until then (06-kernel-ddd.md Section 10 donation).
 
-        if (!sender.is_call) scheduler.unblock(core, sender);
+        if (sender.is_call) {
+
+            scheduler.donate(sender, into);
+
+        } else {
+
+            scheduler.unblock(core, sender);
+
+        }
+
+        ipc_sync.lock.unlock();
 
         return into.observed_badge;
 
@@ -128,6 +188,9 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
         if (notification.take_pending()) |bits| {
 
             into.notify_bits = bits;
+
+            ipc_sync.lock.unlock();
+
             return notification_wake;
 
         }
@@ -136,9 +199,13 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
     into.woke_on_notification = false;
     into.state = .blocked_receive;
+    into.blocked_on = &endpoint.header;
+    scheduler.defer_dispatch(into);
     endpoint.receivers.push(into);
 
-    scheduler.block(core, into, &endpoint.header);
+    ipc_sync.lock.unlock();
+
+    scheduler.block(core, into);
 
     if (into.woke_on_notification) {
 
@@ -151,7 +218,8 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
 }
 
-/// Reply: answer the caller named by the one-shot `reply_handle`, then wake it. `from.staged` holds the reply.
+/// Reply: answer the caller named by the one-shot `reply_handle`, settle the donated scheduling, and switch
+/// straight back to the caller (06-kernel-ddd.md Section 9). `from.staged` holds the reply.
 pub fn reply(from: *Thread, reply_handle: Handle) Error!void {
 
     const saved = arch.disable_interrupts();
@@ -159,15 +227,34 @@ pub fn reply(from: *Thread, reply_handle: Handle) Error!void {
 
     const caller = try from.process.handles.resolve_as(reply_handle, .thread);
 
-    if (!caller.awaiting_reply) return error.Invalid;
+    ipc_sync.lock.lock();
 
-    try deliver(from, caller, false);
+    if (!caller.awaiting_reply) {
+
+        ipc_sync.lock.unlock();
+
+        return error.Invalid;
+
+    }
+
+    deliver(from, caller, false) catch |err| {
+
+        ipc_sync.lock.unlock();
+
+        return err;
+
+    };
 
     caller.awaiting_reply = false;
+    caller.blocked_on = null;
     from.owes_reply_to = null;
+    scheduler.settle_donation(from, caller);
+
+    ipc_sync.lock.unlock();
+
     from.process.handles.close(reply_handle) catch {};
 
-    scheduler.unblock(scheduler.current_core(), caller);
+    scheduler.hand_back(from, caller);
 
 }
 
@@ -358,7 +445,7 @@ fn ipc_pool(pages: usize) []u8 {
     thread_module.init();
     endpoint_module.init();
     notification_module.init();
-    scheduler.init();
+    scheduler.init(1);
 
     return pool;
 

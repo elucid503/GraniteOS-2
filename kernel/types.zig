@@ -11,3 +11,22 @@ pub const IntctrlWindows = struct {
     cpu_interface: PhysAddr,
 
 };
+
+// How firmware wants power calls made (PSCI conduit on aarch64); discovered from the DTB's /psci node.
+
+pub const PowerMethod = enum {
+
+    hvc,
+    smc,
+
+};
+
+// What a secondary core needs before it can run Zig; the primary fills one per core and passes its
+// physical address through `start_core` as the PSCI context argument.
+
+pub const BootRecord = extern struct {
+
+    stack_top: u64,
+    core_id: u64,
+
+};

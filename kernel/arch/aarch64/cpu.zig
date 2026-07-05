@@ -115,6 +115,20 @@ pub fn halt() noreturn {
 
 }
 
+/// Park this core quietly (the panic halt IPI): mask everything and wait, with no semihosting exit,
+/// so the panicking core keeps the console and controls the QEMU exit in test builds.
+pub fn park() noreturn {
+
+    asm volatile ("msr daifset, #0xf");
+
+    while (true) {
+
+        asm volatile ("wfe");
+
+    }
+
+}
+
 // Angel SYS_EXIT semihosting call: with `-semihosting`, QEMU exits (0x2_0026 is the required ApplicationExit reason).
 fn semihosting_exit(code: u64) noreturn {
 

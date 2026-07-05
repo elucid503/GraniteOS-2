@@ -19,6 +19,12 @@ pub const Machine = struct {
     // The initrd span from /chosen (QEMU -initrd): the boot modules the hand-off turns into Regions.
     initrd: ?MemoryRange,
 
+    // Each CPU node's `reg` (its MPIDR affinity), the PSCI CPU_ON targets for secondary bring-up (M8).
+    cpus: []const u64,
+
+    // The PSCI conduit from /psci; null means no firmware power control (single-core boot).
+    power: ?types.PowerMethod,
+
 };
 
 const magic = 0xd00dfeed;
@@ -38,8 +44,8 @@ const token_end = 9;
 
 const max_depth = 32;
 
-/// Walk the device tree at `dtb`, filling `memory_out` with the RAM banks and counting CPUs. Big-endian throughout.
-pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
+/// Walk the device tree at `dtb`, filling `memory_out` with the RAM banks and `cpu_out` with each core's MPIDR. Big-endian throughout.
+pub fn parse(dtb: usize, memory_out: []MemoryRange, cpu_out: []u64) Error!Machine {
 
     if (read_u32(dtb, 0) != magic) return error.Invalid;
 
@@ -63,6 +69,7 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
     var memory_count: usize = 0;
     var core_count: usize = 0;
     var intctrl: ?IntctrlWindows = null;
+    var power: ?types.PowerMethod = null;
     var initrd_start: u64 = 0;
     var initrd_end: u64 = 0;
 
@@ -132,6 +139,14 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
 
                     memory_count += read_memory(dtb, value, length, address_cells[depth - 1], size_cells[depth - 1], memory_out[memory_count..]);
 
+                } else if (equals(property, "reg") and starts_with(names[depth], "cpu@") and equals(names[depth - 1], "cpus")) {
+
+                    if (core_count <= cpu_out.len and core_count > 0) {
+
+                        cpu_out[core_count - 1] = read_cells(dtb, value, address_cells[depth - 1]);
+
+                    }
+
                 } else if (equals(property, "reg")) {
 
                     reg_offset[depth] = value;
@@ -139,6 +154,10 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
                 } else if (equals(property, "compatible") and compatible_lists(dtb, value, length, "arm,cortex-a15-gic")) {
 
                     is_gic[depth] = true;
+
+                } else if (equals(property, "method") and equals(names[depth], "psci")) {
+
+                    power = if (equals(cstring(dtb, value), "smc")) .smc else .hvc;
 
                 } else if (equals(property, "linux,initrd-start") and equals(names[depth], "chosen")) {
 
@@ -168,7 +187,17 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange) Error!Machine {
 
     } else null;
 
-    return .{ .memory = memory_out[0..memory_count], .core_count = core_count, .intctrl = intctrl, .initrd = initrd };
+    return .{
+
+        .memory = memory_out[0..memory_count],
+        .core_count = core_count,
+        .intctrl = intctrl,
+        .initrd = initrd,
+
+        .cpus = cpu_out[0..@min(core_count, cpu_out.len)],
+        .power = power,
+
+    };
 
 }
 
@@ -311,7 +340,8 @@ const fixture = @embedFile("virt.dtb"); // A real QEMU `virt` tree dumped with `
 test "parses the QEMU virt memory bank and core count" {
 
     var memory: [8]MemoryRange = undefined;
-    const machine = try parse(@intFromPtr(fixture), &memory);
+    var cpus: [8]u64 = undefined;
+    const machine = try parse(@intFromPtr(fixture), &memory, &cpus);
 
     try testing.expectEqual(@as(usize, 4), machine.core_count);
     try testing.expectEqual(@as(usize, 1), machine.memory.len);
@@ -323,7 +353,8 @@ test "parses the QEMU virt memory bank and core count" {
 test "discovers the GICv2 windows" {
 
     var memory: [8]MemoryRange = undefined;
-    const machine = try parse(@intFromPtr(fixture), &memory);
+    var cpus: [8]u64 = undefined;
+    const machine = try parse(@intFromPtr(fixture), &memory, &cpus);
 
     const intctrl = machine.intctrl.?;
 
@@ -332,10 +363,29 @@ test "discovers the GICv2 windows" {
 
 }
 
+test "collects each CPU's MPIDR and the PSCI conduit" {
+
+    var memory: [8]MemoryRange = undefined;
+    var cpus: [8]u64 = undefined;
+    const machine = try parse(@intFromPtr(fixture), &memory, &cpus);
+
+    try testing.expectEqual(@as(usize, 4), machine.cpus.len);
+
+    for (machine.cpus, 0..) |mpidr, index| {
+
+        try testing.expectEqual(@as(u64, index), mpidr);
+
+    }
+
+    try testing.expectEqual(types.PowerMethod.hvc, machine.power.?);
+
+}
+
 test "a tree without /chosen initrd properties reports no initrd" {
 
     var memory: [8]MemoryRange = undefined;
-    const machine = try parse(@intFromPtr(fixture), &memory);
+    var cpus: [8]u64 = undefined;
+    const machine = try parse(@intFromPtr(fixture), &memory, &cpus);
 
     try testing.expectEqual(@as(?MemoryRange, null), machine.initrd);
 
@@ -345,7 +395,8 @@ test "rejects a tree without the magic" {
 
     var bytes = [_]u8{0} ** 64;
     var memory: [4]MemoryRange = undefined;
+    var cpus: [4]u64 = undefined;
 
-    try testing.expectError(error.Invalid, parse(@intFromPtr(&bytes), &memory));
+    try testing.expectError(error.Invalid, parse(@intFromPtr(&bytes), &memory, &cpus));
 
 }

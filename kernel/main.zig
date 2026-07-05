@@ -9,6 +9,7 @@ const panic_path = @import("debug/panic.zig");
 
 const dtb = @import("boot/dtb.zig");
 const handoff = @import("boot/handoff.zig");
+const smp = @import("boot/smp.zig");
 const frames = @import("memory/frames.zig");
 const region = @import("memory/region.zig");
 const address_space = @import("memory/address_space.zig");
@@ -36,7 +37,8 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
     console.debug_print("GraniteOS-2 (aarch64 virt)\n\n");
 
     var memory_banks: [8]dtb.MemoryRange = undefined;
-    const machine = dtb.parse(dtb_address, &memory_banks) catch {
+    var cpu_ids: [config.max_cores]u64 = undefined;
+    const machine = dtb.parse(dtb_address, &memory_banks, &cpu_ids) catch {
 
         panic_path.panic("dtb: could not parse the device tree", null);
 
@@ -65,9 +67,11 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
     interrupt_authority.init();
     device_authority.init();
     dma_authority.init();
-    scheduler.init();
+    scheduler.init(machine.core_count);
 
     console.debug_print("Scheduler: objects and runqueues ... Loaded\n");
+
+    report_smp(smp.start(machine));
 
     if (machine.initrd) |initrd| {
 
@@ -86,6 +90,17 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
 
     }
 
+    scheduler.idle();
+
+}
+
+/// Secondary-core entry after `start.S` and the arch boot bridge (MMU already on).
+pub fn main_secondary(core_id: u32) noreturn {
+
+    arch.intctrl_init_secondary();
+    arch.timer_init_secondary();
+
+    scheduler.register_core(core_id);
     scheduler.idle();
 
 }
@@ -144,6 +159,23 @@ fn report_machine(machine: dtb.Machine) void {
 
     print_byte_count(total_ram);
     console.debug_print(" RAM ... Loaded\n");
+
+}
+
+fn report_smp(online: usize) void {
+
+    console.debug_print("SMP: ");
+    console.debug_print_dec(online);
+
+    if (online == 1) {
+
+        console.debug_print(" core online ... Loaded\n");
+
+    } else {
+
+        console.debug_print(" cores online ... Loaded\n");
+
+    }
 
 }
 

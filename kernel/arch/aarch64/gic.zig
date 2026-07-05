@@ -10,6 +10,16 @@ const distributor_control = 0x000; // GICD_CTLR
 const set_enable_base = 0x100; // GICD_ISENABLERn
 const clear_enable_base = 0x180; // GICD_ICENABLERn
 const targets_base = 0x800; // GICD_ITARGETSRn (byte per line)
+const software_generate = 0xf00; // GICD_SGIR
+
+// Kernel-internal SGI assignments (06-kernel-ddd.md Section 16.4): software interrupts never reach user space.
+
+pub const sgi_reschedule: u32 = 0;
+pub const sgi_halt: u32 = 1;
+
+// SGI ids occupy INTIDs 0..15.
+
+pub const first_sgi_boundary: u32 = 16;
 
 // Lines below this are per-core (SGIs and PPIs), banked and self-targeted; SPIs need explicit routing.
 
@@ -58,10 +68,39 @@ pub fn init_primary(windows: ?types.IntctrlWindows) void {
 
     distributor_register(distributor_control).* = 1;
 
-    // Accept every priority, then enable signalling to this core.
+    init_secondary();
+
+}
+
+/// Bring up this core's (banked) CPU interface: accept every priority, then enable signalling.
+pub fn init_secondary() void {
 
     cpu_register(priority_mask).* = 0xff;
     cpu_register(cpu_control).* = 1;
+
+}
+
+/// Raise a software-generated interrupt on one peer core.
+pub fn send_sgi(target_core: u32, id: u32) void {
+
+    if (distributor == 0 or target_core >= 8) return;
+
+    // Publish everything this IPI is announcing before the device write raises it.
+
+    asm volatile ("dsb ishst" ::: .{ .memory = true });
+
+    distributor_register(software_generate).* = (@as(u32, 1) << @intCast(16 + target_core)) | id;
+
+}
+
+/// Raise a software-generated interrupt on every core but this one (the panic halt path).
+pub fn send_sgi_others(id: u32) void {
+
+    if (distributor == 0) return;
+
+    asm volatile ("dsb ishst" ::: .{ .memory = true });
+
+    distributor_register(software_generate).* = (@as(u32, 0b01) << 24) | id;
 
 }
 
@@ -84,7 +123,7 @@ pub fn complete(irq: u32) void {
 
 pub fn enable_line(irq: u32) void {
 
-    // SPIs reset with no target core; route them to core 0 (the only core until M8).
+    // SPIs reset with no target core; route them all to core 0, whose drivers wake there (wakeup locality).
 
     if (irq >= first_shared_line) {
 

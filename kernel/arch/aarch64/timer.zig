@@ -10,6 +10,13 @@ var frequency: u64 = 0;
 
 pub fn init() void {
 
+    init_secondary();
+
+}
+
+/// The generic timer is per-core, so every core runs the same bring-up; reading CNTFRQ again is idempotent.
+pub fn init_secondary() void {
+
     frequency = asm volatile ("mrs %[out], cntfrq_el0"
 
         : [out] "=r" (-> u64),

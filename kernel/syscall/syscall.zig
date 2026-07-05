@@ -435,7 +435,7 @@ fn wait(notification_raw: u64) Error!u64 {
 
     if (notification.poll_or_block(waiter)) |bits| return bits;
 
-    scheduler.block(scheduler.current_core(), waiter, &notification.header);
+    scheduler.block(scheduler.current_core(), waiter);
 
     return waiter.notify_bits;
 

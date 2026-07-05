@@ -3,6 +3,7 @@
 const config = @import("../config.zig");
 const frames = @import("../memory/frames.zig");
 const object = @import("../object/object.zig");
+const spinlock = @import("../sync/spinlock.zig");
 
 const Handle = @import("handle.zig").Handle;
 const Error = @import("../error.zig").Error;
@@ -21,12 +22,16 @@ pub const HandleTable = struct {
 
     entries: []Entry,
 
+    // Worker threads of one process share this table, so every operation takes its lock (06-kernel-ddd.md Section 15).
+    lock: spinlock.SpinLock,
+
     pub fn init(self: *HandleTable) Error!void {
 
         const frame = try frames.alloc();
         const backing: [*]Entry = @ptrFromInt(frame);
 
         self.entries = backing[0 .. page_size / @sizeOf(Entry)];
+        self.lock = .{};
 
         for (self.entries) |*entry| {
 
@@ -36,7 +41,7 @@ pub const HandleTable = struct {
 
     }
 
-    /// Close every live handle, then return the backing frame.
+    /// Close every live handle, then return the backing frame. Runs at the process's last release, so no lock races it.
     pub fn deinit(self: *HandleTable) void {
 
         for (self.entries) |*entry| {
@@ -70,6 +75,9 @@ pub const HandleTable = struct {
 
     pub fn resolve(self: *HandleTable, handle: Handle) Error!*object.Object {
 
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
+
         const entry = try self.entry_of(handle);
         return entry.target.?;
 
@@ -88,6 +96,9 @@ pub const HandleTable = struct {
 
     pub fn badge_of(self: *HandleTable, handle: Handle) Error!u64 {
 
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
+
         const entry = try self.entry_of(handle);
         return entry.badge;
 
@@ -96,29 +107,53 @@ pub const HandleTable = struct {
     /// Duplicate a handle; a non-zero badge mints a badged endpoint copy (03-syscall-abi.md Handles).
     pub fn copy(self: *HandleTable, handle: Handle, badge: u64) Error!Handle {
 
-        const target = try self.resolve(handle);
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
+
+        const entry = try self.entry_of(handle);
+        const target = entry.target.?;
 
         if (badge != 0 and target.kind != .endpoint) return error.Invalid;
 
-        return self.insert_with_badge(target, badge);
+        return self.insert_locked(target, badge);
 
     }
 
     /// Drop this table's reference; the object is freed at its last close.
     pub fn close(self: *HandleTable, handle: Handle) Error!void {
 
-        const entry = try self.entry_of(handle);
-        const target = entry.target.?;
+        const target = blk: {
 
-        entry.target = null;
-        entry.badge = 0;
-        entry.generation +%= 1;
+            const saved = self.lock.acquire();
+            defer self.lock.release(saved);
+
+            const entry = try self.entry_of(handle);
+            const held = entry.target.?;
+
+            entry.target = null;
+            entry.badge = 0;
+            entry.generation +%= 1;
+
+            break :blk held;
+
+        };
+
+        // The release (and a possible destroy chain) runs outside the lock, so teardown can close other handles.
 
         if (target.release()) object.destroy(target);
 
     }
 
     fn insert_with_badge(self: *HandleTable, target: *object.Object, badge: u64) Error!Handle {
+
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
+
+        return self.insert_locked(target, badge);
+
+    }
+
+    fn insert_locked(self: *HandleTable, target: *object.Object, badge: u64) Error!Handle {
 
         for (self.entries, 0..) |*entry, index| {
 

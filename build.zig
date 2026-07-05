@@ -8,6 +8,7 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
     const test_build = b.option(bool, "test", "Exit QEMU via semihosting on halt/panic") orelse false;
+    const smp = b.option(u64, "smp", "Core count for the QEMU run steps") orelse 4;
 
     const target = b.resolveTargetQuery(.{
 
@@ -21,13 +22,15 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(bool, "test", test_build);
 
+    // The kernel is SMP since M8: single_threaded would let the compiler lower its atomics away.
+
     const kernel_module = b.createModule(.{
 
         .root_source_file = b.path("kernel/main.zig"),
         .target = target,
         .optimize = optimize,
         .code_model = .small,
-        .single_threaded = true,
+        .single_threaded = false,
         .pic = false,
 
     });
@@ -76,6 +79,7 @@ pub fn build(b: *std.Build) void {
     const mkdir = user_program(b, target, optimize, user_lib, "granite-mkdir.elf", "user/programs/fs/mkdir.zig");
     const delete = user_program(b, target, optimize, user_lib, "granite-delete.elf", "user/programs/fs/delete.zig");
     const rename = user_program(b, target, optimize, user_lib, "granite-rename.elf", "user/programs/fs/rename.zig");
+    const stress = user_program(b, target, optimize, user_lib, "granite-stress.elf", "user/programs/common/stress.zig");
 
     const flatten = host_tool(b, "flatten", "tools/flatten.zig");
     const bundle_tool = host_tool(b, "bundle", "tools/bundle.zig");
@@ -104,6 +108,7 @@ pub fn build(b: *std.Build) void {
     add_artifact_module(bundle_run, "mkdir", mkdir);
     add_artifact_module(bundle_run, "delete", delete);
     add_artifact_module(bundle_run, "rename", rename);
+    add_artifact_module(bundle_run, "stress", stress);
 
     b.installArtifact(kernel);
     b.getInstallStep().dependOn(&b.addInstallBinFile(kernel_image, "granite-kernel.bin").step);
@@ -126,6 +131,7 @@ pub fn build(b: *std.Build) void {
         .debug = false,
         .test_build = test_build,
         .disk = .{ .path = disk_path, .prepare = mkdisk_run },
+        .smp = smp,
 
     });
 
@@ -136,6 +142,7 @@ pub fn build(b: *std.Build) void {
         .debug = true,
         .test_build = test_build,
         .disk = .{ .path = disk_path, .prepare = mkdisk_run },
+        .smp = smp,
 
     });
 
@@ -146,6 +153,7 @@ pub fn build(b: *std.Build) void {
         .debug = false,
         .test_build = test_build,
         .disk = null,
+        .smp = smp,
 
     });
 
@@ -156,6 +164,7 @@ pub fn build(b: *std.Build) void {
         .debug = false,
         .test_build = test_build,
         .disk = null,
+        .smp = smp,
 
     });
 
@@ -293,6 +302,7 @@ const QemuStep = struct {
     debug: bool,
     test_build: bool,
     disk: ?QemuDisk,
+    smp: u64,
 
 };
 
@@ -303,7 +313,7 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
         "qemu-system-aarch64",
         "-machine", "virt",
         "-cpu",     "cortex-a57",
-        "-smp",     "1",
+        "-smp",     b.fmt("{d}", .{step.smp}),
         "-m",       "256M",
         "-nographic",
 

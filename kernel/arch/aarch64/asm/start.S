@@ -86,6 +86,42 @@ park_secondary:
     wfe
     b       park_secondary
 
+// PSCI CPU_ON lands secondaries here with the MMU off and a BootRecord's physical address in x0
+// (stack top first, then the core id). Mirror the primary's EL drop and CPU setup, then enter Zig.
+
+.global secondary_start
+
+secondary_start:
+
+    mrs     x1, CurrentEL
+    lsr     x1, x1, #2
+    cmp     x1, #2
+    b.ne    secondary_at_el1
+    bl      drop_to_el1
+
+secondary_at_el1:
+
+    mov     x1, #(3 << 20)
+    msr     cpacr_el1, x1
+    isb
+
+    adrp    x1, vector_table
+    add     x1, x1, :lo12:vector_table
+    msr     vbar_el1, x1
+    isb
+
+    ldr     x1, [x0]
+    mov     sp, x1
+
+    bl      kernel_boot_secondary
+
+    // kernel_boot_secondary is noreturn; guard anyway.
+
+secondary_hang:
+
+    wfe
+    b       secondary_hang
+
 drop_to_el1:
 
     // Drop from EL2 to EL1h, returning (via eret) to this routine's caller.

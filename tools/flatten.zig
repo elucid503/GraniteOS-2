@@ -1,6 +1,4 @@
-// Host tool `flatten <image.elf> <out.bin>`: writes a load-faithful boot image, placing each PT_LOAD segment at its
-// load offset. The image extends to the largest memory size, so NOBITS tails (.bss) become explicit zeros - the
-// Flint is raw-mapped with no loader to zero them (06-kernel-ddd.md Section 13).
+// Host tool `flatten <image.elf> <out.bin>`: writes a load-faithful boot image, placing each PT_LOAD segment at its load offset.
 
 const std = @import("std");
 

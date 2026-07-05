@@ -135,7 +135,7 @@ fn with_pool(pages: usize) []u8 {
     const pool = std.heap.page_allocator.alloc(u8, pages * config.page_size) catch unreachable;
     frames.init(&.{.{ .base = @intFromPtr(pool.ptr), .length = pool.len }}, &.{});
     notification_module.init();
-    scheduler.init();
+    scheduler.init(1);
     init();
     return pool;
 

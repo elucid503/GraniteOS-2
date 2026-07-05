@@ -12,6 +12,7 @@ test {
     _ = @import("boot/bundle.zig");
     _ = @import("cap/handle.zig");
     _ = @import("cap/handle_table.zig");
+    _ = @import("sync/spinlock.zig");
     _ = @import("sched/runqueue.zig");
     _ = @import("sched/scheduler.zig");
     _ = @import("ipc/message.zig");

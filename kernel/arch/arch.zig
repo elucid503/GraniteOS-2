@@ -19,6 +19,7 @@ const mmu = if (is_target) @import("aarch64/mmu.zig") else host;
 const context = if (is_target) @import("aarch64/context.zig") else host;
 const timer = if (is_target) @import("aarch64/timer.zig") else host;
 const gic = if (is_target) @import("aarch64/gic.zig") else host;
+const psci = if (is_target) @import("aarch64/psci.zig") else host;
 
 pub const PhysAddr = types.PhysAddr;
 pub const VirtAddr = types.VirtAddr;
@@ -59,14 +60,50 @@ pub const map_ram = mmu.map_ram;
 // Interrupt controller (GICv2 now; GICv3 is a sibling impl).
 
 pub const intctrl_init_primary = if (is_target) gic.init_primary else host.intctrl_init_primary;
+pub const intctrl_init_secondary = if (is_target) gic.init_secondary else host.intctrl_init_secondary;
 pub const intctrl_enable_line = if (is_target) gic.enable_line else host.intctrl_enable_line;
 pub const intctrl_disable_line = if (is_target) gic.disable_line else host.intctrl_disable_line;
 
 // Timer (monotonic; variable quantum for the MLFQ).
 
 pub const timer_init = if (is_target) timer.init else host.timer_init;
+pub const timer_init_secondary = if (is_target) timer.init_secondary else host.timer_init_secondary;
 pub const now_ns = timer.now_ns;
 pub const arm_deadline = timer.arm_deadline;
+
+// SMP (06-kernel-ddd.md Section 16.2): secondary bring-up and cross-core pokes. Cross-core TLB shootdown
+// needs no call here - the aarch64 impl broadcasts its TLB invalidates (inner-shareable) from map/unmap.
+
+pub const Ipi = enum {
+
+    reschedule,
+    halt,
+
+};
+
+pub const start_core = if (is_target) psci.start_core else host.start_core;
+
+pub fn send_ipi(target_core: u32, kind: Ipi) void {
+
+    if (!is_target) return host.send_ipi(target_core, kind);
+
+    switch (kind) {
+
+        .reschedule => gic.send_sgi(target_core, gic.sgi_reschedule),
+        .halt => gic.send_sgi(target_core, gic.sgi_halt),
+
+    }
+
+}
+
+/// Stop every other core (the panic path); a no-op before the interrupt controller is up.
+pub fn halt_others() void {
+
+    if (!is_target) return host.halt_others();
+
+    gic.send_sgi_others(gic.sgi_halt);
+
+}
 
 // Loads in the boot bridge and trap entry so their exported symbols (`kernel_boot`, `kernel_trap`) link against the assembly.
 

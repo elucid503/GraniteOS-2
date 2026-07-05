@@ -14,16 +14,41 @@ disk="$root/zig-out/m7-disk.img"
 
 rm -f "$disk"
 
+# Input is fed one line at a time with pauses: QEMU's Windows stdio chardev drops any burst past the
+# serial mux buffer (~33 bytes), so a whole session piped at once gets truncated before the guest runs.
+
+feed() {
+
+    sleep 5
+
+    for line in "$@"; do
+
+        # A single line can itself exceed the ~33-byte buffer, so drip it in small chunks the guest can drain.
+        while [ -n "$line" ]; do
+
+            printf '%s' "${line:0:8}"
+            line="${line:8}"
+            sleep 1
+
+        done
+
+        printf '\n'
+        sleep 8
+
+    done
+
+}
+
+# Per-boot QEMU args (e.g. the disk drive) are carried here so boot()'s positional args stay session lines.
+qemu_args=()
+
 boot() {
 
-    local session="$1"
-    shift
-
-    printf '%s' "$session" | timeout 45 qemu-system-aarch64 \
+    feed "$@" | timeout 120 qemu-system-aarch64 \
         -machine virt -cpu cortex-a57 -smp 1 -m 256M -nographic \
         -kernel zig-out/bin/granite-kernel.bin \
         -initrd zig-out/bin/bundle.img \
-        "$@" 2>&1 || true
+        "${qemu_args[@]}" 2>&1 || true
 
 }
 
@@ -50,8 +75,15 @@ check() {
 
 qemu-img create -f raw "$disk" 64M >/dev/null 2>&1 || dd if=/dev/zero of="$disk" bs=1M count=64 status=none
 
-session_one=$'mkdir /docs\nwrite /docs/notes persist-me\necho pipe-write | write /docs/piped\nls /\nls /docs\nview /docs/notes\nview /docs/piped\n'
-first="$(boot "$session_one" "${with_disk[@]}")"
+qemu_args=("${with_disk[@]}")
+first="$(boot \
+    'mkdir /docs' \
+    'write /docs/notes persist-me' \
+    'echo pipe-write | write /docs/piped' \
+    'ls /' \
+    'ls /docs' \
+    'view /docs/notes' \
+    'view /docs/piped')"
 
 echo "$first"
 
@@ -64,8 +96,12 @@ check "pipeline into write worked"     "$first" "pipe-write"
 
 # Boot 2: the same disk mounts (no reformat) and the files are still there.
 
-session_two=$'view /docs/notes\nls /docs\ndelete /docs/piped\nls /docs\n'
-second="$(boot "$session_two" "${with_disk[@]}")"
+qemu_args=("${with_disk[@]}")
+second="$(boot \
+    'view /docs/notes' \
+    'ls /docs' \
+    'delete /docs/piped' \
+    'ls /docs')"
 
 echo "$second"
 
@@ -85,8 +121,10 @@ fi
 
 # Boot 3: no disk at all - the filesystem reports unavailable and the shell still works.
 
-session_three=$'ls /\necho still-works\n'
-third="$(boot "$session_three")"
+qemu_args=()
+third="$(boot \
+    'ls /' \
+    'echo still-works')"
 
 echo "$third"
 

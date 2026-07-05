@@ -1,15 +1,20 @@
-// Buddy physical-frame allocator (06-kernel-ddd.md Section 6.1): single-page and contiguous allocation; per-core magazines deferred.
+// Buddy physical-frame allocator (06-kernel-ddd.md Section 6.1). Single-page alloc/free go through a per-core
+// magazine that refills and drains the buddy pool in batches, so the hot path never touches the global lock;
+// contiguous/DMA allocations and the batch transfers take it.
 
 const std = @import("std");
 
 const config = @import("../config.zig");
 const types = @import("../types.zig");
+const arch = @import("../arch/arch.zig");
+const spinlock = @import("../sync/spinlock.zig");
 
 const Error = @import("../error.zig").Error;
 
 const PhysAddr = types.PhysAddr;
 const page_size = config.page_size;
 const max_order = config.frame_max_order;
+const magazine_capacity = config.frame_magazine;
 
 pub const MemoryRange = struct {
 
@@ -25,6 +30,13 @@ const FreeNode = struct {
 
 };
 
+const Magazine = struct {
+
+    entries: [magazine_capacity]PhysAddr,
+    count: usize,
+
+};
+
 var base: PhysAddr = 0;
 var frame_count: usize = 0;
 
@@ -37,6 +49,12 @@ var free_bits: [max_order + 1][]u8 = undefined;
 var metadata_base: PhysAddr = 0;
 var metadata_pages: usize = 0;
 
+// The global buddy-pool lock; magazines are per-core and touched only with interrupts off.
+
+var pool_lock: spinlock.SpinLock = .{};
+
+var magazines: [config.max_cores]Magazine = undefined;
+
 /// Take ownership of the RAM `ranges`, minus any `reserved` spans (the kernel image, the DTB) and the allocator's own metadata.
 pub fn init(ranges: []const MemoryRange, reserved: []const MemoryRange) void {
 
@@ -45,6 +63,14 @@ pub fn init(ranges: []const MemoryRange, reserved: []const MemoryRange) void {
         head.* = null;
 
     }
+
+    for (&magazines) |*magazine| {
+
+        magazine.count = 0;
+
+    }
+
+    pool_lock = .{};
 
     base = std.mem.alignBackward(PhysAddr, range_low(ranges), page_size);
     const top = std.mem.alignForward(PhysAddr, range_high(ranges), page_size);
@@ -94,21 +120,32 @@ pub fn init(ranges: []const MemoryRange, reserved: []const MemoryRange) void {
 
 }
 
-/// One page.
+/// One page, from this core's magazine (refilled from the buddy pool in batches).
 pub fn alloc() Error!PhysAddr {
 
-    const addr = try split_off(0);
-    free_frames -= 1;
-    return addr;
+    const saved = arch.disable_interrupts();
+    defer arch.restore_interrupts(saved);
+
+    const magazine = &magazines[arch.core_id()];
+
+    if (magazine.count == 0) refill(magazine);
+    if (magazine.count == 0) return error.NoMemory;
+
+    magazine.count -= 1;
+
+    return magazine.entries[magazine.count];
 
 }
 
-/// A physically contiguous, power-of-two-rounded run of `pages`.
+/// A physically contiguous, power-of-two-rounded run of `pages`; always straight from the buddy pool.
 pub fn alloc_contiguous(pages: usize) Error!PhysAddr {
 
     const order = order_for(pages);
 
     if (order > max_order) return error.NoMemory;
+
+    const saved = pool_lock.acquire();
+    defer pool_lock.release(saved);
 
     const addr = try split_off(order);
     free_frames -= @as(usize, 1) << @intCast(order);
@@ -118,14 +155,25 @@ pub fn alloc_contiguous(pages: usize) Error!PhysAddr {
 
 pub fn free(addr: PhysAddr) void {
 
-    merge_and_insert(addr, 0);
-    free_frames += 1;
+    const saved = arch.disable_interrupts();
+    defer arch.restore_interrupts(saved);
+
+    const magazine = &magazines[arch.core_id()];
+
+    if (magazine.count == magazine_capacity) drain(magazine);
+
+    magazine.entries[magazine.count] = addr;
+    magazine.count += 1;
 
 }
 
 pub fn free_contiguous(addr: PhysAddr, pages: usize) void {
 
     const order = order_for(pages);
+
+    const saved = pool_lock.acquire();
+    defer pool_lock.release(saved);
+
     merge_and_insert(addr, order);
     free_frames += @as(usize, 1) << @intCast(order);
 
@@ -133,7 +181,51 @@ pub fn free_contiguous(addr: PhysAddr, pages: usize) void {
 
 pub fn stats() struct { total: usize, free: usize } {
 
-    return .{ .total = total_frames, .free = free_frames };
+    var cached: usize = 0;
+
+    for (&magazines) |*magazine| {
+
+        cached += magazine.count;
+
+    }
+
+    return .{ .total = total_frames, .free = free_frames + cached };
+
+}
+
+// Pull half a magazine's worth of pages from the buddy pool in one lock hold (or whatever remains).
+
+fn refill(magazine: *Magazine) void {
+
+    pool_lock.lock();
+    defer pool_lock.unlock();
+
+    while (magazine.count < magazine_capacity / 2) {
+
+        const addr = split_off(0) catch break;
+
+        free_frames -= 1;
+        magazine.entries[magazine.count] = addr;
+        magazine.count += 1;
+
+    }
+
+}
+
+// Return half the magazine to the buddy pool in one lock hold, where blocks can coalesce again.
+
+fn drain(magazine: *Magazine) void {
+
+    pool_lock.lock();
+    defer pool_lock.unlock();
+
+    while (magazine.count > magazine_capacity / 2) {
+
+        magazine.count -= 1;
+        merge_and_insert(magazine.entries[magazine.count], 0);
+        free_frames += 1;
+
+    }
 
 }
 

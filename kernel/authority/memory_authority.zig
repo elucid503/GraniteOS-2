@@ -56,17 +56,25 @@ pub const MemoryAuthority = struct {
 
     }
 
+    // Budgets are charged from any core holding the authority, so the check-and-add is a compare-exchange loop.
+
     pub fn charge(self: *MemoryAuthority, bytes: usize) Error!void {
 
-        if (self.budget_used + bytes > self.budget_total) return error.NoMemory;
+        var used = @atomicLoad(usize, &self.budget_used, .monotonic);
 
-        self.budget_used += bytes;
+        while (true) {
+
+            if (used + bytes > self.budget_total) return error.NoMemory;
+
+            used = @cmpxchgWeak(usize, &self.budget_used, used, used + bytes, .monotonic, .monotonic) orelse return;
+
+        }
 
     }
 
     pub fn refund(self: *MemoryAuthority, bytes: usize) void {
 
-        self.budget_used -= bytes;
+        _ = @atomicRmw(usize, &self.budget_used, .Sub, bytes, .monotonic);
 
     }
 

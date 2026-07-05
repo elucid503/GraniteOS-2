@@ -4,6 +4,7 @@ const std = @import("std");
 
 const config = @import("../config.zig");
 const frames = @import("frames.zig");
+const spinlock = @import("../sync/spinlock.zig");
 
 const Error = @import("../error.zig").Error;
 
@@ -36,15 +37,22 @@ pub fn Cache(comptime T: type) type {
         // Slabs with at least one free object; a full slab is found again on `free` via the object's frame.
         partial: ?*Slab = null,
 
+        // Caches are shared by every core (06-kernel-ddd.md Section 15).
+        lock: spinlock.SpinLock = .{},
+
         const Self = @This();
 
         pub fn init(self: *Self) void {
 
             self.partial = null;
+            self.lock = .{};
 
         }
 
         pub fn alloc(self: *Self) Error!*T {
+
+            const saved = self.lock.acquire();
+            defer self.lock.release(saved);
 
             if (self.partial == null) try self.grow();
 
@@ -61,6 +69,9 @@ pub fn Cache(comptime T: type) type {
         }
 
         pub fn free(self: *Self, item: *T) void {
+
+            const saved = self.lock.acquire();
+            defer self.lock.release(saved);
 
             const slab: *Slab = @ptrFromInt(@intFromPtr(item) & ~(page_size - 1));
             const was_full = slab.free_list == null;

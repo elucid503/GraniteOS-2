@@ -23,17 +23,18 @@ pub const Object = struct {
     kind: Kind,
     references: u32 = 1,
 
+    // Refcounts are atomic (06-kernel-ddd.md Section 15): handles retain and release from any core.
+
     pub fn retain(self: *Object) void {
 
-        self.references += 1;
+        _ = @atomicRmw(u32, &self.references, .Add, 1, .monotonic);
 
     }
 
     /// Drop a reference; returns true when the last one is gone and the owner should free the object.
     pub fn release(self: *Object) bool {
 
-        self.references -= 1;
-        return self.references == 0;
+        return @atomicRmw(u32, &self.references, .Sub, 1, .acq_rel) == 1;
 
     }
 

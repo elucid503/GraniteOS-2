@@ -13,8 +13,11 @@ pub const FaultInfo = struct {
 
 };
 
-/// The core panic. Prints the message, optional fault registers, and halts.
+/// The core panic. Stops the other cores, prints the message and optional fault registers, and halts.
 pub fn panic(message: []const u8, fault_info: ?FaultInfo) noreturn {
+
+    console.seize_for_panic();
+    arch.halt_others();
 
     console.debug_print("\n\n*** KERNEL PANIC ***\n");
     console.debug_print(message);
@@ -49,6 +52,9 @@ pub fn fault(message: []const u8, info: FaultInfo) noreturn {
 
 /// The signature `std.debug.FullPanic` calls for language-level panics (bounds checks, reached-unreachable, and friends).
 pub fn at(message: []const u8, return_address: ?usize) noreturn {
+
+    console.seize_for_panic();
+    arch.halt_others();
 
     console.debug_print("\n\n*** KERNEL PANIC ***\n");
     console.debug_print(message);

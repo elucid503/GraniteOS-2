@@ -163,6 +163,29 @@ pub fn intctrl_init_primary(windows: ?types.IntctrlWindows) void {
 
 }
 
+pub fn intctrl_init_secondary() void {}
+
+pub fn timer_init_secondary() void {}
+
+pub fn start_core(method: types.PowerMethod, target_mpidr: u64, record: *const types.BootRecord) Error!void {
+
+    _ = method;
+    _ = target_mpidr;
+    _ = record;
+
+    return error.Invalid;
+
+}
+
+pub fn send_ipi(target_core: u32, kind: anytype) void {
+
+    _ = target_core;
+    _ = kind;
+
+}
+
+pub fn halt_others() void {}
+
 pub fn intctrl_enable_line(irq: u32) void {
 
     _ = irq;

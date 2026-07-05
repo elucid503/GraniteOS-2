@@ -1,11 +1,17 @@
-// MLFQ scheduler core (06-kernel-ddd.md Section 10): per-core queues, the fixed driver band, quantum accounting, demotion, and the periodic boost. Single-core for M2 - work-stealing, IPIs, and scheduling donation arrive with M8; the policy is separated from the switch so it host-tests.
+// MLFQ scheduler core (06-kernel-ddd.md Section 10): per-core queues, the fixed driver band, quantum accounting,
+// demotion, and the periodic boost. SMP since M8: cores join at the discovered count, fresh threads round-robin,
+// idle cores steal, and IPC hand-offs donate the caller's scheduling state until the reply. Per-core queues are
+// guarded by their own spinlock (stealers reach in); everything else per-core is touched only by its core.
 
 const builtin = @import("builtin");
+const std = @import("std");
 
 const config = @import("../config.zig");
 const arch = @import("../arch/arch.zig");
 const object = @import("../object/object.zig");
 const runqueue = @import("runqueue.zig");
+const spinlock = @import("../sync/spinlock.zig");
+const ipc_sync = @import("../sync/ipc.zig");
 
 const thread_module = @import("../object/thread.zig");
 
@@ -47,6 +53,14 @@ pub const Core = struct {
     // A thread that exited on this core; freed by the next thread once it is off the dead thread's stack.
     zombie: ?*Thread,
 
+    // Guards the two queue sets above; taken by this core and by peers stealing from it.
+    lock: spinlock.SpinLock,
+
+    // The thread being switched away from; whoever runs next on this core publishes its saved context.
+    outgoing: ?*Thread,
+
+    online: bool,
+
 };
 
 const bottom_level = config.scheduling_levels - 1;
@@ -56,31 +70,66 @@ const bottom_level = config.scheduling_levels - 1;
 const idle_heartbeat_ns = config.level_quanta_ns[0];
 
 var cores: [config.max_cores]Core = undefined;
+var core_count: usize = 1;
+var admit_cursor: usize = 0;
 
-pub fn init() void {
+pub fn init(count: usize) void {
 
-    cores[0] = .{
+    core_count = @max(1, @min(count, config.max_cores));
 
-        .id = 0,
-        .current = null,
+    for (cores[0..core_count], 0..) |*core, index| {
 
-        .driver_queue = .{},
-        .levels = [_]RunQueue{.{}} ** config.scheduling_levels,
+        core.* = .{
 
-        .idle_context = undefined,
-        .last_boost_ns = arch.now_ns(),
+            .id = @intCast(index),
+            .current = null,
 
-        .space_root = 0,
-        .zombie = null,
+            .driver_queue = .{},
+            .levels = [_]RunQueue{.{}} ** config.scheduling_levels,
 
-    };
+            .idle_context = undefined,
+            .last_boost_ns = arch.now_ns(),
+
+            .space_root = 0,
+            .zombie = null,
+
+            .lock = .{},
+            .outgoing = null,
+
+            .online = index == 0,
+
+        };
+
+    }
 
 }
 
-/// Secondary cores join here (M8).
+/// Secondary cores join here (their first act in `main_secondary`); admission and stealing include them from now on.
 pub fn register_core(core_id: u32) void {
 
-    _ = core_id;
+    cores[core_id].last_boost_ns = arch.now_ns();
+
+    @atomicStore(bool, &cores[core_id].online, true, .release);
+
+}
+
+pub fn core_is_online(core_id: u32) bool {
+
+    return @atomicLoad(bool, &cores[core_id].online, .acquire);
+
+}
+
+pub fn online_count() usize {
+
+    var count: usize = 0;
+
+    for (cores[0..core_count]) |*core| {
+
+        if (@atomicLoad(bool, &core.online, .acquire)) count += 1;
+
+    }
+
+    return count;
 
 }
 
@@ -90,13 +139,34 @@ pub fn current_core() *Core {
 
 }
 
-/// Admit a fresh thread; round-robin across cores once there is more than one (M8).
+/// Admit a fresh thread, round-robin across the online cores; a remote landing gets a reschedule IPI.
 pub fn admit(thread: *Thread) void {
 
     const saved = arch.disable_interrupts();
     defer arch.restore_interrupts(saved);
 
-    enqueue(current_core(), thread);
+    const target = next_admit_core();
+
+    enqueue(target, thread);
+
+    if (target != current_core()) arch.send_ipi(target.id, .reschedule);
+
+}
+
+fn next_admit_core() *Core {
+
+    var cursor = @atomicRmw(usize, &admit_cursor, .Add, 1, .monotonic);
+
+    for (0..core_count) |_| {
+
+        const core = &cores[cursor % core_count];
+        cursor += 1;
+
+        if (@atomicLoad(bool, &core.online, .acquire)) return core;
+
+    }
+
+    return current_core();
 
 }
 
@@ -113,6 +183,7 @@ pub fn on_tick(core: *Core, now_ns: u64) ?*Thread {
         if (elapsed >= current.scheduling.quantum_remaining_ns) {
 
             demote(current);
+            defer_dispatch(current);
             enqueue(core, current);
             core.current = null;
 
@@ -131,6 +202,7 @@ pub fn on_tick(core: *Core, now_ns: u64) ?*Thread {
 
         if (current.scheduling.class == .normal and !core.driver_queue.is_empty()) {
 
+            defer_dispatch(current);
             enqueue(core, current);
             core.current = null;
 
@@ -146,6 +218,17 @@ pub fn on_tick(core: *Core, now_ns: u64) ?*Thread {
 
 pub fn pick_next(core: *Core) ?*Thread {
 
+    if (pop_local(core)) |thread| return thread;
+
+    return steal_from_peers(core);
+
+}
+
+fn pop_local(core: *Core) ?*Thread {
+
+    core.lock.lock();
+    defer core.lock.unlock();
+
     if (core.driver_queue.pop()) |thread| return thread;
 
     for (&core.levels) |*level| {
@@ -154,7 +237,44 @@ pub fn pick_next(core: *Core) ?*Thread {
 
     }
 
-    return steal_from_peers(core);
+    return null;
+
+}
+
+// Work-stealing: an idle core robs the MLFQ of the next online peer that has anything queued.
+// Only one runqueue lock is ever held at a time, so stealing cannot deadlock against a stealing peer.
+
+fn steal_from_peers(core: *Core) ?*Thread {
+
+    if (core_count == 1) return null;
+
+    for (1..core_count) |offset| {
+
+        const peer = &cores[(core.id + offset) % core_count];
+
+        if (!@atomicLoad(bool, &peer.online, .acquire)) continue;
+
+        peer.lock.lock();
+
+        const stolen = blk: {
+
+            for (&peer.levels) |*level| {
+
+                if (level.pop()) |thread| break :blk thread;
+
+            }
+
+            break :blk null;
+
+        };
+
+        peer.lock.unlock();
+
+        if (stolen) |thread| return thread;
+
+    }
+
+    return null;
 
 }
 
@@ -196,6 +316,7 @@ pub fn yield() void {
     const current = core.current orelse return;
     const now = arch.now_ns();
 
+    defer_dispatch(current);
     enqueue(core, current);
     core.current = null;
 
@@ -203,11 +324,10 @@ pub fn yield() void {
 
 }
 
-/// Park the current thread on `on`; the caller set the blocked state and holds interrupts off.
-/// Blocking before the quantum runs out keeps the level (I/O-bound threads stay responsive).
-pub fn block(core: *Core, thread: *Thread, on: *object.Object) void {
-
-    thread.blocked_on = on;
+/// Park the current thread; the caller set its blocked state, queued it, and called `defer_dispatch`,
+/// all under the IPC lock (released again before coming here). Blocking before the quantum runs out
+/// keeps the level (I/O-bound threads stay responsive).
+pub fn block(core: *Core, thread: *Thread) void {
 
     if (core.current != thread) return;
 
@@ -218,6 +338,7 @@ pub fn block(core: *Core, thread: *Thread, on: *object.Object) void {
 }
 
 /// Wake `thread` on the waker's core - it is cache-warm there (06-kernel-ddd.md Section 10 wakeup locality).
+/// Callers hold the IPC lock, which is what serializes competing wakers.
 pub fn unblock(waker: *Core, thread: *Thread) void {
 
     thread.blocked_on = null;
@@ -236,17 +357,86 @@ pub fn abort_ipc(thread: *Thread) void {
 
 }
 
-/// The IPC direct hand-off (06-kernel-ddd.md Section 9): switch straight from `from` to a already-waiting `to` on
-/// this core, no run-queue trip. `from` is blocking (the caller set its state); the caller already removed `to` from
-/// the endpoint's receiver queue. Priority/quantum donation is integrated in M8; for now `to` runs on its own state.
+/// The IPC direct hand-off (06-kernel-ddd.md Section 9): switch straight from `from` to an already-waiting `to` on
+/// this core, no run-queue trip. The caller parked `from`, cleared `to`'s wait state, and donated `from`'s
+/// scheduling under the IPC lock.
 pub fn hand_off(from: *Thread, to: *Thread) void {
 
     const core = current_core();
 
-    to.blocked_on = null;
     core.current = null;
 
     reschedule(core, from, to, arch.now_ns(), .pending);
+
+}
+
+/// The reply-time switch straight back to the caller (06-kernel-ddd.md Section 9): the server goes ready
+/// on this core's queue and the caller resumes immediately on its donated-back state.
+pub fn hand_back(server: *Thread, caller: *Thread) void {
+
+    const saved = arch.disable_interrupts();
+    defer arch.restore_interrupts(saved);
+
+    const core = current_core();
+
+    defer_dispatch(server);
+    enqueue(core, server);
+    core.current = null;
+
+    reschedule(core, server, caller, arch.now_ns(), .pending);
+
+}
+
+/// Lend the caller's scheduling state to the server until the matching reply (06-kernel-ddd.md Section 10 donation):
+/// the server serves at the caller's priority and its time is accounted to the caller. Held under the IPC lock.
+/// Donation cures priority inversion, so it only ever raises the server - a driver-class server keeps its band
+/// when a normal client calls it.
+pub fn donate(from: *Thread, to: *Thread) void {
+
+    if (to.donated_scheduling != null) return;
+    if (!outranks(&from.scheduling, &to.scheduling)) return;
+
+    to.donated_scheduling = to.scheduling;
+    to.scheduling = from.scheduling;
+    to.scheduling.last_started_ns = arch.now_ns();
+
+}
+
+fn outranks(a: *const SchedulingState, b: *const SchedulingState) bool {
+
+    if (a.class != b.class) return a.class == .driver;
+
+    return a.level < b.level;
+
+}
+
+/// Undo a donation at reply: the caller takes back the (depleted) state its request ran on, the server
+/// returns to its own.
+pub fn settle_donation(server: *Thread, caller: *Thread) void {
+
+    const own = server.donated_scheduling orelse return;
+
+    caller.scheduling = server.scheduling;
+    server.scheduling = own;
+    server.donated_scheduling = null;
+
+}
+
+/// Mark a running thread's saved context as stale before it becomes poppable by another core; the switch
+/// path republishes it once the register frame is really parked (the wake-before-save handshake).
+pub fn defer_dispatch(thread: *Thread) void {
+
+    @atomicStore(bool, &thread.context_saved, false, .monotonic);
+
+}
+
+fn wait_context_saved(thread: *Thread) void {
+
+    while (!@atomicLoad(bool, &thread.context_saved, .acquire)) {
+
+        std.atomic.spinLoopHint();
+
+    }
 
 }
 
@@ -261,7 +451,9 @@ pub fn exit_current() noreturn {
 
     // Fault-aware teardown (06-kernel-ddd.md Section 9): wake anyone this thread owed a reply or blocked toward.
 
+    ipc_sync.lock.lock();
     current.release_ipc();
+    ipc_sync.lock.unlock();
 
     current.state = .dead;
     core.current = null;
@@ -288,12 +480,28 @@ fn reap(core: *Core) void {
 
 }
 
-// The trampoline in `asm/switch.S` calls this the instant a freshly-scheduled thread lands, so a thread that exited
-// to make room for it is reaped even when its successor is starting for the first time.
+// Runs the moment anything lands on this core after a switch: publish the outgoing thread's saved context
+// (peers spinning in `wait_context_saved` may now dispatch it) and reap any exited predecessor.
+
+fn after_switch(core: *Core) void {
+
+    if (core.outgoing) |previous| {
+
+        core.outgoing = null;
+
+        @atomicStore(bool, &previous.context_saved, true, .release);
+
+    }
+
+    reap(core);
+
+}
+
+// The trampoline in `asm/switch.S` calls this the instant a freshly-scheduled thread lands.
 
 export fn kernel_after_switch() callconv(.c) void {
 
-    reap(current_core());
+    after_switch(current_core());
 
 }
 
@@ -305,7 +513,7 @@ export fn kernel_thread_return() callconv(.c) noreturn {
 
 }
 
-/// The primary core's hand-off into scheduling: from here on it is the idle path.
+/// A core's hand-off into scheduling (the primary after boot, secondaries after registering): the idle path.
 pub fn idle() noreturn {
 
     arch.arm_deadline(idle_heartbeat_ns);
@@ -331,11 +539,24 @@ const Deadline = enum {
 };
 
 // Re-arm the deadline as needed and switch to the chosen thread, saving into `previous`'s
-// context (or the idle context). Runs with interrupts off; a preempted thread resumes here.
+// context (or the idle context). Runs with interrupts off; a preempted thread resumes here
+// (possibly on a different core, so the post-switch bookkeeping re-reads the current core).
 
 fn reschedule(core: *Core, previous: ?*Thread, next: ?*Thread, now_ns: u64, deadline: Deadline) void {
 
     if (next) |thread| {
+
+        if (thread == previous) {
+
+            // Re-picked without leaving the core: its live context was never stale.
+
+            @atomicStore(bool, &thread.context_saved, true, .release);
+
+        } else {
+
+            wait_context_saved(thread);
+
+        }
 
         dispatch(core, thread, now_ns);
 
@@ -351,8 +572,9 @@ fn reschedule(core: *Core, previous: ?*Thread, next: ?*Thread, now_ns: u64, dead
 
             const save_into = if (previous) |p| &p.context else &core.idle_context;
 
+            core.outgoing = previous;
             arch.switch_context(save_into, &thread.context);
-            reap(core);
+            after_switch(current_core());
 
         }
 
@@ -362,8 +584,9 @@ fn reschedule(core: *Core, previous: ?*Thread, next: ?*Thread, now_ns: u64, dead
 
         if (previous) |p| {
 
+            core.outgoing = p;
             arch.switch_context(&p.context, &core.idle_context);
-            reap(core);
+            after_switch(current_core());
 
         }
 
@@ -393,6 +616,9 @@ fn enqueue(core: *Core, thread: *Thread) void {
     thread.state = .ready;
     thread.scheduling.quantum_remaining_ns = quantum_of(thread);
 
+    core.lock.lock();
+    defer core.lock.unlock();
+
     if (thread.scheduling.class == .driver) {
 
         core.driver_queue.push(thread);
@@ -413,13 +639,15 @@ fn demote(thread: *Thread) void {
 
 }
 
-// Anti-starvation aging: every boost interval, all normal threads return to level 0.
+// Anti-starvation aging: every boost interval, all normal threads on this core return to level 0.
 
 fn boost(core: *Core, now_ns: u64) void {
 
     if (now_ns - core.last_boost_ns < config.boost_interval_ns) return;
 
     core.last_boost_ns = now_ns;
+
+    core.lock.lock();
 
     for (core.levels[1..]) |*level| {
 
@@ -432,6 +660,8 @@ fn boost(core: *Core, now_ns: u64) void {
         }
 
     }
+
+    core.lock.unlock();
 
     if (core.current) |current| {
 
@@ -449,16 +679,6 @@ fn quantum_of(thread: *const Thread) u64 {
 
 }
 
-fn steal_from_peers(core: *Core) ?*Thread {
-
-    _ = core;
-
-    // Work-stealing arrives with M8; one core never has peers to rob.
-
-    return null;
-
-}
-
 const testing = @import("std").testing;
 
 fn test_thread() Thread {
@@ -467,8 +687,10 @@ fn test_thread() Thread {
 
     thread.state = .ready;
     thread.scheduling = .{};
+    thread.donated_scheduling = null;
     thread.queue_link = .{};
     thread.blocked_on = null;
+    thread.context_saved = true;
 
     return thread;
 
@@ -476,7 +698,7 @@ fn test_thread() Thread {
 
 test "a spinning thread demotes one level per exhausted quantum" {
 
-    init();
+    init(1);
 
     const core = current_core();
 
@@ -494,7 +716,7 @@ test "a spinning thread demotes one level per exhausted quantum" {
 
 test "a thread that keeps its quantum keeps the core and the level" {
 
-    init();
+    init(1);
 
     const core = current_core();
 
@@ -512,7 +734,7 @@ test "a thread that keeps its quantum keeps the core and the level" {
 
 test "blocking and waking keeps the level" {
 
-    init();
+    init(1);
 
     const core = current_core();
 
@@ -525,7 +747,10 @@ test "blocking and waking keeps the level" {
     dispatch(core, pick_next(core).?, 0);
 
     sleeper.state = .blocked_notify;
-    block(core, &sleeper, &placeholder);
+    sleeper.blocked_on = &placeholder;
+    defer_dispatch(&sleeper);
+
+    block(core, &sleeper);
 
     unblock(core, &sleeper);
 
@@ -536,7 +761,7 @@ test "blocking and waking keeps the level" {
 
 test "the periodic boost returns queued threads to level 0" {
 
-    init();
+    init(1);
 
     const core = current_core();
 
@@ -554,7 +779,7 @@ test "the periodic boost returns queued threads to level 0" {
 
 test "a waiting driver preempts a running normal thread" {
 
-    init();
+    init(1);
 
     const core = current_core();
 
@@ -576,7 +801,7 @@ test "a waiting driver preempts a running normal thread" {
 
 test "yield hands the core to the next thread at the same level" {
 
-    init();
+    init(1);
 
     const core = current_core();
 
@@ -594,6 +819,129 @@ test "yield hands the core to the next thread at the same level" {
     try testing.expectEqual(&second, core.current.?);
     try testing.expectEqual(@as(u8, 0), first.scheduling.level);
     try testing.expectEqual(ThreadState.ready, first.state);
+
+}
+
+test "admission round-robins fresh threads across the online cores" {
+
+    init(2);
+    register_core(1);
+
+    var first = test_thread();
+    var second = test_thread();
+
+    admit(&first);
+    admit(&second);
+
+    // One thread per core, whichever the cursor picked first.
+
+    const on_zero = pop_local(&cores[0]);
+    const on_one = pop_local(&cores[1]);
+
+    try testing.expect(on_zero != null);
+    try testing.expect(on_one != null);
+    try testing.expect(on_zero != on_one);
+
+}
+
+test "an idle core steals a queued thread from a loaded peer" {
+
+    init(2);
+    register_core(1);
+
+    var backlog = test_thread();
+
+    enqueue(&cores[0], &backlog);
+
+    try testing.expectEqual(&backlog, pick_next(&cores[1]).?);
+    try testing.expectEqual(@as(?*Thread, null), pick_next(&cores[1]));
+
+}
+
+test "offline cores are skipped by admission and stealing" {
+
+    init(2);
+
+    var first = test_thread();
+    var second = test_thread();
+
+    admit(&first);
+    admit(&second);
+
+    try testing.expect(pop_local(&cores[1]) == null);
+    try testing.expect(pop_local(&cores[0]) != null);
+    try testing.expect(pop_local(&cores[0]) != null);
+
+}
+
+test "donation lends the caller's state and settling accounts it back" {
+
+    init(1);
+
+    var caller = test_thread();
+    var server = test_thread();
+
+    caller.scheduling.level = 0;
+    caller.scheduling.quantum_remaining_ns = config.level_quanta_ns[0];
+
+    server.scheduling.level = bottom_level;
+
+    donate(&caller, &server);
+
+    // The server now serves at the caller's level: no priority inversion through a low-priority server.
+
+    try testing.expectEqual(@as(u8, 0), server.scheduling.level);
+    try testing.expectEqual(@as(u8, bottom_level), server.donated_scheduling.?.level);
+
+    // The request burned some of the donated quantum before the reply.
+
+    server.scheduling.quantum_remaining_ns = config.level_quanta_ns[0] / 2;
+
+    settle_donation(&server, &caller);
+
+    try testing.expectEqual(config.level_quanta_ns[0] / 2, caller.scheduling.quantum_remaining_ns);
+    try testing.expectEqual(@as(u8, bottom_level), server.scheduling.level);
+    try testing.expectEqual(@as(?SchedulingState, null), server.donated_scheduling);
+
+}
+
+test "a second donation does not clobber the server's own saved state" {
+
+    init(1);
+
+    var caller = test_thread();
+    var other = test_thread();
+    var server = test_thread();
+
+    server.scheduling.level = 3;
+    other.scheduling.level = 2;
+
+    donate(&caller, &server);
+    donate(&other, &server);
+
+    try testing.expectEqual(@as(u8, 3), server.donated_scheduling.?.level);
+
+}
+
+test "a normal caller never demotes a driver-class server" {
+
+    init(1);
+
+    var caller = test_thread();
+    var driver = test_thread();
+
+    driver.scheduling.class = .driver;
+
+    donate(&caller, &driver);
+
+    try testing.expectEqual(Class.driver, driver.scheduling.class);
+    try testing.expectEqual(@as(?SchedulingState, null), driver.donated_scheduling);
+
+    // Settling with nothing donated is a no-op for both sides.
+
+    settle_donation(&driver, &caller);
+
+    try testing.expectEqual(@as(u8, 0), caller.scheduling.level);
 
 }
 

@@ -2,6 +2,7 @@
 
 const panic = @import("../../debug/panic.zig");
 
+const cpu = @import("cpu.zig");
 const gic = @import("gic.zig");
 const timer = @import("timer.zig");
 const interrupt_module = @import("../../object/interrupt.zig");
@@ -40,6 +41,17 @@ export fn kernel_irq() callconv(.c) void {
 
         timer.stop();
         gic.complete(irq);
+        scheduler.tick();
+
+    } else if (irq < gic.first_sgi_boundary) {
+
+        gic.complete(irq);
+
+        // A halt IPI parks this core for good (a peer panicked); a reschedule IPI just runs the tick,
+        // which picks up freshly admitted or stealable work.
+
+        if (irq == gic.sgi_halt) cpu.park();
+
         scheduler.tick();
 
     } else if (interrupt_module.find(irq)) |device| {

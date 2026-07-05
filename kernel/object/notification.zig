@@ -5,6 +5,7 @@ const arch = @import("../arch/arch.zig");
 const object = @import("object.zig");
 const scheduler = @import("../sched/scheduler.zig");
 const runqueue = @import("../sched/runqueue.zig");
+const ipc_sync = @import("../sync/ipc.zig");
 
 const Thread = @import("thread.zig").Thread;
 const Endpoint = @import("endpoint.zig").Endpoint;
@@ -49,8 +50,8 @@ pub const Notification = struct {
     /// Signal: accumulate `bits` and wake one waiter with the whole set (never blocks).
     pub fn signal(self: *Notification, bits: u64) void {
 
-        const saved = arch.disable_interrupts();
-        defer arch.restore_interrupts(saved);
+        const saved = ipc_sync.lock.acquire();
+        defer ipc_sync.lock.release(saved);
 
         self.bits |= bits;
 
@@ -104,11 +105,12 @@ pub const Notification = struct {
 
     }
 
-    /// Wait: take the accumulated bits if any, otherwise park `by` on this notification and return null.
+    /// Wait: take the accumulated bits if any, otherwise park `by` on this notification and return null,
+    /// leaving the caller to block through the scheduler once the lock is dropped.
     pub fn poll_or_block(self: *Notification, by: *Thread) ?u64 {
 
-        const saved = arch.disable_interrupts();
-        defer arch.restore_interrupts(saved);
+        const saved = ipc_sync.lock.acquire();
+        defer ipc_sync.lock.release(saved);
 
         if (self.bits != 0) {
 
@@ -119,6 +121,8 @@ pub const Notification = struct {
         }
 
         by.state = .blocked_notify;
+        by.blocked_on = &self.header;
+        scheduler.defer_dispatch(by);
         self.waiters.push(by);
 
         return null;

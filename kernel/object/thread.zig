@@ -9,6 +9,7 @@ const slab = @import("../memory/slab.zig");
 const object = @import("object.zig");
 const scheduler = @import("../sched/scheduler.zig");
 const runqueue = @import("../sched/runqueue.zig");
+const ipc_sync = @import("../sync/ipc.zig");
 
 const Process = @import("process.zig").Process;
 const Message = @import("../ipc/message.zig").Message;
@@ -52,6 +53,12 @@ pub const Thread = struct {
     scheduling: scheduler.SchedulingState,
     blocked_on: ?*object.Object,
     queue_link: runqueue.Link,
+
+    // The server's own state parked while it runs on a caller's donated scheduling (M8, 06-kernel-ddd.md Section 10).
+    donated_scheduling: ?scheduler.SchedulingState,
+
+    // False while this thread's register frame is mid-switch; a peer core spins on it before dispatching.
+    context_saved: bool,
 
     stack_base: PhysAddr,
     next_in_process: ?*Thread,
@@ -138,6 +145,9 @@ pub const Thread = struct {
 
                 if (value == 0) {
 
+                    const saved = ipc_sync.lock.acquire();
+                    defer ipc_sync.lock.release(saved);
+
                     self.clear_bound_notification();
                     return;
 
@@ -145,6 +155,9 @@ pub const Thread = struct {
 
                 const handle: @import("../cap/handle.zig").Handle = @bitCast(@as(u32, @truncate(value)));
                 const notification = try self.process.handles.resolve_as(handle, .notification);
+
+                const saved = ipc_sync.lock.acquire();
+                defer ipc_sync.lock.release(saved);
 
                 self.clear_bound_notification();
 
@@ -208,7 +221,12 @@ pub const Thread = struct {
 
     }
 
+    // The process's thread list is shared by its workers, so linking and unlinking ride the IPC lock.
+
     fn unlink(self: *Thread) void {
+
+        const saved = ipc_sync.lock.acquire();
+        defer ipc_sync.lock.release(saved);
 
         var link = &self.process.threads;
 
@@ -248,8 +266,11 @@ fn alloc(process: *Process) Error!*Thread {
         .blocked_on = null,
         .queue_link = .{},
 
+        .donated_scheduling = null,
+        .context_saved = true,
+
         .stack_base = stack_base,
-        .next_in_process = process.threads,
+        .next_in_process = null,
 
         .staged = undefined,
         .message_buffer = 0,
@@ -267,7 +288,13 @@ fn alloc(process: *Process) Error!*Thread {
 
     };
 
+    const saved = ipc_sync.lock.acquire();
+
+    thread.next_in_process = process.threads;
     process.threads = thread;
+
+    ipc_sync.lock.release(saved);
+
     process.header.retain();
 
     return thread;

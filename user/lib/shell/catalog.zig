@@ -24,6 +24,7 @@ pub const bundled = [_]Entry{
     .{ .name = "cat", .description = "Copy stdin to stdout" },
     .{ .name = "help", .description = "List available programs" },
     .{ .name = "cat-via-name", .description = "Resolve console through name service" },
+    .{ .name = "stress", .description = "Grind worker threads across all cores" },
 
 };
 
@@ -72,6 +73,7 @@ pub fn write_about(out: *stream.Stream) io.Error!void {
     try io.writeln(out, "  - Ring-stream pipeline support");
     try io.writeln(out, "  - Bundled ELF program loading");
     try io.writeln(out, "  - virtio-blk driver + Strata filesystem");
+    try io.writeln(out, "  - SMP: work-stealing scheduler on any core count");
     try io.writeln(out, "  - FLINT startup program");
     try io.writeln(out, "  - MARBLE shell");
     try io.writeln(out, "");

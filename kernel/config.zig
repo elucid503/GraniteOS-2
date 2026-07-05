@@ -16,6 +16,11 @@ pub const boost_interval_ns: u64 = 1_000_000_000; // 1 second
 
 pub const max_cores: usize = 64;
 
+// Per-core frame magazine capacity (06-kernel-ddd.md Section 6.1): single-page traffic stays off the buddy lock,
+// refilling and draining in batches of half this size.
+
+pub const frame_magazine: usize = 32;
+
 // Kernel stack size for every thread, in pages (32 KiB; Debug-build frames on the boot/demo path run deep).
 
 pub const thread_stack_pages: usize = 8;

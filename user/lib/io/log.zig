@@ -1,6 +1,4 @@
-// Boot/diagnostic logging for drivers and servers: one console session per process, opened lazily on the first
-// line and reused forever - a session is a mapped Region and handles in both processes, so opening one per line
-// would leak the console's tables dry.
+// Boot/diagnostic logging for drivers and servers: one console session per process, opened lazily on the first line and reused forever.
 
 const cap = @import("../cap/cap.zig");
 const io = @import("io.zig");
