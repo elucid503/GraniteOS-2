@@ -31,6 +31,8 @@ pub const InterruptState = cpu.InterruptState;
 
 pub const core_id = cpu.core_id;
 pub const wait_for_event = cpu.wait_for_event;
+pub const wait_for_interrupt = cpu.wait_for_interrupt;
+pub const send_event = cpu.send_event;
 pub const enable_interrupts = cpu.enable_interrupts;
 pub const disable_interrupts = cpu.disable_interrupts;
 pub const restore_interrupts = cpu.restore_interrupts;
@@ -70,6 +72,7 @@ pub const timer_init = if (is_target) timer.init else host.timer_init;
 pub const timer_init_secondary = if (is_target) timer.init_secondary else host.timer_init_secondary;
 pub const now_ns = timer.now_ns;
 pub const arm_deadline = timer.arm_deadline;
+pub const disarm_deadline = timer.stop;
 
 // SMP (06-kernel-ddd.md Section 16.2): secondary bring-up and cross-core pokes. Cross-core TLB shootdown
 // needs no call here - the aarch64 impl broadcasts its TLB invalidates (inner-shareable) from map/unmap.

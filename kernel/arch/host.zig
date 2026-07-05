@@ -39,6 +39,10 @@ pub fn core_id() u32 {
 
 pub fn wait_for_event() void {}
 
+pub fn wait_for_interrupt() void {}
+
+pub fn send_event() void {}
+
 pub fn enable_interrupts() void {}
 
 pub fn disable_interrupts() InterruptState {
@@ -156,6 +160,8 @@ pub fn arm_deadline(ns_from_now: u64) void {
     _ = ns_from_now;
 
 }
+
+pub fn disarm_deadline() void {}
 
 pub fn intctrl_init_primary(windows: ?types.IntctrlWindows) void {
 

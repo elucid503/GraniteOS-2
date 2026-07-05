@@ -66,9 +66,9 @@ pub const Core = struct {
 
 const bottom_level = config.scheduling_levels - 1;
 
-// While idle, tick at the shortest quantum so the boost still fires and admissions are picked up.
+// Shortest idle tick when peers still have queued work (stealing stays responsive). Otherwise sleep until the next boost.
 
-const idle_heartbeat_ns = config.level_quanta_ns[0];
+const idle_steal_ns = config.level_quanta_ns[0];
 
 var cores: [config.max_cores]Core = undefined;
 var core_count: usize = 1;
@@ -545,7 +545,7 @@ fn wait_context_saved(thread: *Thread) void {
 
     while (!@atomicLoad(bool, &thread.context_saved, .acquire)) {
 
-        std.atomic.spinLoopHint();
+        arch.wait_for_event();
 
     }
 
@@ -601,6 +601,7 @@ fn after_switch(core: *Core) void {
         core.outgoing = null;
 
         @atomicStore(bool, &previous.context_saved, true, .release);
+        arch.send_event();
 
     }
 
@@ -624,15 +625,106 @@ export fn kernel_thread_return() callconv(.c) noreturn {
 
 }
 
+fn peer_has_queued_work(core: *Core) bool {
+
+    for (cores[0..core_count]) |*peer| {
+
+        if (peer.id == core.id) continue;
+        if (!@atomicLoad(bool, &peer.online, .acquire)) continue;
+
+        peer.lock.lock();
+
+        const found = blk: {
+
+            if (!peer.driver_queue.is_empty()) break :blk true;
+
+            for (&peer.levels) |*level| {
+
+                if (!level.is_empty()) break :blk true;
+
+            }
+
+            break :blk false;
+
+        };
+
+        peer.lock.unlock();
+
+        if (found) return true;
+
+    }
+
+    return false;
+
+}
+
+fn core_has_queued_work(core: *Core) bool {
+
+    core.lock.lock();
+    defer core.lock.unlock();
+
+    if (!core.driver_queue.is_empty()) return true;
+
+    for (&core.levels) |*level| {
+
+        if (!level.is_empty()) return true;
+
+    }
+
+    return false;
+
+}
+
+fn system_has_runnable_work() bool {
+
+    for (cores[0..core_count]) |*core| {
+
+        if (!@atomicLoad(bool, &core.online, .acquire)) continue;
+
+        if (core.current != null) return true;
+        if (core_has_queued_work(core)) return true;
+
+    }
+
+    return false;
+
+}
+
+fn idle_deadline(core: *Core, now_ns: u64) u64 {
+
+    if (peer_has_queued_work(core)) return idle_steal_ns;
+
+    const elapsed = now_ns - core.last_boost_ns;
+
+    if (elapsed >= config.boost_interval_ns) return idle_steal_ns;
+
+    return config.boost_interval_ns - elapsed;
+
+}
+
+fn arm_idle_timer(core: *Core, now_ns: u64) void {
+
+    if (system_has_runnable_work()) {
+
+        arch.arm_deadline(idle_deadline(core, now_ns));
+
+    } else {
+
+        arch.disarm_deadline();
+
+    }
+
+}
+
 /// A core's hand-off into scheduling (the primary after boot, secondaries after registering): the idle path.
 pub fn idle() noreturn {
 
-    arch.arm_deadline(idle_heartbeat_ns);
+    arm_idle_timer(current_core(), arch.now_ns());
     arch.enable_interrupts();
 
     while (true) {
 
-        arch.wait_for_event();
+        arch.wait_for_interrupt();
 
     }
 
@@ -662,6 +754,7 @@ fn reschedule(core: *Core, previous: ?*Thread, next: ?*Thread, now_ns: u64, dead
             // Re-picked without leaving the core: its live context was never stale.
 
             @atomicStore(bool, &thread.context_saved, true, .release);
+            arch.send_event();
 
         } else {
 
@@ -691,7 +784,7 @@ fn reschedule(core: *Core, previous: ?*Thread, next: ?*Thread, now_ns: u64, dead
 
     } else {
 
-        arch.arm_deadline(idle_heartbeat_ns);
+        arm_idle_timer(core, now_ns);
 
         if (previous) |p| {
 

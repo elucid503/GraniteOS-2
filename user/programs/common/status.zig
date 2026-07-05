@@ -105,7 +105,7 @@ fn render_scheduler(out: *Stream) lib.io.Error!void {
 
     for (snapshot.quanta_ns[0..level_count], 0..) |quantum, level| {
 
-        try lib.io.print(out, " level {d}={d}ms", .{ level, quantum / 1_000_000 });
+        try lib.io.print(out, " level-{d}={d}ms", .{ level, quantum / 1_000_000 });
 
     }
 
@@ -123,7 +123,7 @@ fn render_scheduler(out: *Stream) lib.io.Error!void {
     for (0..level_count) |level| {
 
         var label: [16]u8 = undefined;
-        const text = std.fmt.bufPrint(&label, "level {d}", .{level}) catch return error.Invalid;
+        const text = std.fmt.bufPrint(&label, "level-{d}", .{level}) catch return error.Invalid;
 
         try write_gap(out);
         try write_right_cell(out, text, 10);

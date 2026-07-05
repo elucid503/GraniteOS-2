@@ -41,6 +41,8 @@ pub fn read_char(input: *stream.Stream) Error!u8 {
 
         if (length > 0) return byte[0];
 
+        sys.yield();
+
     }
 
 }

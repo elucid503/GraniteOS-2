@@ -20,6 +20,19 @@ pub fn wait_for_event() void {
 
 }
 
+/// Park until an IRQ is pending; the idle loop uses this with the timer disarmed when nothing is runnable.
+pub fn wait_for_interrupt() void {
+
+    asm volatile ("wfi");
+
+}
+
+pub fn send_event() void {
+
+    asm volatile ("sev");
+
+}
+
 /// Make freshly written instructions visible to the fetch path (after copying user code into a mapped page).
 pub fn sync_instruction_cache() void {
 
