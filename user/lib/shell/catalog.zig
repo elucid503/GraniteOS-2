@@ -29,7 +29,6 @@ pub const common = [_]Entry{
     .{ .name = "hello", .description = "Greeting from user space" },
     .{ .name = "clear", .description = "Clear the terminal screen" },
     .{ .name = "wc", .description = "Count lines and bytes from stdin" },
-    .{ .name = "cat-via-name", .description = "Resolve console through name service" },
     .{ .name = "stress", .description = "Grind worker threads across all cores" },
 
 };

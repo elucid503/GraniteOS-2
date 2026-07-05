@@ -10,7 +10,7 @@ cd "$root"
 
 zig build 2>&1
 
-session=$'help\necho hello\necho pipe-me | cat\ncat-via-name\nexit\n'
+session=$'help\necho hello\necho pipe-me | cat\nexit\n'
 
 output="$(printf '%s' "$session" | timeout 30 qemu-system-aarch64 \
     -machine virt -cpu cortex-a57 -smp 1 -m 256M -nographic \
@@ -42,7 +42,6 @@ check "marble reached prompt"          "marble [/] >"
 check "external echo launched"        "hello"
 check "pipeline produced output"      "pipe-me"
 check "help lists programs"           "GraniteOS - Available Programs"
-check "name service lookup works"     "cat-via-name: resolved console"
 check "supervisor restart path"       "Exiting MARBLE..."
 
 if [ "$fail" -ne 0 ]; then

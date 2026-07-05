@@ -23,7 +23,7 @@ zig build test # run the host unit tests for the arch-independent core
 `zig build qemu` boots, discovers the machine from the device tree, logs each subsystem
 as it comes up (memory, interrupts, objects and scheduler), then hands off to Flint.
 Flint loads bundled ELF programs for the name service, console driver, Marble (the
-interactive shell), and utilities (`echo`, `cat`, `help`, `cat-via-name`). Type `exit` at
+interactive shell), and utilities (`echo`, `cat`, `help`). Type `exit` at
 the `marble [/] >` prompt to watch the supervisor restart Marble; quit QEMU with `Ctrl-A`
 then `x`. `scripts/m6.sh` drives Marble over serial.
 
