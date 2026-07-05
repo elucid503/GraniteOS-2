@@ -14,29 +14,42 @@ pub const builtins = [_]Entry{
 
     .{ .name = "help", .description = "List available commands" },
     .{ .name = "about", .description = "About GraniteOS" },
+    .{ .name = "clear", .description = "Clear the terminal screen" },
+    .{ .name = "location", .description = "Print the current directory" },
     .{ .name = "exit", .description = "Relaunch Marble" },
 
 };
 
-pub const bundled = [_]Entry{
+pub const common = [_]Entry{
 
     .{ .name = "echo", .description = "Print arguments to stdout" },
     .{ .name = "cat", .description = "Copy stdin to stdout" },
     .{ .name = "help", .description = "List available programs" },
+    .{ .name = "about", .description = "About GraniteOS" },
+    .{ .name = "hello", .description = "Greeting from user space" },
+    .{ .name = "clear", .description = "Clear the terminal screen" },
+    .{ .name = "wc", .description = "Count lines and bytes from stdin" },
     .{ .name = "cat-via-name", .description = "Resolve console through name service" },
     .{ .name = "stress", .description = "Grind worker threads across all cores" },
+
+};
+
+pub const location = [_]Entry{
+
+    .{ .name = "location", .description = "Print the current directory" },
 
 };
 
 pub const filesystem = [_]Entry{
 
     .{ .name = "ls", .description = "List a directory" },
-    .{ .name = "view", .description = "Print a file's contents" },
-    .{ .name = "write", .description = "Write text (or stdin) into a file" },
+    .{ .name = "view", .description = "View a file (pager when interactive)" },
+    .{ .name = "write", .description = "Edit or write a file" },
     .{ .name = "create", .description = "Create an empty file" },
     .{ .name = "mkdir", .description = "Create a directory" },
     .{ .name = "delete", .description = "Remove a file or empty directory" },
     .{ .name = "rename", .description = "Move a file or directory" },
+    .{ .name = "perms", .description = "Set file write permission" },
 
 };
 
@@ -48,7 +61,9 @@ pub fn write_help(out: *stream.Stream) io.Error!void {
 
     try write_category(out, "builtins", &builtins);
     try io.writeln(out, "");
-    try write_category(out, "common", &bundled);
+    try write_category(out, "common", &common);
+    try io.writeln(out, "");
+    try write_category(out, "location", &location);
     try io.writeln(out, "");
     try write_category(out, "filesystem", &filesystem);
     try io.writeln(out, "");

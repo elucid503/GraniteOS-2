@@ -52,6 +52,17 @@ pub const Stream = struct {
 
     }
 
+    pub fn set_mode(self: *Stream, mode: u64) Error!void {
+
+        switch (self.backing) {
+
+            .server => |*server_stream| try server_stream.set_mode(mode),
+            .ring => return error.NotAllowed,
+
+        }
+
+    }
+
 };
 
 const Backing = union(enum) {
@@ -113,6 +124,12 @@ const Server = struct {
         const reply = try ipc.request(self.endpoint, proto.stream.write, &.{ 0, amount }, &.{});
 
         return @intCast(reply.data[0]);
+
+    }
+
+    fn set_mode(self: *Server, mode: u64) Error!void {
+
+        _ = try ipc.request(self.endpoint, proto.stream.set_mode, &.{mode}, &.{});
 
     }
 

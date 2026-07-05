@@ -14,5 +14,6 @@ pub const elf = @import("boot/elf.zig");
 pub const stream = @import("io/stream.zig");
 pub const fs = @import("fs/fs.zig");
 pub const io = @import("io/io.zig");
+pub const term = @import("io/term.zig");
 pub const log = @import("io/log.zig");
 pub const catalog = @import("shell/catalog.zig");

@@ -71,7 +71,12 @@ pub fn build(b: *std.Build) void {
     const echo = user_program(b, target, optimize, user_lib, "granite-echo.elf", "user/programs/common/echo.zig");
     const cat = user_program(b, target, optimize, user_lib, "granite-cat.elf", "user/programs/common/cat.zig");
     const help = user_program(b, target, optimize, user_lib, "granite-help.elf", "user/programs/common/help.zig");
+    const about = user_program(b, target, optimize, user_lib, "granite-about.elf", "user/programs/common/about.zig");
+    const hello = user_program(b, target, optimize, user_lib, "granite-hello.elf", "user/programs/common/hello.zig");
+    const clear = user_program(b, target, optimize, user_lib, "granite-clear.elf", "user/programs/common/clear.zig");
+    const wc = user_program(b, target, optimize, user_lib, "granite-wc.elf", "user/programs/common/wc.zig");
     const cat_via_name = user_program(b, target, optimize, user_lib, "granite-cat-via-name.elf", "user/programs/common/cat_via_name.zig");
+    const location = user_program(b, target, optimize, user_lib, "granite-location.elf", "user/programs/location/location.zig");
     const ls = user_program(b, target, optimize, user_lib, "granite-ls.elf", "user/programs/fs/ls.zig");
     const view = user_program(b, target, optimize, user_lib, "granite-view.elf", "user/programs/fs/view.zig");
     const write = user_program(b, target, optimize, user_lib, "granite-write.elf", "user/programs/fs/write.zig");
@@ -79,6 +84,7 @@ pub fn build(b: *std.Build) void {
     const mkdir = user_program(b, target, optimize, user_lib, "granite-mkdir.elf", "user/programs/fs/mkdir.zig");
     const delete = user_program(b, target, optimize, user_lib, "granite-delete.elf", "user/programs/fs/delete.zig");
     const rename = user_program(b, target, optimize, user_lib, "granite-rename.elf", "user/programs/fs/rename.zig");
+    const perms = user_program(b, target, optimize, user_lib, "granite-perms.elf", "user/programs/fs/perms.zig");
     const stress = user_program(b, target, optimize, user_lib, "granite-stress.elf", "user/programs/common/stress.zig");
 
     const flatten = host_tool(b, "flatten", "tools/flatten.zig");
@@ -100,7 +106,12 @@ pub fn build(b: *std.Build) void {
     add_artifact_module(bundle_run, "echo", echo);
     add_artifact_module(bundle_run, "cat", cat);
     add_artifact_module(bundle_run, "help", help);
+    add_artifact_module(bundle_run, "about", about);
+    add_artifact_module(bundle_run, "hello", hello);
+    add_artifact_module(bundle_run, "clear", clear);
+    add_artifact_module(bundle_run, "wc", wc);
     add_artifact_module(bundle_run, "cat-via-name", cat_via_name);
+    add_artifact_module(bundle_run, "location", location);
     add_artifact_module(bundle_run, "ls", ls);
     add_artifact_module(bundle_run, "view", view);
     add_artifact_module(bundle_run, "write", write);
@@ -108,6 +119,7 @@ pub fn build(b: *std.Build) void {
     add_artifact_module(bundle_run, "mkdir", mkdir);
     add_artifact_module(bundle_run, "delete", delete);
     add_artifact_module(bundle_run, "rename", rename);
+    add_artifact_module(bundle_run, "perms", perms);
     add_artifact_module(bundle_run, "stress", stress);
 
     b.installArtifact(kernel);

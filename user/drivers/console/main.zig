@@ -49,6 +49,7 @@ const Session = struct {
 
     base: usize = 0,
     capacity: usize = 0,
+    mode: u64 = proto.stream.mode_cooked,
 
 };
 
@@ -112,7 +113,7 @@ fn dispatch(badge: u64, in: *const Message, out: *Message) i64 {
         proto.identify => identify(out),
         proto.stream.read => read(badge, in.data[1], in.data[2]),
         proto.stream.write => write(badge, in.data[1], in.data[2]),
-        proto.stream.set_mode => set_mode(in.data[1]),
+        proto.stream.set_mode => set_mode(badge, in.data[1]),
         proto.stream.attach => attach(badge, in),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
@@ -154,11 +155,20 @@ fn attach(badge: u64, in: *const Message) i64 {
 
 }
 
-// Cooked-mode read: gather one line into the session buffer, echoing as it is typed; one IPC per line.
-
 fn read(badge: u64, offset: u64, capacity: u64) i64 {
 
+    const session = session_for(badge) orelse return -7;
     const span = session_span(badge, offset, capacity) orelse return -7;
+
+    if (session.mode == proto.stream.mode_raw) return read_raw(span);
+
+    return read_cooked(span);
+
+}
+
+// Cooked-mode read: gather one line into the session buffer, echoing as it is typed; one IPC per line.
+
+fn read_cooked(span: []u8) i64 {
 
     var length: usize = 0;
 
@@ -201,10 +211,33 @@ fn read(badge: u64, offset: u64, capacity: u64) i64 {
 
         }
 
-        // Nothing buffered: re-arm the line, then sleep until the next RX interrupt.
-
         _ = sys.acknowledge(cap.driver.interrupt) catch {};
         _ = sys.wait(rx_notification) catch return @intCast(length);
+
+    }
+
+}
+
+// Raw-mode read: return one byte per call with no echo.
+
+fn read_raw(span: []u8) i64 {
+
+    if (span.len == 0) return -7;
+
+    while (true) {
+
+        while (receive_pending()) {
+
+            span[0] = @truncate(register(data).*);
+
+            _ = sys.acknowledge(cap.driver.interrupt) catch {};
+
+            return 1;
+
+        }
+
+        _ = sys.acknowledge(cap.driver.interrupt) catch {};
+        _ = sys.wait(rx_notification) catch return 0;
 
     }
 
@@ -220,13 +253,15 @@ fn write(badge: u64, offset: u64, length: u64) i64 {
 
 }
 
-// Cooked is all M4 speaks; raw mode arrives with the library LineEditor (M5+).
+fn set_mode(badge: u64, mode: u64) i64 {
 
-fn set_mode(mode: u64) i64 {
+    const session = session_for(badge) orelse return -7;
 
-    if (mode == proto.stream.mode_cooked) return 0;
+    if (mode != proto.stream.mode_cooked and mode != proto.stream.mode_raw) return -7;
 
-    return -4; // NotAllowed
+    session.mode = mode;
+
+    return 0;
 
 }
 

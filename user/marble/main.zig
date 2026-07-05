@@ -213,6 +213,22 @@ fn run_builtin(stage: *const Stage, out: *lib.stream.Stream) !bool {
 
     }
 
+    if (equals(command, "clear")) {
+
+        try lib.term.clear_screen(out);
+
+        return true;
+
+    }
+
+    if (equals(command, "location")) {
+
+        try lib.io.writeln(out, root_dir);
+
+        return true;
+
+    }
+
     if (equals(command, "exit")) {
 
         try lib.io.writeln(out, "Exiting MARBLE...");
