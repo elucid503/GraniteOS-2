@@ -17,6 +17,88 @@ const Handle = cap.Handle;
 const Error = sys.Error;
 
 const ring_capacity = 256;
+const max_tracked = 8;
+
+const Tracked = struct {
+
+    used: bool = false,
+    id: u64 = 0,
+    endpoint: Handle = 0,
+    region: Handle = 0,
+    base: usize = 0,
+
+};
+
+var tracked: [max_tracked]Tracked = [_]Tracked{.{}} ** max_tracked;
+
+fn register(window: *const Window) void {
+
+    for (&tracked) |*entry| {
+
+        if (entry.used) continue;
+
+        entry.* = .{
+
+            .used = true,
+            .id = window.id,
+            .endpoint = window.connection.endpoint,
+            .region = window.region,
+            .base = window.base,
+
+        };
+
+        return;
+
+    }
+
+}
+
+fn unregister(id: u64) void {
+
+    for (&tracked) |*entry| {
+
+        if (entry.used and entry.id == id) {
+
+            entry.* = .{};
+
+            return;
+
+        }
+
+    }
+
+}
+
+fn release_surface(region: Handle, base: usize) void {
+
+    sys.unmap(cap.self_space, base) catch {};
+    sys.close(region) catch {};
+
+}
+
+fn teardown(entry: *Tracked) void {
+
+    _ = ipc.request(entry.endpoint, proto.window.destroy, &.{entry.id}, &.{}) catch {};
+
+    release_surface(entry.region, entry.base);
+
+    entry.* = .{};
+
+}
+
+/// Drop every window this process still owns at the compositor. Called from the runtime on exit so surfaces and
+/// launcher memory are reclaimed even when a program forgets to destroy a window explicitly.
+pub fn shutdown_all() void {
+
+    for (&tracked) |*entry| {
+
+        if (!entry.used) continue;
+
+        teardown(entry);
+
+    }
+
+}
 
 pub const Connection = struct {
 
@@ -74,7 +156,11 @@ pub const Connection = struct {
 
         if (reply.handle_count < 1) return error.Invalid;
 
-        return Window.from_reply(self, reply.data[1], &reply);
+        var window = try Window.from_reply(self, reply.data[1], &reply);
+
+        register(&window);
+
+        return window;
 
     }
 
@@ -179,20 +265,26 @@ pub const Window = struct {
         sys.unmap(cap.self_space, self.base) catch {};
         sys.close(self.region) catch {};
 
+        unregister(self.id);
+        release_surface(self.region, self.base);
+
         const replaced = try Window.from_reply(self.connection, self.id, &reply);
 
         self.surface = replaced.surface;
         self.region = replaced.region;
         self.base = replaced.base;
 
+        register(self);
+
     }
 
     pub fn destroy(self: *Window) void {
 
+        unregister(self.id);
+
         _ = ipc.request(self.connection.endpoint, proto.window.destroy, &.{self.id}, &.{}) catch {};
 
-        sys.unmap(cap.self_space, self.base) catch {};
-        sys.close(self.region) catch {};
+        release_surface(self.region, self.base);
 
     }
 

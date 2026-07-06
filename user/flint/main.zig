@@ -16,8 +16,9 @@ const marble_budget = 16 * 1024 * 1024;
 // The compositor allocates the back buffer and every window surface, so its budget scales with the display.
 const compositor_budget = 64 * 1024 * 1024;
 
-// The launcher parents a memory authority for each GUI app it spawns, so its budget covers several open apps at once.
-const launcher_budget = 80 * 1024 * 1024;
+// The launcher holds one shared pool for all GUI children (see lib.budget); keep it small enough that welcome still
+// spawns on the default 256 MiB QEMU machine.
+const launcher_budget = lib.budget.launcher_pool;
 
 var bundle: lib.bundle.Bundle = undefined;
 var bundle_length: usize = 0;
@@ -265,14 +266,14 @@ fn spawn_naming() !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
         .args = &.{"naming"},
         .grants = &grants,
 
-    });
+    }, &.{ memory, init_endpoint, report });
 
 }
 
@@ -299,14 +300,14 @@ fn spawn_console() !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
         .args = &.{"console"},
         .grants = &grants,
 
-    });
+    }, &.{ window, interrupt, memory, init_endpoint, report });
 
 }
 
@@ -337,7 +338,7 @@ fn spawn_block() !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
@@ -345,7 +346,7 @@ fn spawn_block() !void {
         .grants = &grants,
         .data3 = device.base - page,
 
-    });
+    }, &.{ window, interrupt, memory, init_endpoint, report });
 
 }
 
@@ -370,7 +371,7 @@ fn spawn_files() !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
@@ -378,7 +379,7 @@ fn spawn_files() !void {
         .grants = &grants,
         .data3 = if (block_device != null) 1 else 0,
 
-    });
+    }, &.{ memory, init_endpoint, report, block });
 
 }
 
@@ -405,7 +406,7 @@ fn spawn_marble() !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
@@ -415,7 +416,7 @@ fn spawn_marble() !void {
         .data4 = bundle_offset,
         .data5 = machine_core_count,
 
-    });
+    }, &.{ badged_console, memory, init_endpoint, report });
 
 }
 
@@ -446,7 +447,7 @@ fn spawn_display() !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
@@ -454,7 +455,7 @@ fn spawn_display() !void {
         .grants = &grants,
         .data3 = device.base - page,
 
-    });
+    }, &.{ window, interrupt, memory, init_endpoint, report });
 
 }
 
@@ -491,7 +492,7 @@ fn spawn_input() !void {
 
     grants[cap.input.dma(input_count)] = cap.flint.dma;
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
@@ -500,7 +501,7 @@ fn spawn_input() !void {
         .data3 = input_count,
         .data4 = offsets,
 
-    });
+    }, grants[cap.memory .. cap.input.dma(input_count)]);
 
 }
 
@@ -528,7 +529,7 @@ fn spawn_compositor() !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
@@ -537,7 +538,7 @@ fn spawn_compositor() !void {
         .data3 = bundle_length,
         .data4 = bundle_offset,
 
-    });
+    }, &.{ memory, init_endpoint, report, display, input });
 
 }
 
@@ -565,7 +566,7 @@ fn spawn_launcher() !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
@@ -575,7 +576,7 @@ fn spawn_launcher() !void {
         .data4 = bundle_offset,
         .data5 = machine_core_count,
 
-    });
+    }, &.{ memory, init_endpoint, report });
 
 }
 
@@ -599,7 +600,7 @@ fn spawn_gui_program(name: []const u8, id: u64) !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    try spawn_detached(.{
 
         .image = image,
         .authority = memory,
@@ -608,7 +609,28 @@ fn spawn_gui_program(name: []const u8, id: u64) !void {
         .data3 = bundle_length,
         .data4 = bundle_offset,
 
-    });
+    }, &.{ memory, init_endpoint, report });
+
+}
+
+fn spawn_detached(args: lib.elf.SpawnArgs, owned: []const Handle) !void {
+
+    errdefer close_handles(owned);
+
+    const child = try lib.elf.spawn_program(args);
+
+    sys.close(child) catch {};
+    close_handles(owned);
+
+}
+
+fn close_handles(handles: []const Handle) void {
+
+    for (handles) |handle| {
+
+        sys.close(handle) catch {};
+
+    }
 
 }
 

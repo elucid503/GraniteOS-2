@@ -7,6 +7,12 @@ const events = lib.events;
 const gfx = lib.gfx;
 const sys = lib.sys;
 
+pub const app_meta = .{
+    .title = "Graphics Demo",
+    .description = "Vector rendering sample",
+    .icon = "apps",
+};
+
 comptime {
 
     _ = lib.start;
@@ -75,7 +81,7 @@ fn connect() !lib.window.Connection {
 
             if (attempts > 200) return failure;
 
-            sys.yield();
+            lib.time.sleep_ms(5);
 
             continue;
 

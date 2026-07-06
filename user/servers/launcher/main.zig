@@ -22,7 +22,6 @@ comptime {
 
 const home_dir = "/root/user";
 
-const gui_child_budget = 22 * 1024 * 1024;
 const worker_stack_pages = 16;
 const page_size = 4096;
 
@@ -108,9 +107,11 @@ fn spawn(in: *const Message) i64 {
 
 fn spawn_gui(name: []const u8, image: []const u8) !void {
 
-    const memory = try sys.create(.memory_authority, gui_child_budget, cap.memory);
     const init_endpoint = try sys.create(.endpoint, 0, 0);
+    errdefer sys.close(init_endpoint) catch {};
+
     const report = try sys.copy(deaths, next_child);
+    errdefer sys.close(report) catch {};
 
     next_child += 1;
 
@@ -120,17 +121,17 @@ fn spawn_gui(name: []const u8, image: []const u8) !void {
         cap.launcher.console,
         cap.launcher.console,
         cap.name_service,
-        memory,
+        cap.memory,
         init_endpoint,
         report,
         cap.launcher.bundle,
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    const child = try lib.elf.spawn_program(.{
 
         .image = image,
-        .authority = memory,
+        .authority = cap.memory,
         .args = &.{name},
         .grants = &grants,
         .data3 = bundle_length,
@@ -139,6 +140,10 @@ fn spawn_gui(name: []const u8, image: []const u8) !void {
         .cwd = home_dir,
 
     });
+
+    sys.close(child) catch {};
+    sys.close(init_endpoint) catch {};
+    sys.close(report) catch {};
 
 }
 
@@ -165,6 +170,8 @@ fn start_reaper() !void {
     const stack = try sys.create(.region, worker_stack_pages * page_size, cap.memory);
     const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
     const thread = try sys.create_thread(@intFromPtr(&reaper), base + worker_stack_pages * page_size);
+
+    sys.close(stack) catch {};
 
     try sys.start(thread);
 

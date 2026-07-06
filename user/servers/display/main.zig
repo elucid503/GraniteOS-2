@@ -5,6 +5,8 @@
 // event ring; the hardware cursor plane means pointer motion costs one IPC, not a recomposite. Everything
 // idles blocked in `receive` with a bound notification - no frame timer, no polling.
 
+const std = @import("std");
+
 const lib = @import("lib");
 
 const cap = lib.cap;
@@ -39,7 +41,7 @@ const page_size = 4096;
 
 const theme = .{
 
-    .wallpaper = gfx.rgb(22, 24, 30),
+    .wallpaper = gfx.rgb(22, 22, 22),
     .title_focused = gfx.rgb(72, 72, 72),
     .title_blurred = gfx.rgb(56, 56, 56),
     .chrome = gfx.rgb(220, 220, 220),
@@ -87,9 +89,23 @@ const ClientExtra = struct {
     // The taskbar's window-list buffer, mapped once on its first `list` call and reused after.
     info_base: usize = 0,
 
+    pub fn release(self: *ClientExtra) void {
+
+        if (self.notification != 0) sys.close(self.notification) catch {};
+        if (self.info_base != 0) sys.unmap(cap.self_space, self.info_base) catch {};
+
+    }
+
+    pub fn evict(_: *ClientExtra, badge: u64) void {
+
+        destroy_owner_windows(badge);
+
+    }
+
 };
 
-const Sessions = lib.session.Sessions(ClientExtra, 16);
+const session_capacity = proto.window.max_windows * 2 + 8;
+const Sessions = lib.session.Sessions(ClientExtra, session_capacity);
 
 var sessions: Sessions = .{};
 
@@ -105,6 +121,16 @@ var drag_dx: i32 = 0;
 var drag_dy: i32 = 0;
 
 var damage: Rect = Rect.empty;
+
+const ListWatch = struct {
+
+    badge: u64 = 0,
+    notify: Handle = 0,
+    info_base: usize = 0,
+
+};
+
+var list_watch = ListWatch{};
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -185,6 +211,8 @@ fn start_startup_worker() !void {
     const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
     const thread = try sys.create_thread(@intFromPtr(&startup_worker), base + worker_stack_pages * page_size);
 
+    sys.close(stack) catch {};
+
     try sys.start(thread);
 
 }
@@ -247,6 +275,8 @@ fn attach_input() !void {
         .{ .handle = input_wake, .move = false },
 
     });
+
+    sys.close(region) catch {};
 
 }
 
@@ -359,6 +389,11 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.window.resize => resize_window(badge, in, out),
         proto.window.list => list_windows(badge, in, out),
         proto.window.activate => activate_window(in.data[1]),
+        proto.window.screen_info => screen_info(out),
+        proto.window.move => move_window(badge, in),
+        proto.window.minimize => minimize_window(in.data[1]),
+        proto.window.restore => restore_window(in.data[1]),
+        proto.window.subscribe_list => subscribe_list(badge, in, out),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
 
@@ -401,6 +436,7 @@ fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
 
     notify_focus(previous_focus, window.id);
     add_damage(window.frame());
+    publish_list();
 
     out.data[1] = window.id;
     out.data[2] = lib.window.pack_pair(window.width, window.height);
@@ -414,7 +450,7 @@ fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
 
 fn allocate_surface(window: *Window, slot: usize) ?i64 {
 
-    const bytes = @as(usize, window.width) * window.height * 4;
+    const bytes = surface_bytes(window.width, window.height) orelse return -7;
 
     const region = sys.create(.region, bytes, cap.memory) catch return -3;
     const base = sys.map(cap.self_space, region, 0, sys.read | sys.write) catch {
@@ -481,6 +517,7 @@ fn set_title(badge: u64, in: *const Message) i64 {
     window.set_title(lib.window.unpack_title(.{ in.data[3], in.data[4], in.data[5] }, &title_bytes));
 
     add_damage(window.frame());
+    publish_list();
 
     composite() catch return -7;
 
@@ -498,6 +535,8 @@ fn destroy_window(badge: u64, id: u64) i64 {
     release_surface(slot);
 
     if (manager.destroy(window.id)) |dead| add_damage(dead);
+
+    publish_list();
 
     if (manager.focused()) |now| send_to_owner(now, .{
 
@@ -518,6 +557,45 @@ fn destroy_window(badge: u64, id: u64) i64 {
 
 }
 
+fn destroy_owner_windows(owner: u64) void {
+
+    var index: usize = 0;
+    var focused_changed = false;
+
+    while (index < manager.windows.len) : (index += 1) {
+
+        const window = &manager.windows[index];
+
+        if (!window.used or window.owner != owner) continue;
+
+        if (drag_id == window.id) drag_id = 0;
+        if (manager.focus == window.id) focused_changed = true;
+
+        release_surface(index);
+
+        if (manager.destroy(window.id)) |dead| add_damage(dead);
+
+    }
+
+    if (focused_changed) {
+
+        if (manager.focused()) |now| send_to_owner(now, .{
+
+            .kind = events.kind_window_focus,
+            .code = 0,
+            .window = now.id,
+
+            .x = 0,
+            .y = 0,
+
+            .value = 0,
+
+        });
+
+    }
+
+}
+
 fn attach_events(badge: u64, in: *const Message) i64 {
 
     if (in.handle_count < 2) return -7;
@@ -526,8 +604,7 @@ fn attach_events(badge: u64, in: *const Message) i64 {
 
     session.base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
     session.capacity = @intCast(events.ring_bytes(@intCast(in.data[1])));
-
-    if (session.extra.notification != 0) sys.close(session.extra.notification) catch {};
+    sys.close(in.handles[0].handle) catch {};
 
     session.extra.notification = in.handles[1].handle;
 
@@ -543,20 +620,9 @@ fn resize_window(badge: u64, in: *const Message, out: *Message) i64 {
     const width = @max(manager_module.min_content, lib.window.unpack_high(in.data[2]));
     const height = @max(manager_module.min_content, lib.window.unpack_low(in.data[2]));
 
-    add_damage(window.frame());
     release_surface(slot);
 
-    if (window.flags & proto.window.flag_fullscreen != 0) {
-
-        window.width = screen_width;
-        window.height = screen_height;
-
-    } else {
-
-        window.width = width;
-        window.height = height;
-
-    }
+    add_damage(manager.resize_window(window, width, height));
 
     if (allocate_surface(window, slot)) |failure| return failure;
 
@@ -581,7 +647,10 @@ fn list_windows(badge: u64, in: *const Message, out: *Message) i64 {
 
     if (in.handle_count >= 1) {
 
+        if (session.extra.info_base != 0) sys.unmap(cap.self_space, session.extra.info_base) catch {};
+
         session.extra.info_base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
+        sys.close(in.handles[0].handle) catch {};
 
     }
 
@@ -599,10 +668,132 @@ fn activate_window(id: u64) i64 {
 
     const window = manager.by_id(@intCast(id)) orelse return -7;
 
+    if (window.flags & proto.window.flag_minimized != 0) {
+
+        if (manager.restore(window.id)) |restored| add_damage(restored);
+
+    }
+
     focus_and_raise(window);
+    publish_list();
     composite() catch return -7;
 
     return 0;
+
+}
+
+fn screen_info(out: *Message) i64 {
+
+    out.data[1] = lib.window.pack_pair(screen_width, screen_height);
+
+    return 0;
+
+}
+
+fn move_window(badge: u64, in: *const Message) i64 {
+
+    const window = owned_window(badge, in.data[1]) orelse return -7;
+
+    if (window.is_panel()) return -7;
+
+    const x: i32 = @intCast(in.data[2] >> 32);
+    const y: i32 = @intCast(@as(u32, @truncate(in.data[2])));
+
+    if (manager.move(window.id, x, y)) |moved| {
+
+        add_damage(moved);
+        publish_list();
+
+    }
+
+    composite() catch return -7;
+
+    return 0;
+
+}
+
+fn minimize_window(id: u64) i64 {
+
+    const window = manager.by_id(@intCast(id)) orelse return -7;
+
+    if (manager.minimize(window.id)) |hidden| {
+
+        add_damage(hidden);
+        publish_list();
+
+        if (manager.focused()) |now| send_to_owner(now, .{
+
+            .kind = events.kind_window_focus,
+            .code = 0,
+            .window = now.id,
+
+            .x = 0,
+            .y = 0,
+
+            .value = 0,
+
+        });
+
+    }
+
+    composite() catch return -7;
+
+    return 0;
+
+}
+
+fn restore_window(id: u64) i64 {
+
+    const window = manager.by_id(@intCast(id)) orelse return -7;
+
+    if (manager.restore(window.id)) |shown| {
+
+        add_damage(shown);
+        publish_list();
+        notify_focus(0, window.id);
+
+    }
+
+    composite() catch return -7;
+
+    return 0;
+
+}
+
+fn subscribe_list(badge: u64, in: *const Message, out: *Message) i64 {
+
+    if (in.handle_count < 2) return -7;
+
+    if (list_watch.info_base != 0) sys.unmap(cap.self_space, list_watch.info_base) catch {};
+    if (list_watch.notify != 0) sys.close(list_watch.notify) catch {};
+
+    list_watch.badge = badge;
+    list_watch.notify = in.handles[1].handle;
+    list_watch.info_base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
+
+    sys.close(in.handles[0].handle) catch {};
+
+    out.data[1] = write_list_buffer(list_watch.info_base);
+
+    return 0;
+
+}
+
+fn write_list_buffer(base: usize) u64 {
+
+    const records: [*]proto.window.WindowInfo = @ptrFromInt(base);
+
+    return manager.list_info(records[0..manager_module.max_windows]);
+
+}
+
+fn publish_list() void {
+
+    if (list_watch.info_base == 0 or list_watch.notify == 0) return;
+
+    _ = write_list_buffer(list_watch.info_base);
+
+    sys.notify(list_watch.notify, proto.window.list_bit) catch {};
 
 }
 
@@ -758,6 +949,7 @@ fn focus_and_raise(window: *Window) void {
     manager.raise(window.id);
 
     notify_focus(previous, window.id);
+    publish_list();
 
     // Both title bars repaint, and the raise may reveal any part of the frame.
 
@@ -932,6 +1124,14 @@ fn screen_bounds() Rect {
 
 }
 
+fn surface_bytes(width: u32, height: u32) ?usize {
+
+    const pixels = std.math.mul(usize, width, height) catch return null;
+
+    return std.math.mul(usize, pixels, 4) catch null;
+
+}
+
 fn composite() !void {
 
     if (damage.is_empty()) return;
@@ -948,6 +1148,7 @@ fn composite() !void {
 
         const window = manager.stacked(index);
 
+        if (window.flags & proto.window.flag_minimized != 0) continue;
         if (window.frame().intersect(region).is_empty()) continue;
 
         draw_window(window, region);

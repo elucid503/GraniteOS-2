@@ -1,0 +1,211 @@
+// Window-manager client: screen geometry, open-window tracking, focus, and placement on top of the compositor's
+// Window interface. Desktop chrome (the taskbar) uses this instead of hand-rolling IPC.
+
+const std = @import("std");
+
+const cap = @import("../cap/cap.zig");
+const app_catalog = @import("../boot/app_catalog.zig");
+const bundle_mod = @import("../boot/bundle.zig");
+const ipc = @import("../ipc/ipc.zig");
+const proto = @import("../ipc/proto.zig");
+const sys = @import("../syscall/sys.zig");
+
+const desktop_mod = @import("desktop.zig");
+const icons = @import("icons.zig");
+const window = @import("window.zig");
+
+const Error = sys.Error;
+const Handle = cap.Handle;
+const WindowInfo = proto.window.WindowInfo;
+
+pub const Screen = struct {
+
+    width: u32,
+    height: u32,
+
+};
+
+pub const App = struct {
+
+    program: []const u8,
+    title: []const u8,
+    description: []const u8,
+    icon: []const u8,
+
+};
+
+pub const List = struct {
+
+    connection: *window.Connection,
+    info_region: Handle,
+    info: [*]WindowInfo,
+    list_ready: Handle = 0,
+    attached: bool = false,
+    subscribed: bool = false,
+
+    pub fn init(connection: *window.Connection, authority: Handle) Error!List {
+
+        const info_region = try sys.create(.region, proto.window.max_windows * @sizeOf(WindowInfo), authority);
+        const base = try sys.map(cap.self_space, info_region, 0, sys.read | sys.write);
+
+        return .{
+
+            .connection = connection,
+            .info_region = info_region,
+            .info = @ptrFromInt(base),
+
+        };
+
+    }
+
+    pub fn refresh(self: *List, out: []WindowInfo) usize {
+
+        const handles = [_]ipc.HandleSlot{.{ .handle = self.info_region, .move = false }};
+        const attach: []const ipc.HandleSlot = if (self.attached) &.{} else &handles;
+
+        const reply = ipc.request(self.connection.endpoint, proto.window.list, &.{}, attach) catch return 0;
+
+        self.attached = true;
+
+        const count = @min(@as(usize, @intCast(reply.data[1])), out.len, proto.window.max_windows);
+
+        for (0..count) |index| {
+
+            out[index] = self.info[index];
+
+        }
+
+        return count;
+
+    }
+
+    pub fn subscribe(self: *List) Error!void {
+
+        if (self.subscribed) return;
+
+        const notify = try sys.create(.notification, 0, 0);
+
+        _ = try ipc.request(self.connection.endpoint, proto.window.subscribe_list, &.{}, &.{
+
+            .{ .handle = self.info_region, .move = false },
+            .{ .handle = notify, .move = false },
+
+        });
+
+        self.list_ready = notify;
+        self.subscribed = true;
+        self.attached = true;
+
+    }
+
+};
+
+pub fn screen_info(connection: *window.Connection) Error!Screen {
+
+    const reply = try ipc.request(connection.endpoint, proto.window.screen_info, &.{}, &.{});
+
+    return .{
+
+        .width = window.unpack_high(reply.data[1]),
+        .height = window.unpack_low(reply.data[1]),
+
+    };
+
+}
+
+pub fn activate(connection: *window.Connection, id: u32) Error!void {
+
+    _ = try ipc.request(connection.endpoint, proto.window.activate, &.{id}, &.{});
+
+}
+
+pub fn move_window(connection: *window.Connection, id: u64, x: i32, y: i32) Error!void {
+
+    _ = try ipc.request(connection.endpoint, proto.window.move, &.{
+
+        id,
+        window.pack_pair(@intCast(@max(0, x)), @intCast(@max(0, y))),
+
+    }, &.{});
+
+}
+
+pub fn minimize(connection: *window.Connection, id: u64) Error!void {
+
+    _ = try ipc.request(connection.endpoint, proto.window.minimize, &.{id}, &.{});
+
+}
+
+pub fn restore(connection: *window.Connection, id: u64) Error!void {
+
+    _ = try ipc.request(connection.endpoint, proto.window.restore, &.{id}, &.{});
+
+}
+
+pub fn load_apps(bundle: *const bundle_mod.Bundle, out: []App) usize {
+
+    const bytes = bundle.find("app-catalog") orelse return 0;
+    const catalog = app_catalog.Catalog.open(bytes) catch return 0;
+
+    var written: usize = 0;
+    var index: usize = 0;
+
+    while (index < catalog.desktop_count and written < out.len) : (index += 1) {
+
+        const entry = catalog.desktop(index) orelse continue;
+
+        out[written] = .{
+
+            .program = entry.program,
+            .title = entry.title,
+            .description = entry.description,
+            .icon = icon_by_name(entry.icon),
+
+        };
+
+        written += 1;
+
+    }
+
+    return written;
+
+}
+
+pub fn open_catalog(bundle: *const bundle_mod.Bundle) ?app_catalog.Catalog {
+
+    const bytes = bundle.find("app-catalog") orelse return null;
+
+    return app_catalog.Catalog.open(bytes) catch null;
+
+}
+
+pub fn icon_by_name(name: []const u8) []const u8 {
+
+    if (std.mem.eql(u8, name, "folder")) return icons.folder;
+    if (std.mem.eql(u8, name, "file")) return icons.file;
+    if (std.mem.eql(u8, name, "chart")) return icons.chart;
+    if (std.mem.eql(u8, name, "terminal")) return icons.terminal;
+    if (std.mem.eql(u8, name, "home")) return icons.home;
+    if (std.mem.eql(u8, name, "search")) return icons.search;
+    if (std.mem.eql(u8, name, "clock")) return icons.clock;
+    if (std.mem.eql(u8, name, "cpu")) return icons.cpu;
+    if (std.mem.eql(u8, name, "disk")) return icons.disk;
+    if (std.mem.eql(u8, name, "memory")) return icons.memory;
+
+    return icons.apps;
+
+}
+
+/// Convenience for GUI programs: open the bundle, connect to the compositor, and return both.
+pub fn boot(authority: Handle) Error!struct { bundle: bundle_mod.Bundle, connection: window.Connection } {
+
+    const bundle = try desktop_mod.open_bundle();
+
+    return .{
+
+        .bundle = bundle,
+        .connection = try desktop_mod.connect(authority),
+
+    };
+
+}

@@ -6,6 +6,7 @@ const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
 const stream = @import("../io/stream.zig");
 const sys = @import("../syscall/sys.zig");
+const window = @import("../gfx/window.zig");
 
 const max_args = 16;
 
@@ -206,6 +207,8 @@ fn close_runtime_streams() void {
 
 /// Report exit to the supervisor (a one-way death message carrying `status`, 07-userspace-ddd.md Section 10.4), then exit.
 pub fn exit_with(status: u8) noreturn {
+
+    window.shutdown_all();
 
     if (supervisor) |endpoint| {
 

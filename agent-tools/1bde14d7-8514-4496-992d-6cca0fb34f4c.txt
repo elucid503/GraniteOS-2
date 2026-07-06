@@ -1,0 +1,352 @@
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-marble.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\marble\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-marble.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-perms.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\fs\\perms.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-perms.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-console.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\drivers\\console\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-console.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-clear.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\common\\clear.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-clear.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-stress.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\common\\stress.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-stress.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-display.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\drivers\\display\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-display.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-compositor.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\servers\\display\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-compositor.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-naming.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\servers\\naming\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-naming.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-hello.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\common\\hello.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-hello.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-cat.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\common\\cat.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-cat.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-ls.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\fs\\ls.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-ls.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- run exe flatten (flint.bin)
+         +- compile exe granite-flint.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\flint\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-flint.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-location.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\location\\location.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-location.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-demo.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\gui\\demo.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-demo.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-view.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\fs\\view.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-view.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-create.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\fs\\create.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-create.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-launcher.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\servers\\launcher\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-launcher.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-mkdir.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\fs\\mkdir.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-mkdir.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-rename.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\fs\\rename.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-rename.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-input.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\servers\\input\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-input.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-shell.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\gui\\shell.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-shell.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-echo.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\common\\echo.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-echo.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-status.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\common\\status.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-status.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-write.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\fs\\write.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-write.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-block.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\drivers\\block\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-block.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-help.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\common\\help.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-help.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-delete.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\fs\\delete.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-delete.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-filesystem.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\servers\\filesystem\\main.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-filesystem.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-files.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\gui\\files.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-files.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-welcome.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\gui\\welcome.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-welcome.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-status-gui.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\gui\\status.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-status-gui.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-taskbar.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\gui\\taskbar.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-taskbar.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-about.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\common\\about.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-about.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+install
++- install generated to bundle.img
+   +- run exe bundle (bundle.img)
+      +- compile exe granite-wc.elf Debug aarch64-freestanding-none 1 errors
+user\lib\gfx\ui.zig:386:9: error: expected statement, found 'else'
+        else if (dx > 0 and dy >= 0) deg = 90 + deg;
+        ^~~~
+error: the following command failed with 1 compilation errors:
+"C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\zig.exe" build-exe -fentry=_start -fstrip -fno-single-threaded -fno-PIC -ODebug -mcmodel small -target aarch64-freestanding-none -mcpu cortex_a57 --dep lib "-Mroot=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\programs\\common\\wc.zig" -fno-single-threaded -fno-PIC -ODebug -target aarch64-freestanding-none -mcpu cortex_a57 "-Mlib=C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\lib\\root.zig" --cache-dir .zig-cache --global-cache-dir "C:\\Users\\paul\\AppData\\Local\\zig" --name granite-wc.elf --script "C:\\Users\\paul\\Desktop\\Projects\\Systems\\GraniteOS-2\\user\\linker\\user.ld" --zig-lib-dir "C:\\Users\\paul\\AppData\\Local\\Microsoft\\WinGet\\Packages\\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\\zig-x86_64-windows-0.15.2\\lib\\" --listen=-
+
+Build Summary: 8/47 steps succeeded; 34 failed
+install transitive failure
++- install generated to flint.bin transitive failure
+|  +- run exe flatten (flint.bin) transitive failure
+|     +- compile exe granite-flint.elf Debug aarch64-freestanding-none 1 errors
++- install generated to bundle.img transitive failure
+   +- run exe bundle (bundle.img) transitive failure
+      +- run exe flatten (flint.bin) (+2 more reused dependencies)
+      +- compile exe granite-marble.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-block.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-console.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-display.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-compositor.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-filesystem.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-input.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-launcher.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-naming.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-about.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-cat.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-clear.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-echo.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-hello.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-help.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-status.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-stress.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-wc.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-create.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-delete.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-ls.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-mkdir.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-perms.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-rename.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-view.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-write.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-location.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-demo.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-files.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-shell.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-status-gui.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-taskbar.elf Debug aarch64-freestanding-none 1 errors
+      +- compile exe granite-welcome.elf Debug aarch64-freestanding-none 1 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache\o\3c9baae0acead7c280a01bef0ee73ebd\build.exe C:\Users\paul\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\zig.exe C:\Users\paul\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.15.2\lib C:\Users\paul\Desktop\Projects\Systems\GraniteOS-2 .zig-cache C:\Users\paul\AppData\Local\zig --seed 0xd1a781c2 -Ze5a2dcefab75a7c1

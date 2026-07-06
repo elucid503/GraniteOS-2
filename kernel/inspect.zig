@@ -1,6 +1,7 @@
 // Fixed-layout snapshots copied to user space by the read-only inspect syscall.
 
 const config = @import("config.zig");
+const frames = @import("memory/frames.zig");
 
 pub const max_processes: usize = 32;
 pub const object_kind_slots: usize = 11;
@@ -11,6 +12,7 @@ pub const Kind = enum(u64) {
     scheduler = 1,
     processes,
     cpu,
+    memory,
 
 };
 
@@ -25,6 +27,14 @@ pub const QueueStats = extern struct {
 
 };
 
+pub const LevelQueueStats = extern struct {
+
+    count: u32,
+    lead_pid: u32,
+    lead_tid: u32,
+
+};
+
 pub const SchedulerSnapshot = extern struct {
 
     core_count: u32,
@@ -34,6 +44,8 @@ pub const SchedulerSnapshot = extern struct {
 
     quanta_ns: [config.scheduling_levels]u64,
     boost_interval_ns: u64,
+
+    level_queues: [config.scheduling_levels]LevelQueueStats,
 
     cores: [config.max_cores]QueueStats,
 
@@ -45,6 +57,8 @@ pub const ProcessInfo = extern struct {
     name_len: u32,
     thread_count: u32,
     handle_count: u32,
+
+    memory_bytes: u64,
 
     name: [process_name_bytes]u8,
     handles_by_kind: [object_kind_slots]u32,
@@ -81,3 +95,29 @@ pub const CpuSnapshot = extern struct {
     cores: [config.max_cores]CpuInfo,
 
 };
+
+pub const MemorySnapshot = extern struct {
+
+    page_size: u32,
+    reserved: u32,
+
+    total_frames: u64,
+    free_frames: u64,
+
+};
+
+pub fn memory_snapshot(out: *MemorySnapshot) void {
+
+    const counts = frames.stats();
+
+    out.* = .{
+
+        .page_size = @intCast(config.page_size),
+        .reserved = 0,
+
+        .total_frames = @intCast(counts.total),
+        .free_frames = @intCast(counts.free),
+
+    };
+
+}

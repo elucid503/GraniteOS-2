@@ -498,6 +498,7 @@ fn inspect_call(kind_raw: u64, out_ptr: u64, capacity: u64) Error!u64 {
         .scheduler => write_snapshot(inspect.SchedulerSnapshot, out_ptr, capacity, scheduler.scheduler_snapshot),
         .processes => write_snapshot(inspect.ProcessSnapshot, out_ptr, capacity, process_module.snapshot),
         .cpu => write_snapshot(inspect.CpuSnapshot, out_ptr, capacity, scheduler.cpu_snapshot),
+        .memory => write_snapshot(inspect.MemorySnapshot, out_ptr, capacity, inspect.memory_snapshot),
 
     };
 

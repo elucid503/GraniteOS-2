@@ -190,19 +190,28 @@ pub const window = struct {
     pub const resize: u16 = 6; // request: window id, (w<<32)|h                   reply: (w<<32)|h, stride bytes, surface Region in handle 0
     pub const list: u16 = 7; // request: info Region in handle 0 (attached once)   reply: window count, records written to the info buffer
     pub const activate: u16 = 8; // request: window id                              reply: status (focus and raise, for the taskbar)
+    pub const screen_info: u16 = 9; // request: -                                    reply: (width<<32)|height
+    pub const move: u16 = 10; // request: window id, (x<<32)|y                     reply: status
+    pub const minimize: u16 = 11; // request: window id                              reply: status
+    pub const restore: u16 = 12; // request: window id                              reply: status
+    pub const subscribe_list: u16 = 13; // request: info Region in handle 0, Notification in handle 1   reply: window count (and later notifications on changes)
 
     pub const flag_undecorated: u64 = 1; // no title bar or border
     pub const flag_fullscreen: u64 = 2; // sized to the screen, tracks mode changes
     pub const flag_panel: u64 = 4; // an undecorated dock pinned to the screen bottom, always above ordinary windows
+    pub const flag_minimized: u64 = 8; // hidden from the desktop but still tracked by the compositor
 
     // Titles ride inline in message words 3-5, NUL-padded.
     pub const max_title: usize = 24;
 
     // The compositor's window-table capacity, so a `list` client can size its info buffer (mirrors the manager).
-    pub const max_windows: usize = 16;
+    pub const max_windows: usize = 64;
 
     // The Notification bit the compositor signals when it pushes into a client's event ring.
     pub const ring_bit: u64 = 1;
+
+    // The Notification bit the compositor signals when the open-window list changes.
+    pub const list_bit: u64 = 2;
 
     /// One record the compositor writes into a `list` client's info buffer, so the taskbar can show open windows.
     pub const WindowInfo = extern struct {
@@ -210,7 +219,13 @@ pub const window = struct {
         id: u32,
         flags: u32,
         focused: u32,
+        minimized: u32,
         title_len: u32,
+
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
 
         title: [max_title]u8,
 

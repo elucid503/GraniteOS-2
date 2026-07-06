@@ -19,6 +19,12 @@ const ui = lib.ui;
 const Handle = cap.Handle;
 const Message = ipc.Message;
 
+pub const app_meta = .{
+    .title = "Terminal",
+    .description = "MARBLE command shell",
+    .icon = "terminal",
+};
+
 comptime {
 
     _ = lib.start;
@@ -29,14 +35,14 @@ const margin: i32 = 8;
 const max_cols = 128;
 const max_rows = 48;
 
-const marble_budget = 14 * 1024 * 1024;
 const tty_workers = 3;
 const worker_stack_pages = 16;
 const page_size = 4096;
+const shutdown_method: u64 = 0xffff_ffff_ffff_fffe;
 
-const fg = gfx.rgb(206, 212, 224);
-const bg = gfx.rgb(16, 18, 24);
-const cursor_color = gfx.rgb(120, 200, 140);
+const fg = gfx.rgb(206, 206, 206);
+const bg = gfx.rgb(16, 16, 16);
+const cursor_color = gfx.rgb(200, 200, 200);
 
 var console: lib.font.Font = undefined;
 
@@ -51,6 +57,8 @@ var core_count: u64 = 1;
 
 var tty: Handle = 0;
 var child_deaths: Handle = 0;
+var shutting_down: u32 = 0;
+var marble_running: u32 = 0;
 
 // The character grid, its cursor, and the escape-sequence parser. Guarded by screen_lock: the tty workers mutate it
 // on write/echo, the GUI thread snapshots it to paint.
@@ -144,7 +152,7 @@ fn run() !void {
 
         while (connection.poll_event()) |event| {
 
-            handle(event);
+            if (handle(event)) return;
 
         }
 
@@ -166,14 +174,17 @@ fn resize_grid() void {
 
 // Keyboard
 
-fn handle(event: events.Event) void {
+fn handle(event: events.Event) bool {
 
     switch (event.kind) {
 
         events.kind_window_close => {
 
+            terminate_marble();
             window.destroy();
-            lib.start.exit();
+            stop_workers();
+
+            return true;
 
         },
 
@@ -196,6 +207,8 @@ fn handle(event: events.Event) void {
         else => {},
 
     }
+
+    return false;
 
 }
 
@@ -264,6 +277,8 @@ fn tty_worker() callconv(.c) noreturn {
 
         const badge = sys.receive(tty, &in) catch continue;
 
+        if (in.data[0] == shutdown_method) lib.start.exit();
+
         var out = Message.zeroed;
         out.data[0] = @bitCast(dispatch(badge, in.data[0], &in, &out));
 
@@ -309,6 +324,8 @@ fn attach(badge: u64, in: *const Message) i64 {
 
     session.base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
     session.capacity = @intCast(in.data[1]);
+
+    sys.close(in.handles[0].handle) catch {};
 
     return 0;
 
@@ -364,6 +381,8 @@ fn read_raw(span: []u8) i64 {
 
     while (true) {
 
+        if (@atomicLoad(u32, &shutting_down, .acquire) != 0) return 0;
+
         if (input_pop()) |byte| {
 
             span[0] = byte;
@@ -383,6 +402,8 @@ fn read_cooked(span: []u8) i64 {
     var length: usize = 0;
 
     while (true) {
+
+        if (@atomicLoad(u32, &shutting_down, .acquire) != 0) return @intCast(length);
 
         const byte = input_pop() orelse {
 
@@ -738,10 +759,14 @@ fn spawn_marble() !void {
     const bundle = try lib.desktop.open_bundle();
     const image = bundle.find("marble") orelse return error.NotFound;
 
-    const memory = try sys.create(.memory_authority, marble_budget, cap.memory);
     const init_endpoint = try sys.create(.endpoint, 0, 0);
+    errdefer sys.close(init_endpoint) catch {};
+
     const report = try sys.copy(child_deaths, 1);
+    errdefer sys.close(report) catch {};
+
     const stdio = try sys.copy(tty, 1);
+    errdefer sys.close(stdio) catch {};
 
     const grants = [_]Handle{
 
@@ -749,7 +774,7 @@ fn spawn_marble() !void {
         stdio,
         stdio,
         cap.name_service,
-        memory,
+        cap.memory,
         init_endpoint,
         report,
         stdio,
@@ -758,10 +783,10 @@ fn spawn_marble() !void {
 
     };
 
-    _ = try lib.elf.spawn_program(.{
+    const child = try lib.elf.spawn_program(.{
 
         .image = image,
-        .authority = memory,
+        .authority = cap.memory,
         .args = &.{"marble"},
         .grants = &grants,
         .data3 = bundle_length,
@@ -770,6 +795,57 @@ fn spawn_marble() !void {
         .cwd = "/root/user",
 
     });
+
+    sys.close(child) catch {};
+    sys.close(init_endpoint) catch {};
+    sys.close(report) catch {};
+    sys.close(stdio) catch {};
+
+    @atomicStore(u32, &marble_running, 1, .release);
+
+}
+
+fn request_marble_exit() void {
+
+    const cmd = "exit\n";
+
+    input_lock.acquire();
+
+    for (cmd) |byte| {
+
+        if (input_tail -% input_head < input_capacity) {
+
+            input_buffer[input_tail % input_capacity] = byte;
+            input_tail +%= 1;
+
+        }
+
+    }
+
+    input_lock.release();
+
+    sys.notify(input_ready, 1) catch {};
+
+}
+
+fn wait_marble_exit() void {
+
+    var spins: u32 = 0;
+
+    while (@atomicLoad(u32, &marble_running, .acquire) != 0 and spins < 500) : (spins += 1) {
+
+        lib.time.sleep_ms(10);
+
+    }
+
+}
+
+fn terminate_marble() void {
+
+    if (@atomicLoad(u32, &marble_running, .acquire) == 0) return;
+
+    request_marble_exit();
+    wait_marble_exit();
 
 }
 
@@ -787,14 +863,43 @@ fn reaper() callconv(.c) noreturn {
 
         _ = sys.receive(child_deaths, &message) catch continue;
 
+        if (message.data[0] == shutdown_method) lib.start.exit();
+
+        @atomicStore(u32, &marble_running, 0, .release);
+
+        if (@atomicLoad(u32, &shutting_down, .acquire) != 0) lib.start.exit();
+
         // MARBLE exited (its `exit` builtin, or a crash): a short backoff keeps a crash-on-start from respawning in a
         // tight loop, then start a fresh session.
 
         lib.time.sleep_ms(300);
 
+        if (@atomicLoad(u32, &shutting_down, .acquire) != 0) lib.start.exit();
+
         spawn_marble() catch {};
 
     }
+
+}
+
+fn stop_workers() void {
+
+    @atomicStore(u32, &shutting_down, 1, .release);
+
+    var message = Message.zeroed;
+    message.data[0] = shutdown_method;
+
+    sys.notify(input_ready, 1) catch {};
+
+    var index: usize = 0;
+
+    while (index < tty_workers) : (index += 1) {
+
+        sys.send(tty, &message) catch {};
+
+    }
+
+    sys.send(child_deaths, &message) catch {};
 
 }
 
@@ -803,6 +908,8 @@ fn start_thread(entry: *const fn () callconv(.c) noreturn) !void {
     const stack = try sys.create(.region, worker_stack_pages * page_size, cap.memory);
     const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
     const thread = try sys.create_thread(@intFromPtr(entry), base + worker_stack_pages * page_size);
+
+    sys.close(stack) catch {};
 
     try sys.start(thread);
 

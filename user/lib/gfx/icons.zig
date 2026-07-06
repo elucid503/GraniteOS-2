@@ -32,9 +32,8 @@ pub const chart =
 
 pub const terminal =
     \\<svg viewBox="0 0 24 24">
-    \\<rect x="3" y="4" width="18" height="16" rx="2"/>
-    \\<polyline points="7 9 11 12 7 15"/>
-    \\<line x1="13" y1="15" x2="17" y2="15"/>
+    \\<polyline points="6 8 11 12 6 16"/>
+    \\<line x1="14" y1="17" x2="19" y2="17"/>
     \\</svg>
 ;
 
@@ -84,5 +83,13 @@ pub const disk =
     \\<svg viewBox="0 0 24 24">
     \\<circle cx="12" cy="12" r="8"/>
     \\<circle cx="12" cy="12" r="2"/>
+    \\</svg>
+;
+
+pub const memory =
+    \\<svg viewBox="0 0 24 24">
+    \\<circle cx="12" cy="12" r="8"/>
+    \\<line x1="12" y1="12" x2="12" y2="4"/>
+    \\<line x1="12" y1="12" x2="18" y2="17"/>
     \\</svg>
 ;

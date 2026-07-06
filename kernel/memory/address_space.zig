@@ -26,6 +26,7 @@ const Mapping = struct {
     base: VirtAddr,
     pages: usize,
     active: bool,
+    region: ?*Region,
 
 };
 
@@ -52,7 +53,14 @@ pub const AddressSpace = struct {
 
         for (&space.mappings) |*mapping| {
 
-            mapping.active = false;
+            mapping.* = .{
+
+                .base = 0,
+                .pages = 0,
+                .active = false,
+                .region = null,
+
+            };
 
         }
 
@@ -72,13 +80,37 @@ pub const AddressSpace = struct {
         effective.device = region.device;
         effective.uncached = region.uncached;
 
+        var mapped: usize = 0;
+
         for (0..region.pages) |index| {
 
-            try arch.map_page(self.root, base + index * page_size, region.frame(index), effective);
+            arch.map_page(self.root, base + index * page_size, region.frame(index), effective) catch |failure| {
+
+                while (mapped > 0) {
+
+                    mapped -= 1;
+                    arch.unmap_page(self.root, base + mapped * page_size);
+
+                }
+
+                return failure;
+
+            };
+
+            mapped += 1;
 
         }
 
-        slot.* = .{ .base = base, .pages = region.pages, .active = true };
+        region.header.retain();
+
+        slot.* = .{
+
+            .base = base,
+            .pages = region.pages,
+            .active = true,
+            .region = region,
+
+        };
 
         const end = base + region.pages * page_size;
 
@@ -92,13 +124,29 @@ pub const AddressSpace = struct {
 
         const slot = self.find(at) orelse return error.NotFound;
 
+        self.release_mapping(slot);
+
+    }
+
+    fn release_mapping(self: *AddressSpace, slot: *Mapping) void {
+
         for (0..slot.pages) |index| {
 
-            arch.unmap_page(self.root, at + index * page_size);
+            arch.unmap_page(self.root, slot.base + index * page_size);
 
         }
 
         slot.active = false;
+        slot.base = 0;
+        slot.pages = 0;
+
+        if (slot.region) |region| {
+
+            slot.region = null;
+
+            if (region.header.release()) object.destroy(&region.header);
+
+        }
 
     }
 
@@ -109,6 +157,12 @@ pub const AddressSpace = struct {
     }
 
     pub fn destroy(self: *AddressSpace) void {
+
+        for (&self.mappings) |*mapping| {
+
+            if (mapping.active) self.release_mapping(mapping);
+
+        }
 
         arch.free_table(self.root);
         cache.free(self);

@@ -57,13 +57,20 @@ pub fn load(image: []const u8, authority: Handle) Error!Loaded {
     if (image.len < 64) return error.Invalid;
 
     const space = try sys.create(.address_space, 0, 0);
+    errdefer sys.close(space) catch {};
+
     const program_header_offset: usize = @intCast(read_u64(image, e_phoff));
     const program_header_size: usize = read_u16(image, e_phentsize);
     const program_header_count: usize = read_u16(image, e_phnum);
     const image_base, const image_length = try image_span(image, program_header_offset, program_header_size, program_header_count);
 
-    const image_region = try sys.create(.region, image_length, authority);
+    var image_region = try sys.create(.region, image_length, authority);
+    errdefer if (image_region != 0) sys.close(image_region) catch {};
+
     const staging = try sys.map(cap.self_space, image_region, 0, sys.read | sys.write);
+    var staging_mapped = true;
+    errdefer if (staging_mapped) sys.unmap(cap.self_space, staging) catch {};
+
     const destination: [*]u8 = @ptrFromInt(staging);
 
     @memset(destination[0..image_length], 0);
@@ -91,13 +98,22 @@ pub fn load(image: []const u8, authority: Handle) Error!Loaded {
     }
 
     try sys.unmap(cap.self_space, staging);
+    staging_mapped = false;
 
     const mapped = try sys.map(space, image_region, image_base, sys.read | sys.write | sys.execute);
 
     if (mapped != image_base) return error.Invalid;
 
-    const stack_region = try sys.create(.region, stack_pages * page_size, authority);
+    sys.close(image_region) catch {};
+    image_region = 0;
+
+    var stack_region = try sys.create(.region, stack_pages * page_size, authority);
+    errdefer if (stack_region != 0) sys.close(stack_region) catch {};
+
     const mapped_stack = try sys.map(space, stack_region, stack_base, sys.read | sys.write);
+
+    sys.close(stack_region) catch {};
+    stack_region = 0;
 
     return .{
 
@@ -144,8 +160,16 @@ fn image_span(image: []const u8, program_header_offset: usize, program_header_si
 pub fn spawn_program(args: SpawnArgs) Error!Handle {
 
     const loaded = try load(args.image, args.authority);
+    errdefer sys.close(loaded.space) catch {};
+
     const init = try build_args(args.authority, args.args, args.cwd);
+    var init_region = init.region;
+    errdefer if (init_region != 0) sys.close(init_region) catch {};
+
     const child = try sys.spawn(loaded.space, loaded.entry, loaded.stack, args.grants);
+    errdefer sys.close(child) catch {};
+
+    sys.close(loaded.space) catch {};
 
     var message = ipc.Message.zeroed;
 
@@ -155,10 +179,11 @@ pub fn spawn_program(args: SpawnArgs) Error!Handle {
     message.data[3] = args.data3;
     message.data[4] = args.data4;
     message.data[5] = args.data5;
-    message.handles[0] = .{ .handle = init.region, .move = true };
+    message.handles[0] = .{ .handle = init_region, .move = true };
     message.handle_count = 1;
 
     try sys.send(args.grants[cap.startup_endpoint], &message);
+    init_region = 0;
 
     return child;
 

@@ -13,23 +13,23 @@ const Face = ttf.Face;
 
 pub const theme = struct {
 
-    pub const window_bg = gfx.rgb(30, 32, 38);
-    pub const surface = gfx.rgb(38, 41, 49);
-    pub const surface_alt = gfx.rgb(46, 49, 58);
-    pub const border = gfx.rgb(58, 62, 73);
+    pub const window_bg = gfx.rgb(30, 30, 30);
+    pub const surface = gfx.rgb(38, 38, 38);
+    pub const surface_alt = gfx.rgb(46, 46, 46);
+    pub const border = gfx.rgb(58, 58, 58);
 
-    pub const hover = gfx.rgb(52, 56, 67);
-    pub const active = gfx.rgb(70, 76, 90);
+    pub const hover = gfx.rgb(52, 52, 52);
+    pub const active = gfx.rgb(70, 70, 70);
 
-    pub const accent = gfx.rgb(94, 160, 240);
-    pub const accent_dim = gfx.rgb(58, 92, 144);
+    pub const accent = gfx.rgb(200, 200, 200);
+    pub const accent_dim = gfx.rgb(100, 100, 100);
 
-    pub const text = gfx.rgb(228, 232, 240);
-    pub const text_dim = gfx.rgb(150, 158, 172);
-    pub const text_faint = gfx.rgb(104, 111, 126);
+    pub const text = gfx.rgb(230, 230, 230);
+    pub const text_dim = gfx.rgb(160, 160, 160);
+    pub const text_faint = gfx.rgb(110, 110, 110);
 
-    pub const good = gfx.rgb(120, 200, 140);
-    pub const warn = gfx.rgb(232, 184, 96);
+    pub const good = gfx.rgb(190, 190, 190);
+    pub const warn = gfx.rgb(140, 140, 140);
 
 };
 
@@ -286,6 +286,245 @@ fn plot_y(inner: Rect, value: u32, max: i64) i32 {
     const clamped: i64 = @min(@as(i64, value), max);
 
     return inner.y + inner.h - @as(i32, @intCast(@divTrunc(clamped * inner.h, max)));
+
+}
+
+pub const PieSlice = struct {
+
+    value: u64,
+    color: Color,
+
+};
+
+/// A filled pie chart of `slices` (most significant first), centered at (cx, cy).
+pub fn pie_chart(surface: *const Surface, cx: i32, cy: i32, radius: i32, slices: []const PieSlice) void {
+
+    if (radius <= 0) return;
+
+    var total: u64 = 0;
+
+    for (slices) |slice| total += slice.value;
+
+    if (total == 0) {
+
+        surface.fill_circle(cx, cy, radius, theme.surface);
+        surface.stroke_circle_smooth(cx, cy, radius, 1, theme.border);
+
+        return;
+
+    }
+
+    var bounds: [8]struct { start: u16, end: u16, color: Color } = undefined;
+    var bound_count: usize = 0;
+    var start: u16 = 0;
+
+    for (slices) |slice| {
+
+        if (slice.value == 0) continue;
+
+        const sweep: u16 = @intCast(@min(360, slice.value * 360 / total));
+
+        bounds[bound_count] = .{
+            .start = start,
+            .end = start +% sweep,
+            .color = slice.color,
+        };
+
+        bound_count += 1;
+        start +%= sweep;
+
+    }
+
+    const radius_sq = radius * radius;
+
+    var dy: i32 = -radius;
+
+    while (dy <= radius) : (dy += 1) {
+
+        var dx: i32 = -radius;
+
+        while (dx <= radius) : (dx += 1) {
+
+            if (dx * dx + dy * dy > radius_sq) continue;
+
+            const angle = point_angle_cw(dx, dy);
+
+            for (bounds[0..bound_count]) |bound| {
+
+                if (angle_in_wedge(angle, bound.start, bound.end)) {
+
+                    surface.put_pixel(cx + dx, cy + dy, bound.color);
+                    break;
+
+                }
+
+            }
+
+        }
+
+    }
+
+    surface.stroke_circle_smooth(cx, cy, radius, 1, theme.border);
+
+}
+
+fn point_angle_cw(dx: i32, dy: i32) u16 {
+
+    if (dx == 0 and dy == 0) return 0;
+
+    const ax: u32 = @intCast(@abs(dx));
+    const ay: u32 = @intCast(@abs(dy));
+    var deg: u32 = 0;
+
+    if (ax >= ay) {
+
+        deg = @intCast((ay * 45) / ax);
+
+        if (dx > 0 and dy < 0) {
+
+            deg = 90 - deg;
+
+        } else if (dx > 0 and dy >= 0) {
+
+            deg = 90 + deg;
+
+        } else if (dx < 0 and dy >= 0) {
+
+            deg = 270 - deg;
+
+        } else {
+
+            deg = 270 + deg;
+
+        }
+
+    } else {
+
+        deg = @intCast((ax * 45) / ay);
+
+        if (dx >= 0 and dy < 0) {
+
+            deg = 0 + deg;
+
+        } else if (dx >= 0 and dy > 0) {
+
+            deg = 180 - deg;
+
+        } else if (dx < 0 and dy > 0) {
+
+            deg = 180 + deg;
+
+        } else {
+
+            deg = 360 - deg;
+
+        }
+
+    }
+
+    return @intCast(deg % 360);
+
+}
+
+fn angle_in_wedge(angle: u16, start: u16, end: u16) bool {
+
+    if (end <= 360) return angle >= start and angle < end;
+
+    return angle >= start or angle < (end - 360);
+
+}
+
+/// Vertically center an icon inside `rect`.
+pub fn icon_in(surface: *const Surface, rect: Rect, svg_bytes: []const u8, color: Color) void {
+
+    const size = @min(rect.w, rect.h);
+
+    const x = rect.x + @divTrunc(rect.w - size, 2);
+    const y = rect.y + @divTrunc(rect.h - size, 2);
+
+    icon(surface, .{ .x = x, .y = y, .w = size, .h = size }, svg_bytes, color);
+
+}
+
+pub const GanttSample = struct {
+
+    pid: u32,
+    tid: u32,
+
+};
+
+const gantt_palette = [_]Color{
+    theme.accent,
+    theme.text,
+    theme.text_dim,
+    theme.good,
+    theme.warn,
+    theme.accent_dim,
+    theme.hover,
+    theme.active,
+};
+
+fn gantt_color(pid: u32, tid: u32) Color {
+
+    if (tid == 0) return theme.surface_alt;
+
+    return gantt_palette[pid % gantt_palette.len];
+
+}
+
+/// Per-core occupancy over time: one row per entry in `rows`, oldest sample left, newest right.
+pub fn gantt_chart(surface: *const Surface, rect: Rect, rows: []const []const GanttSample) void {
+
+    surface.fill_rect(rect, theme.surface);
+    surface.stroke_rect(rect, 1, theme.border);
+
+    if (rows.len == 0) return;
+
+    const inner = Rect{ .x = rect.x + 2, .y = rect.y + 2, .w = rect.w - 4, .h = rect.h - 4 };
+
+    if (inner.w <= 0 or inner.h <= 0) return;
+
+    const row_h = @divTrunc(inner.h, @as(i32, @intCast(rows.len)));
+
+    if (row_h <= 0) return;
+
+    for (rows, 0..) |row, row_index| {
+
+        const y = inner.y + @as(i32, @intCast(row_index)) * row_h;
+
+        if (row_index > 0) {
+
+            surface.fill_rect(.{ .x = inner.x, .y = y, .w = inner.w, .h = 1 }, theme.border);
+
+        }
+
+        if (row.len == 0) continue;
+
+        if (row.len == 1) {
+
+            const sample = row[0];
+
+            surface.fill_rect(.{ .x = inner.x, .y = y + 1, .w = inner.w, .h = row_h - 2 }, gantt_color(sample.pid, sample.tid));
+
+            continue;
+
+        }
+
+        const last = row.len - 1;
+
+        var index: usize = 0;
+
+        while (index < row.len) : (index += 1) {
+
+            const x0 = inner.x + @as(i32, @intCast(@divTrunc(@as(i64, @intCast(index)) * inner.w, @as(i64, @intCast(last)))));
+            const x1 = if (index == last) inner.x + inner.w else inner.x + @as(i32, @intCast(@divTrunc(@as(i64, @intCast(index + 1)) * inner.w, @as(i64, @intCast(last)))));
+            const sample = row[index];
+
+            surface.fill_rect(.{ .x = x0, .y = y + 1, .w = @max(1, x1 - x0), .h = row_h - 2 }, gantt_color(sample.pid, sample.tid));
+
+        }
+
+    }
 
 }
 

@@ -98,9 +98,10 @@ pub const Process = struct {
 
         unlink_global(self);
 
-        self.handles.deinit();
-
+        // Drop mappings before closing handles so Region teardown runs while its MemoryAuthority is still reachable.
         if (self.address_space.header.release()) self.address_space.destroy();
+
+        self.handles.deinit();
 
         cache.free(self);
 
@@ -155,6 +156,7 @@ pub fn snapshot(out: *inspect.ProcessSnapshot) void {
 
         var by_kind: [inspect.object_kind_slots]u32 = undefined;
         const handles = process.handles.stats(&by_kind);
+        const memory_bytes = process.handles.memory_usage();
         const threads = @atomicLoad(u32, &process.thread_count, .monotonic);
 
         out.total_threads += threads;
@@ -168,6 +170,8 @@ pub fn snapshot(out: *inspect.ProcessSnapshot) void {
                 .name_len = @intCast(process.name_len),
                 .thread_count = threads,
                 .handle_count = handles,
+
+                .memory_bytes = memory_bytes,
 
                 .name = process.name,
                 .handles_by_kind = by_kind,
@@ -224,6 +228,8 @@ fn empty_process_info() inspect.ProcessInfo {
         .name_len = 0,
         .thread_count = 0,
         .handle_count = 0,
+
+        .memory_bytes = 0,
 
         .name = [_]u8{0} ** inspect.process_name_bytes,
         .handles_by_kind = [_]u32{0} ** inspect.object_kind_slots,

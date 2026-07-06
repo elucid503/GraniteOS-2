@@ -32,44 +32,28 @@ const button_gap: i32 = 4;
 
 const menu_width: u32 = 340;
 const row_height: i32 = 56;
-const search_height: i32 = 40;
+const search_height: i32 = 46;
 
-const bar_bg = gfx.rgb(24, 26, 32);
-const bar_border = gfx.rgb(56, 60, 72);
+const bar_bg = gfx.rgb(24, 24, 24);
+const bar_border = gfx.rgb(56, 56, 56);
 
-const App = struct {
-
-    program: []const u8,
-    title: []const u8,
-    description: []const u8,
-    icon: []const u8,
-
-};
-
-const apps = [_]App{
-
-    .{ .program = "files", .title = "Files", .description = "Browse the filesystem", .icon = lib.icons.folder },
-    .{ .program = "status-gui", .title = "Status", .description = "Live system metrics", .icon = lib.icons.chart },
-    .{ .program = "shell", .title = "Terminal", .description = "MARBLE command shell", .icon = lib.icons.terminal },
-    .{ .program = "demo", .title = "Graphics Demo", .description = "Vector rendering sample", .icon = lib.icons.apps },
-
-};
+const max_apps = 32;
 
 var font: lib.ttf.Face = undefined;
+var bundle: lib.bundle.Bundle = undefined;
 
 var connection: lib.window.Connection = undefined;
+var window_list: lib.wm.List = undefined;
 var bar: lib.window.Window = undefined;
 
 var menu: ?lib.window.Window = null;
 var menu_open = false;
 
-// The compositor writes the open-window list into this shared buffer.
-var info_region: cap.Handle = 0;
-var info: [*]WindowInfo = undefined;
-var info_attached = false;
-
 var windows: [proto.window.max_windows]WindowInfo = undefined;
 var window_count: usize = 0;
+
+var apps: [max_apps]lib.wm.App = undefined;
+var app_count: usize = 0;
 
 var launch_endpoint: cap.Handle = 0;
 
@@ -97,21 +81,25 @@ pub fn main(_: []const []const u8) u8 {
 
 fn run() !void {
 
-    var bundle = try lib.desktop.open_bundle();
+    bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
 
+    window_list = try lib.wm.List.init(&connection, cap.memory);
+    try window_list.subscribe();
+
     bar = try connection.create_window(0, @intCast(bar_height), proto.window.flag_panel, "taskbar");
 
-    try prepare_info();
+    app_count = lib.wm.load_apps(&bundle, apps[0..]);
     launch_endpoint = lib.stream.lookup_endpoint("launch") catch 0;
 
     refresh_windows();
     paint_bar();
 
     try start_ticker();
+    try start_list_watcher();
 
     while (true) {
 
@@ -134,31 +122,9 @@ fn run() !void {
 
 }
 
-fn prepare_info() !void {
-
-    info_region = try sys.create(.region, proto.window.max_windows * @sizeOf(WindowInfo), cap.memory);
-
-    const base = try sys.map(cap.self_space, info_region, 0, sys.read | sys.write);
-
-    info = @ptrFromInt(base);
-
-}
-
 fn refresh_windows() void {
 
-    const handles = [_]ipc.HandleSlot{.{ .handle = info_region, .move = false }};
-    const attach: []const ipc.HandleSlot = if (info_attached) &.{} else &handles;
-
-    const reply = ipc.request(connection.endpoint, proto.window.list, &.{}, attach) catch return;
-
-    info_attached = true;
-    window_count = @min(@as(usize, @intCast(reply.data[1])), proto.window.max_windows);
-
-    for (0..window_count) |index| {
-
-        windows[index] = info[index];
-
-    }
+    window_count = window_list.refresh(windows[0..]);
 
 }
 
@@ -224,11 +190,17 @@ fn bar_hover_token(x: i32) i32 {
 
     if (layout.width <= 0 or x < layout.start) return -1;
 
-    const index = @divTrunc(x - layout.start, layout.width + button_gap);
+    var index: usize = 0;
 
-    if (index >= @as(i32, @intCast(window_count))) return -1;
+    while (index < window_count) : (index += 1) {
 
-    return index;
+        const left = layout.start + @as(i32, @intCast(index)) * (layout.width + button_gap);
+
+        if (x >= left and x < left + layout.width) return @intCast(index);
+
+    }
+
+    return -1;
 
 }
 
@@ -248,7 +220,7 @@ fn handle_menu(event: events.Event) void {
 
             menu_ptr_y = event.y;
 
-            const token = if (event.y < search_height) @as(i32, -1) else @divTrunc(event.y - search_height, row_height);
+            const token = menu_hover_token(event.y);
 
             if (token != last_menu_hover) {
 
@@ -281,7 +253,15 @@ fn activate_at(x: i32) void {
 
     if (index >= window_count) return;
 
-    _ = ipc.request(connection.endpoint, proto.window.activate, &.{windows[index].id}, &.{}) catch {};
+    if (windows[index].minimized != 0) {
+
+        lib.wm.restore(&connection, windows[index].id) catch {};
+
+    } else {
+
+        lib.wm.activate(&connection, windows[index].id) catch {};
+
+    }
 
 }
 
@@ -324,33 +304,16 @@ fn menu_key(code: u16) void {
 
 fn menu_click(y: i32) void {
 
-    if (y < search_height) return;
+    const app = menu_app_at_y(y) orelse return;
 
-    const row: usize = @intCast(@divTrunc(y - search_height, row_height));
-
-    var seen: usize = 0;
-
-    for (apps) |app| {
-
-        if (!matches(app)) continue;
-
-        if (seen == row) {
-
-            launch(app.program);
-            close_menu();
-            return;
-
-        }
-
-        seen += 1;
-
-    }
+    launch(app.program);
+    close_menu();
 
 }
 
 fn launch_first() void {
 
-    for (apps) |app| {
+    for (apps[0..app_count]) |app| {
 
         if (matches(app)) {
 
@@ -384,7 +347,7 @@ fn open_menu() void {
     menu_ptr_y = -1;
     last_menu_hover = -3;
 
-    const height: u32 = @intCast(search_height + @as(i32, @intCast(apps.len)) * row_height + 8);
+    const height: u32 = @intCast(search_height + @as(i32, @intCast(app_count)) * row_height + 8);
 
     menu = connection.create_window(menu_width, height, proto.window.flag_undecorated, "menu") catch return;
     menu_open = true;
@@ -430,6 +393,52 @@ fn launch(program: []const u8) void {
     }
 
     _ = ipc.request(launch_endpoint, proto.launch.spawn, &words, &.{}) catch {};
+
+}
+
+fn menu_hover_token(y: i32) i32 {
+
+    if (y < search_height) return -1;
+
+    var row: i32 = 0;
+
+    for (apps[0..app_count]) |app| {
+
+        if (!matches(app)) continue;
+
+        const top = search_height + row * row_height;
+        const rect = Rect{ .x = 4, .y = top, .w = @as(i32, @intCast(menu_width)) - 8, .h = row_height - 4 };
+
+        if (y >= rect.y and y < rect.y + rect.h) return row;
+
+        row += 1;
+
+    }
+
+    return -2;
+
+}
+
+fn menu_app_at_y(y: i32) ?lib.wm.App {
+
+    if (y < search_height) return null;
+
+    var row: i32 = 0;
+
+    for (apps[0..app_count]) |app| {
+
+        if (!matches(app)) continue;
+
+        const top = search_height + row * row_height;
+        const rect = Rect{ .x = 4, .y = top, .w = @as(i32, @intCast(menu_width)) - 8, .h = row_height - 4 };
+
+        if (y >= rect.y and y < rect.y + rect.h) return app;
+
+        row += 1;
+
+    }
+
+    return null;
 
 }
 
@@ -484,9 +493,10 @@ fn paint_bar() void {
 
         const info_entry = windows[index];
         const focused = info_entry.focused != 0;
+        const minimized = info_entry.minimized != 0;
         const hovered = bar_ptr_x >= rect.x and bar_ptr_x < rect.x + rect.w;
 
-        const fill = if (focused) ui.theme.accent_dim else if (hovered) ui.theme.hover else ui.theme.surface_alt;
+        const fill = if (minimized) ui.theme.surface else if (focused) ui.theme.accent_dim else if (hovered) ui.theme.hover else ui.theme.surface_alt;
 
         surface.fill_rect(rect, fill);
 
@@ -536,15 +546,21 @@ fn paint_menu() void {
     surface.fill_rect(search_rect, ui.theme.surface);
     surface.stroke_rect(search_rect, 1, ui.theme.accent);
 
-    ui.icon(surface, .{ .x = 14, .y = search_rect.y + 3, .w = 16, .h = 16 }, lib.icons.search, ui.theme.text_dim);
+    const icon_size: i32 = 20;
+    const icon_x = search_rect.x + 8;
+    const icon_y = search_rect.y + @divTrunc(search_rect.h - icon_size, 2);
+
+    ui.icon(surface, .{ .x = icon_x, .y = icon_y, .w = icon_size, .h = icon_size }, lib.icons.search, ui.theme.text_dim);
+
+    const text_x = icon_x + icon_size + 8;
 
     if (search_len == 0) {
 
-        ui.text_in(surface, &font, .{ .x = 36, .y = search_rect.y, .w = width - 44, .h = search_rect.h }, 0, 13, "Search applications", ui.theme.text_faint);
+        ui.text_in(surface, &font, .{ .x = text_x, .y = search_rect.y, .w = width - text_x - 8, .h = search_rect.h }, 0, 13, "Search applications", ui.theme.text_faint);
 
     } else {
 
-        ui.text_in(surface, &font, .{ .x = 36, .y = search_rect.y, .w = width - 44, .h = search_rect.h }, 0, 13, search[0..search_len], ui.theme.text);
+        ui.text_in(surface, &font, .{ .x = text_x, .y = search_rect.y, .w = width - text_x - 8, .h = search_rect.h }, 0, 13, search[0..search_len], ui.theme.text);
 
     }
 
@@ -553,7 +569,7 @@ fn paint_menu() void {
     var y = search_height;
     var any = false;
 
-    for (apps) |app| {
+    for (apps[0..app_count]) |app| {
 
         if (!matches(app)) continue;
 
@@ -583,7 +599,7 @@ fn paint_menu() void {
 
 }
 
-fn matches(app: App) bool {
+fn matches(app: lib.wm.App) bool {
 
     if (search_len == 0) return true;
 
@@ -628,6 +644,20 @@ fn start_ticker() !void {
     const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
     const thread = try sys.create_thread(@intFromPtr(&ticker), base + ticker_stack_pages * page_size);
 
+    sys.close(stack) catch {};
+
+    try sys.start(thread);
+
+}
+
+fn start_list_watcher() !void {
+
+    const stack = try sys.create(.region, ticker_stack_pages * page_size, cap.memory);
+    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
+    const thread = try sys.create_thread(@intFromPtr(&list_watcher), base + ticker_stack_pages * page_size);
+
+    sys.close(stack) catch {};
+
     try sys.start(thread);
 
 }
@@ -637,6 +667,20 @@ fn ticker() callconv(.c) noreturn {
     while (true) {
 
         lib.time.sleep_ms(500);
+
+        @atomicStore(u32, &tick, 1, .release);
+
+        sys.notify(ready, proto.window.ring_bit) catch {};
+
+    }
+
+}
+
+fn list_watcher() callconv(.c) noreturn {
+
+    while (true) {
+
+        _ = sys.wait(window_list.list_ready) catch continue;
 
         @atomicStore(u32, &tick, 1, .release);
 

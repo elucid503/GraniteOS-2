@@ -61,6 +61,8 @@ const CachedDisk = struct {
 
         });
 
+        sys.close(buffer) catch {};
+
         const reply = try ipc.request(cap.filesystem.block, proto.block.capacity, &.{}, &.{});
 
         self.blocks = reply.data[1] / sectors_per_block;
@@ -264,6 +266,8 @@ fn attach(badge: u64, in: *const Message) i64 {
 
     session.base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
     session.capacity = @intCast(in.data[1]);
+
+    sys.close(in.handles[0].handle) catch {};
 
     return 0;
 

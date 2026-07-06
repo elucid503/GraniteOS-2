@@ -63,7 +63,15 @@ pub fn Sessions(comptime Extra: type, comptime capacity: usize) type {
 
             const slot = self.claim();
 
-            release(slot);
+            if (slot.used) {
+
+                evict(slot);
+
+            } else {
+
+                release(slot);
+
+            }
 
             self.clock += 1;
 
@@ -102,9 +110,27 @@ pub fn Sessions(comptime Extra: type, comptime capacity: usize) type {
 
             }
 
+            if (@hasDecl(Extra, "release")) {
+
+                Extra.release(&slot.extra);
+
+            }
+
             slot.base = 0;
             slot.capacity = 0;
             slot.extra = .{};
+
+        }
+
+        fn evict(slot: *Session) void {
+
+            if (@hasDecl(Extra, "evict")) {
+
+                Extra.evict(&slot.extra, slot.badge);
+
+            }
+
+            release(slot);
 
         }
 

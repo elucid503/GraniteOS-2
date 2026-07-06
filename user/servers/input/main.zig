@@ -177,6 +177,7 @@ var dma_authority: Handle = 0;
 // The one attached client (the compositor): its event ring and wake Notification.
 
 var client_ring: ?events.Ring = null;
+var client_base: usize = 0;
 var client_notification: Handle = 0;
 var client_bits: u64 = proto.input.ring_bit;
 var client_pushed = false;
@@ -423,11 +424,15 @@ fn attach(in: *const Message) i64 {
 
     const base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
 
+    if (client_base != 0) sys.unmap(cap.self_space, client_base) catch {};
     if (client_notification != 0) sys.close(client_notification) catch {};
 
     client_ring = events.Ring.init(base, @intCast(in.data[1]));
+    client_base = base;
     client_notification = in.handles[1].handle;
     client_bits = if (in.data[2] != 0) in.data[2] else proto.input.ring_bit;
+
+    sys.close(in.handles[0].handle) catch {};
 
     return 0;
 

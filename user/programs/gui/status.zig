@@ -1,7 +1,4 @@
-// Status: a live system monitor. A worker thread samples the kernel inspect snapshots (scheduler, processes, CPU)
-// and the filesystem's disk usage once a second, appending to per-metric history rings; the main thread draws the
-// selected tab - a realtime line chart plus a current readout. Because the samples are timed off the EL0 counter
-// (lib.time), the graphs advance in real seconds without any timer interrupt.
+// Status: a live system monitor.
 
 const std = @import("std");
 
@@ -17,6 +14,12 @@ const ui = lib.ui;
 
 const Rect = gfx.Rect;
 
+pub const app_meta = .{
+    .title = "Status",
+    .description = "Live system metrics",
+    .icon = "chart",
+};
+
 comptime {
 
     _ = lib.start;
@@ -26,6 +29,43 @@ comptime {
 const tab_height: i32 = 42;
 const sample_interval_ms = 1000;
 const history_span = 64;
+const used_section_gap: i32 = 28;
+const used_label_chart_gap: i32 = 20;
+const max_pie_entries = 5;
+const gantt_label_w: i32 = 56;
+
+const pie_colors = [_]gfx.Color{
+    ui.theme.text,
+    ui.theme.text_dim,
+    ui.theme.accent,
+    ui.theme.accent_dim,
+    ui.theme.text_faint,
+    ui.theme.surface_alt,
+};
+
+const MemoryRank = struct {
+
+    value: u64,
+    name_buf: [sysinfo.process_name_bytes]u8 = [_]u8{0} ** sysinfo.process_name_bytes,
+    name_len: u8 = 0,
+
+    fn set_label(self: *MemoryRank, text: []const u8) void {
+
+        const length = @min(text.len, self.name_buf.len);
+
+        @memset(&self.name_buf, 0);
+        @memcpy(self.name_buf[0..length], text[0..length]);
+        self.name_len = @intCast(length);
+
+    }
+
+    fn label(self: *const MemoryRank) []const u8 {
+
+        return self.name_buf[0..self.name_len];
+
+    }
+
+};
 
 const Tab = enum(usize) {
 
@@ -33,6 +73,7 @@ const Tab = enum(usize) {
     processes,
     cpu,
     disk,
+    memory,
 
 };
 
@@ -42,6 +83,7 @@ const tabs = [_]struct { label: []const u8, icon: []const u8 }{
     .{ .label = "Processes", .icon = lib.icons.chart },
     .{ .label = "CPU", .icon = lib.icons.cpu },
     .{ .label = "Disk", .icon = lib.icons.disk },
+    .{ .label = "Memory", .icon = lib.icons.memory },
 
 };
 
@@ -89,6 +131,38 @@ const History = struct {
 
 };
 
+const GanttHistory = struct {
+
+    samples: [history_span]ui.GanttSample = [_]ui.GanttSample{.{ .pid = 0, .tid = 0 }} ** history_span,
+    len: usize = 0,
+
+    fn push(self: *GanttHistory, pid: u32, tid: u32) void {
+
+        const span = ui.GanttSample{ .pid = pid, .tid = tid };
+
+        if (self.len < history_span) {
+
+            self.samples[self.len] = span;
+            self.len += 1;
+
+            return;
+
+        }
+
+        var index: usize = 1;
+
+        while (index < history_span) : (index += 1) {
+
+            self.samples[index - 1] = self.samples[index];
+
+        }
+
+        self.samples[history_span - 1] = span;
+
+    }
+
+};
+
 var font: lib.ttf.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
@@ -103,21 +177,25 @@ var lock: ipc.Lock = .{};
 var scheduler_snapshot: sysinfo.SchedulerSnapshot = undefined;
 var process_snapshot: sysinfo.ProcessSnapshot = undefined;
 var cpu_snapshot: sysinfo.CpuSnapshot = undefined;
+var memory_snapshot: sysinfo.MemorySnapshot = undefined;
 var have_scheduler = false;
 var have_processes = false;
 var have_cpu = false;
+var have_memory = false;
 
 var disk_info: lib.proto.filesystem.Info = undefined;
 var have_disk = false;
 var client: ?lib.fs.Client = null;
 
-var runqueue_history = History{};
+var gantt_history = [_]GanttHistory{.{}} ** sysinfo.scheduling_levels;
 var thread_history = History{};
 var busy_history = History{};
 var disk_history = History{};
+var memory_history = History{};
 
 var ready: cap.Handle = 0;
 var tick: u32 = 0;
+var running: u32 = 1;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -150,8 +228,6 @@ fn run() !void {
 
     while (true) {
 
-        _ = sys.wait(ready) catch {};
-
         var dirty = false;
 
         while (connection.poll_event()) |event| {
@@ -160,6 +236,7 @@ fn run() !void {
 
                 events.kind_window_close => {
 
+                    @atomicStore(u32, &running, 0, .release);
                     window.destroy();
                     return;
 
@@ -186,6 +263,10 @@ fn run() !void {
 
         if (dirty) paint();
 
+        if (connection.poll_event() != null or @atomicLoad(u32, &tick, .acquire) != 0) continue;
+
+        _ = sys.wait(ready) catch {};
+
     }
 
 }
@@ -210,6 +291,7 @@ fn sample() void {
     const scheduler = sysinfo.read(sysinfo.SchedulerSnapshot, .scheduler) catch null;
     const processes = sysinfo.read(sysinfo.ProcessSnapshot, .processes) catch null;
     const cpu = sysinfo.read(sysinfo.CpuSnapshot, .cpu) catch null;
+    const memory = sysinfo.read(sysinfo.MemorySnapshot, .memory) catch null;
 
     var disk: ?lib.proto.filesystem.Info = null;
 
@@ -226,7 +308,16 @@ fn sample() void {
 
         scheduler_snapshot = snapshot;
         have_scheduler = true;
-        runqueue_history.push(total_runnable(snapshot));
+
+        const levels = @min(@as(usize, @intCast(snapshot.level_count)), sysinfo.scheduling_levels);
+
+        for (0..levels) |index| {
+
+            const level = snapshot.level_queues[index];
+
+            gantt_history[index].push(level.lead_pid, level.lead_tid);
+
+        }
 
     }
 
@@ -257,23 +348,17 @@ fn sample() void {
 
     }
 
-}
+    if (memory) |snapshot| {
 
-fn total_runnable(snapshot: sysinfo.SchedulerSnapshot) u32 {
+        memory_snapshot = snapshot;
+        have_memory = true;
 
-    var total: u32 = 0;
+        const used = snapshot.total_frames - snapshot.free_frames;
+        const percent: u32 = if (snapshot.total_frames == 0) 0 else @intCast(used * 100 / snapshot.total_frames);
 
-    for (snapshot.cores[0..@intCast(snapshot.core_count)]) |core| {
-
-        for (core.levels[0..@intCast(snapshot.level_count)]) |count| {
-
-            total += count;
-
-        }
+        memory_history.push(percent);
 
     }
-
-    return total;
 
 }
 
@@ -310,6 +395,7 @@ fn paint() void {
         .processes => paint_processes(surface),
         .cpu => paint_cpu(surface),
         .disk => paint_disk(surface),
+        .memory => paint_memory(surface),
 
     }
 
@@ -363,37 +449,44 @@ fn paint_scheduler(surface: *const gfx.Surface) void {
     const snapshot = scheduler_snapshot;
 
     var header: [96]u8 = undefined;
-    const line = std.fmt.bufPrint(&header, "{d}/{d} cores online   boost {d} ms   levels {d}", .{
+    const line = std.fmt.bufPrint(&header, "{d}/{d} cores online   boost {d} ms   {d} levels", .{
         snapshot.online_count,
         snapshot.core_count,
         snapshot.boost_interval_ns / 1_000_000,
         snapshot.level_count,
     }) catch "";
 
-    ui.text(surface, &font, area.x, area.y, 13, "Runnable threads across all cores", ui.theme.text);
+    ui.text(surface, &font, area.x, area.y, 13, "Runnable threads per level", ui.theme.text);
     ui.text(surface, &font, area.x, area.y + 20, 12, line, ui.theme.text_dim);
 
-    const chart = Rect{ .x = area.x, .y = area.y + 44, .w = area.w, .h = @divTrunc(area.h * 3, 5) };
+    const chart_top = area.y + 44;
+    const chart_h = area.h - 64;
+    const level_count = @min(@as(usize, @intCast(snapshot.level_count)), sysinfo.scheduling_levels);
+    const row_h = if (level_count == 0) chart_h else @divTrunc(chart_h, @as(i32, @intCast(level_count)));
 
-    ui.line_chart(surface, chart, runqueue_history.samples[0..runqueue_history.len], @max(4, runqueue_history.peak()), ui.theme.accent);
+    var rows: [sysinfo.scheduling_levels][]const ui.GanttSample = undefined;
 
-    // Per-core current occupant beneath the chart.
+    for (0..level_count) |index| {
 
-    var y = chart.y + chart.h + 16;
-    const core_count = @min(@as(usize, @intCast(snapshot.core_count)), 8);
+        rows[index] = gantt_history[index].samples[0..gantt_history[index].len];
 
-    for (0..core_count) |index| {
+        var label: [24]u8 = undefined;
+        const name = std.fmt.bufPrint(&label, "level-{d}", .{ index }) catch "";
 
-        const core = snapshot.cores[index];
-
-        var row: [64]u8 = undefined;
-        const text = format_core(&row, index, core.online != 0, core.current_pid, core.current_tid);
-
-        ui.text(surface, &font, area.x, y, 12, text, ui.theme.text_dim);
-
-        y += 18;
+        ui.text(surface, &font, area.x, chart_top + @as(i32, @intCast(index)) * row_h + @divTrunc(row_h - 12, 2), 11, name, ui.theme.text_faint);
 
     }
+
+    const chart = Rect{ .x = area.x + gantt_label_w, .y = chart_top, .w = area.w - gantt_label_w, .h = chart_h };
+
+    ui.gantt_chart(surface, chart, rows[0..level_count]);
+
+    ui.text(surface, &font, chart.x, chart.y + chart.h + 6, 11, "older", ui.theme.text_faint);
+
+    var now_label: [8]u8 = undefined;
+    const now_text = std.fmt.bufPrint(&now_label, "now", .{}) catch "now";
+
+    ui.text(surface, &font, chart.x + chart.w - font.text_width(now_text, 11), chart.y + chart.h + 6, 11, now_text, ui.theme.text_faint);
 
 }
 
@@ -513,9 +606,10 @@ fn paint_disk(surface: *const gfx.Surface) void {
 
     ui.text(surface, &font, area.x, area.y + 64, 12, summary, ui.theme.text_dim);
 
-    const chart = Rect{ .x = area.x, .y = area.y + 92, .w = area.w, .h = @divTrunc(area.h * 2, 5) };
+    const used_label_y = area.y + 64 + 12 + used_section_gap;
+    const chart = Rect{ .x = area.x, .y = used_label_y + used_label_chart_gap, .w = area.w, .h = @divTrunc(area.h * 2, 5) };
 
-    ui.text(surface, &font, area.x, area.y + 92 - 20, 12, "Used %", ui.theme.text_faint);
+    ui.text(surface, &font, area.x, used_label_y, 12, "Used %", ui.theme.text_faint);
     ui.line_chart(surface, chart, disk_history.samples[0..disk_history.len], 100, ui.theme.accent);
 
     var detail: [96]u8 = undefined;
@@ -527,6 +621,194 @@ fn paint_disk(surface: *const gfx.Surface) void {
     }) catch "";
 
     ui.text(surface, &font, area.x, chart.y + chart.h + 16, 12, blocks, ui.theme.text_dim);
+
+}
+
+fn paint_memory(surface: *const gfx.Surface) void {
+
+    const area = content_rect();
+
+    if (!have_memory) return paint_unavailable(surface, area);
+
+    const snapshot = memory_snapshot;
+    const used_frames = snapshot.total_frames - snapshot.free_frames;
+    const bytes_per_page: u64 = snapshot.page_size;
+    const total_mib = snapshot.total_frames * bytes_per_page / (1024 * 1024);
+    const used_mib = used_frames * bytes_per_page / (1024 * 1024);
+    const free_mib = snapshot.free_frames * bytes_per_page / (1024 * 1024);
+
+    ui.text(surface, &font, area.x, area.y, 13, "Physical memory", ui.theme.text);
+
+    const meter_rect = Rect{ .x = area.x, .y = area.y + 28, .w = area.w, .h = 26 };
+
+    ui.meter(surface, meter_rect, used_frames, snapshot.total_frames, ui.theme.accent);
+
+    var line: [96]u8 = undefined;
+    const summary = std.fmt.bufPrint(&line, "{d} MiB used of {d} MiB   ({d} MiB free)", .{ used_mib, total_mib, free_mib }) catch "";
+
+    ui.text(surface, &font, area.x, area.y + 64, 12, summary, ui.theme.text_dim);
+
+    const split_top = area.y + 88;
+    const split_gap: i32 = 16;
+    const half_w = @divTrunc(area.w - split_gap, 2);
+    const left_x = area.x;
+    const right_x = area.x + half_w + split_gap;
+    const split_h = area.y + area.h - split_top - 36;
+
+    ui.text(surface, &font, left_x, split_top, 12, "Used %", ui.theme.text_faint);
+
+    const used_chart = Rect{
+        .x = left_x,
+        .y = split_top + used_label_chart_gap,
+        .w = half_w,
+        .h = split_h - used_label_chart_gap,
+    };
+
+    ui.line_chart(surface, used_chart, memory_history.samples[0..memory_history.len], 100, ui.theme.good);
+
+    if (have_processes) {
+
+        var entries: [max_pie_entries + 1]MemoryRank = undefined;
+        var entry_count: usize = 0;
+
+        rank_memory_processes(process_snapshot, &entries, &entry_count);
+
+        if (entry_count > 0) {
+
+            ui.text(surface, &font, right_x, split_top, 12, "By process", ui.theme.text_faint);
+
+            const legend_cols: i32 = 3;
+            const legend_row_count: i32 = 2;
+            const legend_row_h: i32 = 14;
+            const legend_gap: i32 = 16;
+            const legend_h = legend_row_count * legend_row_h + legend_gap;
+            const pie_area_h = split_h - used_label_chart_gap - legend_h;
+            const pie_radius = @min(@divTrunc(half_w, 2) - 4, @max(20, @divTrunc(pie_area_h, 2) - 4));
+            const pie_cx = right_x + @divTrunc(half_w, 2);
+            const pie_cy = split_top + used_label_chart_gap + pie_radius + 4;
+
+            var slices: [max_pie_entries + 1]ui.PieSlice = undefined;
+            var total: u64 = 0;
+
+            for (entries[0..entry_count]) |entry| total += entry.value;
+
+            for (entries[0..entry_count], 0..) |entry, index| {
+
+                slices[index] = .{
+                    .value = entry.value,
+                    .color = pie_colors[index % pie_colors.len],
+                };
+
+            }
+
+            ui.pie_chart(surface, pie_cx, pie_cy, pie_radius, slices[0..entry_count]);
+
+            const legend_y = pie_cy + pie_radius + legend_gap;
+            const legend_col_w = @divTrunc(half_w, legend_cols);
+
+            for (entries[0..entry_count], 0..) |entry, index| {
+
+                const color = pie_colors[index % pie_colors.len];
+                const percent: u64 = if (total == 0) 0 else entry.value * 100 / total;
+                const row = @as(i32, @intCast(index / @as(usize, @intCast(legend_cols))));
+                const col = @as(i32, @intCast(index % @as(usize, @intCast(legend_cols))));
+                const col_x = right_x + col * legend_col_w;
+                const row_y = legend_y + row * legend_row_h;
+
+                surface.fill_rect(.{ .x = col_x, .y = row_y + 3, .w = 6, .h = 6 }, color);
+
+                var legend: [48]u8 = undefined;
+                const text = std.fmt.bufPrint(&legend, "{s}  {d}%", .{ entry.label(), percent }) catch "";
+
+                ui.text_in(surface, &font, .{ .x = col_x + 12, .y = row_y, .w = legend_col_w - 12, .h = legend_row_h }, 0, 11, text, ui.theme.text_dim);
+
+            }
+
+        }
+
+    }
+
+    var detail: [96]u8 = undefined;
+    const frames = std.fmt.bufPrint(&detail, "{d} frames total   {d} used   {d} free   {d}B pages", .{
+        snapshot.total_frames,
+        used_frames,
+        snapshot.free_frames,
+        bytes_per_page,
+    }) catch "";
+
+    ui.text(surface, &font, area.x, area.y + area.h - 16, 12, frames, ui.theme.text_dim);
+
+}
+
+fn rank_memory_processes(snapshot: sysinfo.ProcessSnapshot, entries: *[max_pie_entries + 1]MemoryRank, count: *usize) void {
+
+    const shown = @min(@as(usize, @intCast(@min(snapshot.count, snapshot.capacity))), sysinfo.max_processes);
+
+    var ranked: [sysinfo.max_processes]MemoryRank = undefined;
+    var ranked_len: usize = 0;
+
+    for (0..shown) |index| {
+
+        const process = snapshot.processes[index];
+
+        if (process.memory_bytes == 0) continue;
+
+        const name_len = @min(@as(usize, @intCast(process.name_len)), process.name.len);
+
+        ranked[ranked_len] = .{ .value = process.memory_bytes };
+        ranked[ranked_len].set_label(process.name[0..name_len]);
+
+        ranked_len += 1;
+
+    }
+
+    var index: usize = 0;
+
+    while (index < ranked_len) : (index += 1) {
+
+        var next = index + 1;
+
+        while (next < ranked_len) : (next += 1) {
+
+            if (ranked[next].value > ranked[index].value) {
+
+                const swap = ranked[index];
+                ranked[index] = ranked[next];
+                ranked[next] = swap;
+
+            }
+
+        }
+
+    }
+
+    count.* = 0;
+    var other: u64 = 0;
+
+    index = 0;
+
+    while (index < ranked_len) : (index += 1) {
+
+        if (index < max_pie_entries) {
+
+            entries[count.*] = ranked[index];
+            count.* += 1;
+
+        } else {
+
+            other += ranked[index].value;
+
+        }
+
+    }
+
+    if (other > 0) {
+
+        entries[count.*] = .{ .value = other };
+        entries[count.*].set_label("other");
+        count.* += 1;
+
+    }
 
 }
 
@@ -557,15 +839,19 @@ fn start_sampler() !void {
     const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
     const thread = try sys.create_thread(@intFromPtr(&sampler), base + sampler_stack_pages * page_size);
 
+    sys.close(stack) catch {};
+
     try sys.start(thread);
 
 }
 
 fn sampler() callconv(.c) noreturn {
 
-    while (true) {
+    while (@atomicLoad(u32, &running, .acquire) != 0) {
 
         lib.time.sleep_ms(sample_interval_ms);
+
+        if (@atomicLoad(u32, &running, .acquire) == 0) break;
 
         sample();
 
@@ -574,5 +860,7 @@ fn sampler() callconv(.c) noreturn {
         sys.notify(ready, lib.proto.window.ring_bit) catch {};
 
     }
+
+    lib.start.exit();
 
 }

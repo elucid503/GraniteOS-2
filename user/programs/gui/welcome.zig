@@ -14,8 +14,8 @@ comptime {
 }
 
 const color_backdrop = gfx.rgb(0, 0, 0);
-const color_title = gfx.rgb(244, 247, 252);
-const color_subtitle = gfx.rgb(172, 184, 198);
+const color_title = gfx.rgb(244, 244, 244);
+const color_subtitle = gfx.rgb(172, 172, 172);
 
 var inter: ?lib.ttf.Face = null;
 
@@ -84,7 +84,7 @@ fn connect() !lib.window.Connection {
 
             if (attempts > 200) return failure;
 
-            sys.yield();
+            lib.time.sleep_ms(5);
 
             continue;
 

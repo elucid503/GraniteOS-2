@@ -176,11 +176,19 @@ fn ensure_layout() void {
 
 fn install_programs(out: *lib.stream.Stream) void {
 
-    var installed: usize = 0;
+    const catalog_bytes = bundle.find("app-catalog") orelse return;
+    const catalog = lib.app_catalog.Catalog.open(catalog_bytes) catch return;
 
-    for (lib.catalog.common) |entry| installed += @intFromBool(install_program(entry.name));
-    for (lib.catalog.location) |entry| installed += @intFromBool(install_program(entry.name));
-    for (lib.catalog.filesystem) |entry| installed += @intFromBool(install_program(entry.name));
+    var installed: usize = 0;
+    var index: usize = 0;
+
+    while (index < catalog.program_count) : (index += 1) {
+
+        const entry = catalog.program(index) orelse continue;
+
+        installed += @intFromBool(install_program(entry.name));
+
+    }
 
     if (installed != 0) {
 
@@ -474,7 +482,7 @@ fn run_pipeline(pipeline: *const Pipeline) !void {
 
     for (0..pipeline.count) |index| {
 
-        _ = try spawn_stage(&pipeline.stages[index], resolved[index], index, pipeline.count, &rings);
+        try spawn_stage(&pipeline.stages[index], resolved[index], index, pipeline.count, &rings);
 
     }
 
@@ -563,7 +571,7 @@ fn load_from_disk(path: []const u8) ![]const u8 {
 
 }
 
-fn spawn_stage(stage: *const Stage, source: Resolved, index: usize, count: usize, rings: *[max_stages - 1]lib.stream.Ring.Pair) !cap.Handle {
+fn spawn_stage(stage: *const Stage, source: Resolved, index: usize, count: usize, rings: *[max_stages - 1]lib.stream.Ring.Pair) !void {
 
     const image = switch (source) {
 
@@ -573,9 +581,16 @@ fn spawn_stage(stage: *const Stage, source: Resolved, index: usize, count: usize
     };
 
     const memory = try sys.create(.memory_authority, child_budget, cap.memory);
+    errdefer sys.close(memory) catch {};
+
     const init_endpoint = try sys.create(.endpoint, 0, 0);
+    errdefer sys.close(init_endpoint) catch {};
+
     const report = try sys.copy(supervisor, @intCast(index + 1));
+    errdefer sys.close(report) catch {};
+
     const console = try sys.copy(cap.stdout, @intCast(2 + index));
+    errdefer sys.close(console) catch {};
 
     var grants = [_]cap.Handle{cap.stdin} ** 9;
     var grant_count: usize = cap.reserved_grants;
@@ -607,7 +622,7 @@ fn spawn_stage(stage: *const Stage, source: Resolved, index: usize, count: usize
 
     }
 
-    return lib.elf.spawn_program(.{
+    const child = try lib.elf.spawn_program(.{
 
         .image = image,
         .authority = memory,
@@ -618,6 +633,12 @@ fn spawn_stage(stage: *const Stage, source: Resolved, index: usize, count: usize
         .cwd = cwd,
 
     });
+
+    sys.close(child) catch {};
+    sys.close(memory) catch {};
+    sys.close(init_endpoint) catch {};
+    sys.close(report) catch {};
+    sys.close(console) catch {};
 
 }
 

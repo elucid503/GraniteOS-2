@@ -152,6 +152,7 @@ pub fn scheduler_snapshot(out: *inspect.SchedulerSnapshot) void {
         .quanta_ns = config.level_quanta_ns,
         .boost_interval_ns = config.boost_interval_ns,
 
+        .level_queues = [_]inspect.LevelQueueStats{empty_level_queue_stats()} ** config.scheduling_levels,
         .cores = [_]inspect.QueueStats{empty_queue_stats()} ** config.max_cores,
 
     };
@@ -173,7 +174,40 @@ pub fn scheduler_snapshot(out: *inspect.SchedulerSnapshot) void {
 
         for (&core.levels, 0..) |*level, level_index| {
 
-            stats.levels[level_index] = level.count();
+            const depth = level.count();
+
+            stats.levels[level_index] = depth;
+            out.level_queues[level_index].count += depth;
+
+            if (out.level_queues[level_index].lead_tid == 0) {
+
+                if (level.head) |thread| {
+
+                    out.level_queues[level_index].lead_pid = thread.process.pid;
+                    out.level_queues[level_index].lead_tid = thread.id;
+
+                }
+
+            }
+
+        }
+
+        if (core.current) |thread| {
+
+            if (thread.scheduling.class == .normal) {
+
+                const level_index: usize = thread.scheduling.level;
+
+                out.level_queues[level_index].count += 1;
+
+                if (out.level_queues[level_index].lead_tid == 0) {
+
+                    out.level_queues[level_index].lead_pid = thread.process.pid;
+                    out.level_queues[level_index].lead_tid = thread.id;
+
+                }
+
+            }
 
         }
 
@@ -219,6 +253,18 @@ pub fn cpu_snapshot(out: *inspect.CpuSnapshot) void {
         out.cores[index] = info;
 
     }
+
+}
+
+fn empty_level_queue_stats() inspect.LevelQueueStats {
+
+    return .{
+
+        .count = 0,
+        .lead_pid = 0,
+        .lead_tid = 0,
+
+    };
 
 }
 

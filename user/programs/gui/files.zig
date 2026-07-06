@@ -17,6 +17,12 @@ const ui = lib.ui;
 const Rect = gfx.Rect;
 const Entry = proto.filesystem.Entry;
 
+pub const app_meta = .{
+    .title = "Files",
+    .description = "Browse the filesystem",
+    .icon = "folder",
+};
+
 comptime {
 
     _ = lib.start;

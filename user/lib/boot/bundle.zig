@@ -45,6 +45,16 @@ pub const Bundle = struct {
 
     }
 
+    pub fn name_at(self: *const Bundle, index: usize) ?[]const u8 {
+
+        if (index >= self.count) return null;
+
+        const entry = header_size + index * entry_size;
+
+        return entry_name(self.bytes[entry .. entry + name_bytes]);
+
+    }
+
     pub fn find(self: *const Bundle, name: []const u8) ?[]const u8 {
 
         for (0..self.count) |index| {

@@ -133,6 +133,8 @@ fn attach(badge: u64, in: *const Message) i64 {
 
     session.capacity = @intCast(in.data[1]);
 
+    sys.close(in.handles[0].handle) catch {};
+
     return 0;
 
 }

@@ -145,6 +145,31 @@ pub const HandleTable = struct {
 
     }
 
+    pub fn memory_usage(self: *HandleTable) u64 {
+
+        const MemoryAuthority = @import("../authority/memory_authority.zig").MemoryAuthority;
+
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
+
+        var total: u64 = 0;
+
+        for (self.entries) |*entry| {
+
+            const target = entry.target orelse continue;
+
+            if (target.kind != .memory_authority) continue;
+
+            const authority = object.container(MemoryAuthority, target);
+
+            total += @atomicLoad(usize, &authority.budget_used, .monotonic);
+
+        }
+
+        return total;
+
+    }
+
     pub fn stats(self: *HandleTable, by_kind: *[inspect.object_kind_slots]u32) u32 {
 
         const saved = self.lock.acquire();

@@ -2,6 +2,8 @@
 
 const std = @import("std");
 
+const discover = @import("build/discover.zig");
+
 const bytes_per_mib = 1024 * 1024;
 const default_disk_mib = 64;
 
@@ -70,40 +72,27 @@ pub fn build(b: *std.Build) void {
 
     });
 
-    const flint = user_program(b, target, optimize, user_lib, "granite-flint.elf", "user/flint/main.zig");
-    const console = user_program(b, target, optimize, user_lib, "granite-console.elf", "user/drivers/console/main.zig");
-    const block = user_program(b, target, optimize, user_lib, "granite-block.elf", "user/drivers/block/main.zig");
-    const marble = user_program(b, target, optimize, user_lib, "granite-marble.elf", "user/marble/main.zig");
-    const naming = user_program(b, target, optimize, user_lib, "granite-naming.elf", "user/servers/naming/main.zig");
-    const filesystem = user_program(b, target, optimize, user_lib, "granite-filesystem.elf", "user/servers/filesystem/main.zig");
-    const echo = user_program(b, target, optimize, user_lib, "granite-echo.elf", "user/programs/common/echo.zig");
-    const cat = user_program(b, target, optimize, user_lib, "granite-cat.elf", "user/programs/common/cat.zig");
-    const help = user_program(b, target, optimize, user_lib, "granite-help.elf", "user/programs/common/help.zig");
-    const about = user_program(b, target, optimize, user_lib, "granite-about.elf", "user/programs/common/about.zig");
-    const hello = user_program(b, target, optimize, user_lib, "granite-hello.elf", "user/programs/common/hello.zig");
-    const clear = user_program(b, target, optimize, user_lib, "granite-clear.elf", "user/programs/common/clear.zig");
-    const wc = user_program(b, target, optimize, user_lib, "granite-wc.elf", "user/programs/common/wc.zig");
-    const status = user_program(b, target, optimize, user_lib, "granite-status.elf", "user/programs/common/status.zig");
-    const location = user_program(b, target, optimize, user_lib, "granite-location.elf", "user/programs/location/location.zig");
-    const ls = user_program(b, target, optimize, user_lib, "granite-ls.elf", "user/programs/fs/ls.zig");
-    const view = user_program(b, target, optimize, user_lib, "granite-view.elf", "user/programs/fs/view.zig");
-    const write = user_program(b, target, optimize, user_lib, "granite-write.elf", "user/programs/fs/write.zig");
-    const create = user_program(b, target, optimize, user_lib, "granite-create.elf", "user/programs/fs/create.zig");
-    const mkdir = user_program(b, target, optimize, user_lib, "granite-mkdir.elf", "user/programs/fs/mkdir.zig");
-    const delete = user_program(b, target, optimize, user_lib, "granite-delete.elf", "user/programs/fs/delete.zig");
-    const rename = user_program(b, target, optimize, user_lib, "granite-rename.elf", "user/programs/fs/rename.zig");
-    const perms = user_program(b, target, optimize, user_lib, "granite-perms.elf", "user/programs/fs/perms.zig");
-    const stress = user_program(b, target, optimize, user_lib, "granite-stress.elf", "user/programs/common/stress.zig");
-    const display = user_program(b, target, optimize, user_lib, "granite-display.elf", "user/drivers/display/main.zig");
-    const input = user_program(b, target, optimize, user_lib, "granite-input.elf", "user/servers/input/main.zig");
-    const compositor = user_program(b, target, optimize, user_lib, "granite-compositor.elf", "user/servers/display/main.zig");
-    const launcher = user_program(b, target, optimize, user_lib, "granite-launcher.elf", "user/servers/launcher/main.zig");
-    const welcome = user_program(b, target, optimize, user_lib, "granite-welcome.elf", "user/programs/gui/welcome.zig");
-    const demo = user_program(b, target, optimize, user_lib, "granite-demo.elf", "user/programs/gui/demo.zig");
-    const taskbar = user_program(b, target, optimize, user_lib, "granite-taskbar.elf", "user/programs/gui/taskbar.zig");
-    const files_gui = user_program(b, target, optimize, user_lib, "granite-files.elf", "user/programs/gui/files.zig");
-    const status_gui = user_program(b, target, optimize, user_lib, "granite-statusgui.elf", "user/programs/gui/status.zig");
-    const shell_gui = user_program(b, target, optimize, user_lib, "granite-shell.elf", "user/programs/gui/shell.zig");
+    var module_arena = std.heap.ArenaAllocator.init(b.allocator);
+    defer module_arena.deinit();
+
+    const modules = discover.scan(module_arena.allocator()) catch @panic("user module discovery failed");
+
+    var artifacts = std.StringArrayHashMap(*std.Build.Step.Compile).init(b.allocator);
+    defer artifacts.deinit();
+
+    for (modules) |module| {
+
+        if (module.kind == .asset) continue;
+
+        const exe = user_program(b, target, optimize, user_lib, module.elf_name, module.source);
+
+        artifacts.put(module.bundle_name, exe) catch @panic("duplicate bundle module name");
+
+    }
+
+    const catalog_bytes = discover.generate_catalog_bytes(module_arena.allocator(), modules) catch @panic("catalog generation failed");
+    const catalog_step = b.addWriteFiles();
+    const catalog_file = catalog_step.add("app-catalog.bin", catalog_bytes);
 
     const flatten = host_tool(b, "flatten", "tools/flatten.zig");
     const bundle_tool = host_tool(b, "bundle", "tools/bundle.zig");
@@ -111,45 +100,28 @@ pub fn build(b: *std.Build) void {
     const qemu_runner = host_tool(b, "qemu-run", "tools/qemu-run.zig");
 
     const kernel_image = flatten_image(b, flatten, kernel, "granite-kernel.bin");
+    const flint = artifacts.get("flint") orelse @panic("missing flint module");
     const flint_image = flatten_image(b, flatten, flint, "flint.bin");
 
     const bundle_run = b.addRunArtifact(bundle_tool);
     const bundle_image = bundle_run.addOutputFileArg("bundle.img");
 
     add_module(bundle_run, "flint", flint_image);
-    add_artifact_module(bundle_run, "console", console);
-    add_artifact_module(bundle_run, "block", block);
-    add_artifact_module(bundle_run, "marble", marble);
-    add_artifact_module(bundle_run, "naming", naming);
-    add_artifact_module(bundle_run, "filesystem", filesystem);
-    add_artifact_module(bundle_run, "echo", echo);
-    add_artifact_module(bundle_run, "cat", cat);
-    add_artifact_module(bundle_run, "help", help);
-    add_artifact_module(bundle_run, "about", about);
-    add_artifact_module(bundle_run, "hello", hello);
-    add_artifact_module(bundle_run, "clear", clear);
-    add_artifact_module(bundle_run, "wc", wc);
-    add_artifact_module(bundle_run, "status", status);
-    add_artifact_module(bundle_run, "location", location);
-    add_artifact_module(bundle_run, "ls", ls);
-    add_artifact_module(bundle_run, "view", view);
-    add_artifact_module(bundle_run, "write", write);
-    add_artifact_module(bundle_run, "create", create);
-    add_artifact_module(bundle_run, "mkdir", mkdir);
-    add_artifact_module(bundle_run, "delete", delete);
-    add_artifact_module(bundle_run, "rename", rename);
-    add_artifact_module(bundle_run, "perms", perms);
-    add_artifact_module(bundle_run, "stress", stress);
-    add_artifact_module(bundle_run, "display", display);
-    add_artifact_module(bundle_run, "input", input);
-    add_artifact_module(bundle_run, "compositor", compositor);
-    add_artifact_module(bundle_run, "launcher", launcher);
-    add_artifact_module(bundle_run, "welcome", welcome);
-    add_artifact_module(bundle_run, "demo", demo);
-    add_artifact_module(bundle_run, "taskbar", taskbar);
-    add_artifact_module(bundle_run, "files", files_gui);
-    add_artifact_module(bundle_run, "status-gui", status_gui);
-    add_artifact_module(bundle_run, "shell", shell_gui);
+
+    for (modules) |module| {
+
+        if (module.kind == .asset) continue;
+
+        const exe = artifacts.get(module.bundle_name) orelse @panic("missing bundle artifact");
+
+        if (std.mem.eql(u8, module.bundle_name, "flint")) continue;
+
+        add_artifact_module(bundle_run, module.bundle_name, exe);
+
+    }
+
+    bundle_run.step.dependOn(&catalog_step.step);
+    add_module(bundle_run, "app-catalog", catalog_file);
 
     // GUI assets ride in the bundle as plain modules.
 
@@ -168,24 +140,17 @@ pub fn build(b: *std.Build) void {
 
     seedisk_run.addArg(disk_path);
     seedisk_run.addArg(b.fmt("{d}", .{disk_bytes}));
-    add_seed_program(seedisk_run, "echo", echo);
-    add_seed_program(seedisk_run, "cat", cat);
-    add_seed_program(seedisk_run, "help", help);
-    add_seed_program(seedisk_run, "about", about);
-    add_seed_program(seedisk_run, "hello", hello);
-    add_seed_program(seedisk_run, "clear", clear);
-    add_seed_program(seedisk_run, "wc", wc);
-    add_seed_program(seedisk_run, "status", status);
-    add_seed_program(seedisk_run, "stress", stress);
-    add_seed_program(seedisk_run, "location", location);
-    add_seed_program(seedisk_run, "ls", ls);
-    add_seed_program(seedisk_run, "view", view);
-    add_seed_program(seedisk_run, "write", write);
-    add_seed_program(seedisk_run, "create", create);
-    add_seed_program(seedisk_run, "mkdir", mkdir);
-    add_seed_program(seedisk_run, "delete", delete);
-    add_seed_program(seedisk_run, "rename", rename);
-    add_seed_program(seedisk_run, "perms", perms);
+
+    for (modules) |module| {
+
+        if (module.kind != .program) continue;
+
+        const exe = artifacts.get(module.bundle_name) orelse @panic("missing seedisk artifact");
+
+        add_seed_program(seedisk_run, module.bundle_name, exe);
+
+    }
+
     seedisk_run.has_side_effects = true;
 
     add_qemu_step(b, kernel_image, bundle_image, .{
@@ -292,14 +257,7 @@ pub fn build(b: *std.Build) void {
 
 }
 
-fn user_program(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    user_lib: *std.Build.Module,
-    name: []const u8,
-    root: []const u8,
-) *std.Build.Step.Compile {
+fn user_program(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, user_lib: *std.Build.Module, name: []const u8, root: []const u8) *std.Build.Step.Compile {
 
     const module = b.createModule(.{
 
@@ -427,13 +385,7 @@ const QemuStep = struct {
 
 };
 
-fn add_qemu_step(
-    b: *std.Build,
-    kernel: std.Build.LazyPath,
-    initrd: ?std.Build.LazyPath,
-    step: QemuStep,
-    qemu_runner: ?*std.Build.Step.Compile,
-) void {
+fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.LazyPath, step: QemuStep, qemu_runner: ?*std.Build.Step.Compile) void {
 
     const run = if (step.gui) blk: {
 

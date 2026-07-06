@@ -11,7 +11,7 @@ const proto = lib.proto;
 
 const Rect = gfx.Rect;
 
-pub const max_windows = 16;
+pub const max_windows = proto.window.max_windows;
 
 pub const title_height: i32 = 28;
 pub const corner_radius: i32 = 8;
@@ -205,12 +205,12 @@ pub const Manager = struct {
         } else if (flags & proto.window.flag_panel != 0) {
 
             window.width = self.screen_width;
-            window.height = @max(min_content, height);
+            window.height = self.clamp_content_height(height);
 
         } else {
 
-            window.width = @max(min_content, width);
-            window.height = @max(min_content, height);
+            window.width = self.clamp_content_width(width);
+            window.height = self.clamp_content_height(height);
 
             const step: i32 = @intCast(32 * (self.placed % 8) + 48);
 
@@ -227,6 +227,38 @@ pub const Manager = struct {
         self.focus = id;
 
         return window;
+
+    }
+
+    pub fn resize_window(self: *Manager, window: *Window, width: u32, height: u32) Rect {
+
+        const before = window.frame();
+
+        if (window.flags & proto.window.flag_fullscreen != 0) {
+
+            window.x = 0;
+            window.y = 0;
+
+            window.width = self.screen_width;
+            window.height = self.screen_height;
+
+        } else if (window.is_panel()) {
+
+            window.width = self.screen_width;
+            window.height = self.clamp_content_height(height);
+
+            self.clamp(window);
+
+        } else {
+
+            window.width = self.clamp_content_width(width);
+            window.height = self.clamp_content_height(height);
+
+            self.clamp(window);
+
+        }
+
+        return before.cover(window.frame());
 
     }
 
@@ -276,12 +308,20 @@ pub const Manager = struct {
 
             if (window.is_panel()) continue;
 
+            const frame = window.frame();
+
             out[written] = .{
 
                 .id = window.id,
                 .flags = @truncate(window.flags),
                 .focused = @intFromBool(self.focus == window.id),
+                .minimized = @intFromBool(window.flags & proto.window.flag_minimized != 0),
                 .title_len = @intCast(window.title_length),
+
+                .x = frame.x,
+                .y = frame.y,
+                .width = @intCast(frame.w),
+                .height = @intCast(frame.h),
 
                 .title = window.title,
 
@@ -292,6 +332,69 @@ pub const Manager = struct {
         }
 
         return written;
+
+    }
+
+    pub fn minimize(self: *Manager, id: u32) ?Rect {
+
+        const window = self.by_id(id) orelse return null;
+
+        if (window.is_panel()) return null;
+        if (window.flags & proto.window.flag_minimized != 0) return null;
+
+        const damage = window.frame();
+
+        window.flags |= proto.window.flag_minimized;
+
+        if (self.focus == id) {
+
+            self.focus = self.top_visible_id() orelse 0;
+
+        }
+
+        return damage;
+
+    }
+
+    pub fn restore(self: *Manager, id: u32) ?Rect {
+
+        const window = self.by_id(id) orelse return null;
+
+        if (window.flags & proto.window.flag_minimized == 0) return null;
+
+        window.flags &= ~proto.window.flag_minimized;
+
+        self.focus = id;
+        self.raise(id);
+
+        return window.frame();
+
+    }
+
+    pub fn is_visible(_: *const Manager, window: *const Window) bool {
+
+        return window.used and window.flags & proto.window.flag_minimized == 0;
+
+    }
+
+    fn top_visible_id(self: *Manager) ?u32 {
+
+        var index = self.count;
+
+        while (index > 0) {
+
+            index -= 1;
+
+            const window = &self.windows[self.order[index]];
+
+            if (window.is_panel()) continue;
+            if (window.flags & proto.window.flag_minimized != 0) continue;
+
+            return window.id;
+
+        }
+
+        return null;
 
     }
 
@@ -380,6 +483,7 @@ pub const Manager = struct {
 
             const window = &self.windows[self.order[index]];
 
+            if (window.flags & proto.window.flag_minimized != 0) continue;
             if (!window.frame().contains(x, y)) continue;
 
             if (window.decorated()) {
@@ -469,6 +573,28 @@ pub const Manager = struct {
 
         window.x = @max(0, @min(window.x, limit_x));
         window.y = @max(0, @min(window.y, limit_y));
+
+    }
+
+    fn clamp_content_width(self: *Manager, width: u32) u32 {
+
+        return clamp_content_extent(width, self.screen_width);
+
+    }
+
+    fn clamp_content_height(self: *Manager, height: u32) u32 {
+
+        return clamp_content_extent(height, self.screen_height);
+
+    }
+
+    fn clamp_content_extent(requested: u32, screen: u32) u32 {
+
+        const wanted = @max(min_content, requested);
+
+        if (screen == 0) return wanted;
+
+        return @min(wanted, @max(min_content, screen));
 
     }
 
@@ -671,6 +797,31 @@ test "list_info reports ordinary windows and skips panels" {
     try testing.expectEqual(second.id, records[1].id);
     try testing.expectEqual(@as(u32, 1), records[1].focused);
     try testing.expectEqualStrings("second", records[1].title[0..records[1].title_len]);
+
+}
+
+test "minimize hides a window and restore brings it back" {
+
+    var manager = test_manager();
+
+    const window = manager.create(1, 200, 200, 0, "app").?;
+
+    if (manager.minimize(window.id)) |damage| {
+
+        try testing.expect(!damage.is_empty());
+
+    }
+
+    try testing.expect(window.flags & proto.window.flag_minimized != 0);
+
+    if (manager.restore(window.id)) |damage| {
+
+        try testing.expect(!damage.is_empty());
+
+    }
+
+    try testing.expect(window.flags & proto.window.flag_minimized == 0);
+    try testing.expectEqual(window.id, manager.focus);
 
 }
 
