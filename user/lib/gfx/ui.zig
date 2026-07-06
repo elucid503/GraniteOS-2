@@ -2,6 +2,8 @@
 // cards, tabs) and chart primitives, all rendered straight onto a gfx.Surface with the Inter face. It keeps the four
 // GUI programs visually consistent without a retained widget tree - each app repaints from its own state.
 
+const std = @import("std");
+
 const gfx = @import("gfx.zig");
 const svg = @import("svg.zig");
 const ttf = @import("ttf.zig");
@@ -88,6 +90,13 @@ pub fn text_center(surface: *const Surface, font: *const Face, rect: Rect, size:
 
 }
 
+/// A dim caption at (x, y): the tone forms use for field labels and section headers.
+pub fn label(surface: *const Surface, font: *const Face, x: i32, y: i32, size: u32, s: []const u8) void {
+
+    font.draw(surface, x, y, size, s, theme.text_dim);
+
+}
+
 pub fn card(surface: *const Surface, rect: Rect, fill_color: Color) void {
 
     surface.fill_rect(rect, fill_color);
@@ -101,7 +110,7 @@ pub fn card_bordered(surface: *const Surface, rect: Rect, fill_color: Color, bor
 
 }
 
-pub fn button(surface: *const Surface, font: *const Face, rect: Rect, label: []const u8, size: u32, style: ButtonStyle) void {
+pub fn button(surface: *const Surface, font: *const Face, rect: Rect, caption: []const u8, size: u32, style: ButtonStyle) void {
 
     const bg = switch (style) {
 
@@ -123,7 +132,328 @@ pub fn button(surface: *const Surface, font: *const Face, rect: Rect, label: []c
 
     if (style == .accent) surface.stroke_rect(rect, 1, theme.accent);
 
-    text_center(surface, font, rect, size, label, fg);
+    text_center(surface, font, rect, size, caption, fg);
+
+}
+
+// Text input. EditBuffer is the model - a caret over a caller-owned byte span with the line-editing operations a
+// single-line field needs - and text_field is the view. Keeping the two apart lets an app store the text however it
+// likes (a fixed array, a slice of a document) while sharing the caret behavior and rendering across every field.
+
+pub const EditBuffer = struct {
+
+    bytes: []u8,
+    len: usize = 0,
+    cursor: usize = 0,
+
+    pub fn init(storage: []u8) EditBuffer {
+
+        return .{ .bytes = storage };
+
+    }
+
+    pub fn slice(self: *const EditBuffer) []const u8 {
+
+        return self.bytes[0..self.len];
+
+    }
+
+    pub fn clear(self: *EditBuffer) void {
+
+        self.len = 0;
+        self.cursor = 0;
+
+    }
+
+    /// Insert one byte at the caret, returning false when the storage is full.
+    pub fn insert(self: *EditBuffer, byte: u8) bool {
+
+        if (self.len >= self.bytes.len) return false;
+
+        var index = self.len;
+
+        while (index > self.cursor) : (index -= 1) self.bytes[index] = self.bytes[index - 1];
+
+        self.bytes[self.cursor] = byte;
+        self.len += 1;
+        self.cursor += 1;
+
+        return true;
+
+    }
+
+    /// Delete the byte before the caret (the Backspace key).
+    pub fn backspace(self: *EditBuffer) bool {
+
+        if (self.cursor == 0) return false;
+
+        var index = self.cursor - 1;
+
+        while (index + 1 < self.len) : (index += 1) self.bytes[index] = self.bytes[index + 1];
+
+        self.len -= 1;
+        self.cursor -= 1;
+
+        return true;
+
+    }
+
+    /// Delete the byte at the caret (the Delete key).
+    pub fn delete(self: *EditBuffer) bool {
+
+        if (self.cursor >= self.len) return false;
+
+        var index = self.cursor;
+
+        while (index + 1 < self.len) : (index += 1) self.bytes[index] = self.bytes[index + 1];
+
+        self.len -= 1;
+
+        return true;
+
+    }
+
+    pub fn left(self: *EditBuffer) bool {
+
+        if (self.cursor == 0) return false;
+
+        self.cursor -= 1;
+
+        return true;
+
+    }
+
+    pub fn right(self: *EditBuffer) bool {
+
+        if (self.cursor >= self.len) return false;
+
+        self.cursor += 1;
+
+        return true;
+
+    }
+
+    pub fn home(self: *EditBuffer) bool {
+
+        if (self.cursor == 0) return false;
+
+        self.cursor = 0;
+
+        return true;
+
+    }
+
+    pub fn end(self: *EditBuffer) bool {
+
+        if (self.cursor == self.len) return false;
+
+        self.cursor = self.len;
+
+        return true;
+
+    }
+
+    /// Apply one key's byte sequence straight from keymap.Keyboard.bytes: printable bytes insert, Backspace/Delete
+    /// edit, and the CSI arrow/Home/End escapes move the caret. Returns true when the buffer changed so the caller
+    /// knows to repaint. Enter and other control bytes are left for the app to act on.
+    pub fn feed(self: *EditBuffer, input: []const u8) bool {
+
+        if (input.len == 3 and input[0] == 0x1b and input[1] == '[') {
+
+            return switch (input[2]) {
+
+                'C' => self.right(),
+                'D' => self.left(),
+                'H' => self.home(),
+                'F' => self.end(),
+
+                else => false,
+
+            };
+
+        }
+
+        if (input.len == 1) {
+
+            const byte = input[0];
+
+            if (byte == 0x7f or byte == 0x08) return self.backspace();
+            if (byte >= 0x20 and byte < 0x7f) return self.insert(byte);
+
+        }
+
+        return false;
+
+    }
+
+};
+
+pub const FieldState = struct {
+
+    focused: bool = false,
+
+    // The caller flips this from its own clock so the caret blinks; a static field can leave it true.
+    caret_on: bool = true,
+
+};
+
+const field_pad: i32 = 8;
+
+/// A single-line text input: a bordered box (accent border when focused), the current text or a faint placeholder
+/// when empty, and a caret at the edit cursor. Immediate-mode - pass the live buffer and repaint each change.
+pub fn text_field(surface: *const Surface, font: *const Face, rect: Rect, size: u32, buffer: *const EditBuffer, placeholder: []const u8, state: FieldState) void {
+
+    surface.fill_rect(rect, theme.surface);
+    surface.stroke_rect(rect, 1, if (state.focused) theme.accent else theme.border);
+
+    const inner_x = rect.x + field_pad;
+    const inner_w = rect.w - 2 * field_pad;
+
+    if (inner_w <= 0) return;
+
+    const baseline = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
+    const content = buffer.slice();
+
+    if (content.len == 0 and placeholder.len > 0) {
+
+        font.draw(surface, inner_x, baseline, size, truncate(font, placeholder, size, inner_w), theme.text_faint);
+
+    } else {
+
+        // Scroll the text horizontally so the caret stays in view when the content overflows the box.
+
+        const start = field_scroll_start(font, content, buffer.cursor, size, inner_w);
+
+        font.draw(surface, inner_x, baseline, size, truncate(font, content[start..], size, inner_w), theme.text);
+
+    }
+
+    if (state.focused and state.caret_on) {
+
+        const start = field_scroll_start(font, content, buffer.cursor, size, inner_w);
+        const before = content[start..@min(buffer.cursor, content.len)];
+        const caret_x = @min(inner_x + font.text_width(before, size), inner_x + inner_w);
+        const caret_h = @min(rect.h - 6, font.line_height(size));
+        const caret_y = rect.y + @divTrunc(rect.h - caret_h, 2);
+
+        surface.fill_rect(.{ .x = caret_x, .y = caret_y, .w = 1, .h = caret_h }, theme.text);
+
+    }
+
+}
+
+/// The first visible byte so the caret at `cursor` stays within `width`: the whole string when it fits, otherwise the
+/// widest suffix ending at the caret that still fits.
+fn field_scroll_start(font: *const Face, content: []const u8, cursor: usize, size: u32, width: i32) usize {
+
+    if (width <= 0 or font.text_width(content, size) <= width) return 0;
+
+    var start: usize = 0;
+
+    while (start < cursor and font.text_width(content[start..cursor], size) > width) : (start += 1) {}
+
+    return start;
+
+}
+
+/// A caption above `rect`, then the field inside it. The label sits one line-height above the box's top edge.
+pub fn labeled_field(surface: *const Surface, font: *const Face, rect: Rect, size: u32, caption: []const u8, buffer: *const EditBuffer, placeholder: []const u8, state: FieldState) void {
+
+    label(surface, font, rect.x, rect.y - font.line_height(size) - 2, size, caption);
+    text_field(surface, font, rect, size, buffer, placeholder, state);
+
+}
+
+/// A labeled checkbox: a small box (filled when checked) with the caption to its right, vertically centered in `rect`.
+pub fn checkbox(surface: *const Surface, font: *const Face, rect: Rect, checked: bool, caption: []const u8, size: u32) void {
+
+    const box: i32 = @min(rect.h - 4, 16);
+    const box_y = rect.y + @divTrunc(rect.h - box, 2);
+    const box_rect = Rect{ .x = rect.x, .y = box_y, .w = box, .h = box };
+
+    surface.fill_rect(box_rect, theme.surface_alt);
+    surface.stroke_rect(box_rect, 1, if (checked) theme.accent else theme.border);
+
+    if (checked) {
+
+        const inset = @max(2, @divTrunc(box, 4));
+
+        surface.fill_rect(.{ .x = box_rect.x + inset, .y = box_rect.y + inset, .w = box - 2 * inset, .h = box - 2 * inset }, theme.accent);
+
+    }
+
+    const text_x = rect.x + box + 8;
+
+    text_in(surface, font, .{ .x = text_x, .y = rect.y, .w = rect.x + rect.w - text_x, .h = rect.h }, 0, size, caption, theme.text);
+
+}
+
+// Scroll overflow. Scroll is a unit-agnostic model - the same shape works whether an app tracks its offset in rows or
+// in pixels: a content extent, the viewport showing part of it, and the current offset. It clamps the offset and sizes
+// the indicator; scrollbar draws the proportional thumb, and nothing shows while the content fits.
+
+pub const scrollbar_width: i32 = 8;
+
+const min_thumb: i32 = 16;
+
+pub const Scroll = struct {
+
+    offset: i32 = 0,
+    content: i32 = 0,
+    viewport: i32 = 0,
+
+    pub fn max_offset(self: Scroll) i32 {
+
+        return @max(0, self.content - self.viewport);
+
+    }
+
+    pub fn overflowing(self: Scroll) bool {
+
+        return self.viewport > 0 and self.content > self.viewport;
+
+    }
+
+    /// `offset` forced into [0, max_offset]; keep an app's stored offset valid after content or viewport changes.
+    pub fn clamped(self: Scroll) i32 {
+
+        return @max(0, @min(self.offset, self.max_offset()));
+
+    }
+
+    const Thumb = struct {
+
+        pos: i32,
+        len: i32,
+
+    };
+
+    /// Thumb offset and length along a track of `track` units, proportional to the visible fraction.
+    pub fn thumb(self: Scroll, track: i32) Thumb {
+
+        if (!self.overflowing() or track <= 0) return .{ .pos = 0, .len = track };
+
+        const len = @max(@min(min_thumb, track), @divTrunc(track * self.viewport, self.content));
+        const span = track - len;
+        const max = self.max_offset();
+        const pos = if (max <= 0) 0 else @divTrunc(span * self.clamped(), max);
+
+        return .{ .pos = pos, .len = len };
+
+    }
+
+};
+
+/// A vertical scrollbar filling `track` (a thin strip at a pane's right edge). Draws nothing when the content fits.
+pub fn scrollbar(surface: *const Surface, track: Rect, scroll: Scroll) void {
+
+    if (!scroll.overflowing() or track.h <= 0) return;
+
+    surface.fill_rect(track, theme.surface_alt);
+
+    const t = scroll.thumb(track.h);
+
+    surface.fill_rect(.{ .x = track.x + 1, .y = track.y + t.pos, .w = @max(1, track.w - 2), .h = t.len }, theme.accent_dim);
 
 }
 
@@ -307,7 +637,7 @@ pub fn pie_chart(surface: *const Surface, cx: i32, cy: i32, radius: i32, slices:
 
     if (total == 0) {
 
-        surface.fill_circle(cx, cy, radius, theme.surface);
+        surface.fill_circle_smooth(cx, cy, radius, theme.surface);
         surface.stroke_circle_smooth(cx, cy, radius, 1, theme.border);
 
         return;
@@ -546,5 +876,103 @@ pub fn meter(surface: *const Surface, rect: Rect, fraction_num: u64, fraction_de
 pub fn contains(rect: Rect, x: i32, y: i32) bool {
 
     return rect.contains(x, y);
+
+}
+
+const testing = std.testing;
+
+test "edit buffer inserts at the caret and edits both directions" {
+
+    var storage: [8]u8 = undefined;
+    var buffer = EditBuffer.init(&storage);
+
+    for ("ac") |byte| _ = buffer.insert(byte);
+
+    // Caret between 'a' and 'c', then insert 'b'.
+
+    try testing.expect(buffer.left());
+    try testing.expect(buffer.insert('b'));
+    try testing.expectEqualStrings("abc", buffer.slice());
+    try testing.expectEqual(@as(usize, 2), buffer.cursor);
+
+    // Backspace removes the byte before the caret; delete removes the one at it.
+
+    try testing.expect(buffer.backspace());
+    try testing.expectEqualStrings("ac", buffer.slice());
+    try testing.expect(buffer.delete());
+    try testing.expectEqualStrings("a", buffer.slice());
+
+}
+
+test "edit buffer refuses to overflow its storage and clamps caret moves" {
+
+    var storage: [3]u8 = undefined;
+    var buffer = EditBuffer.init(&storage);
+
+    try testing.expect(buffer.insert('x'));
+    try testing.expect(buffer.insert('y'));
+    try testing.expect(buffer.insert('z'));
+    try testing.expect(!buffer.insert('!'));
+    try testing.expectEqualStrings("xyz", buffer.slice());
+
+    // Caret cannot walk past either end.
+
+    try testing.expect(!buffer.right());
+    try testing.expect(buffer.home());
+    try testing.expect(!buffer.left());
+
+}
+
+test "edit buffer feed routes printable bytes and CSI arrows" {
+
+    var storage: [8]u8 = undefined;
+    var buffer = EditBuffer.init(&storage);
+
+    try testing.expect(buffer.feed("h"));
+    try testing.expect(buffer.feed("i"));
+
+    // Left-arrow escape moves the caret; the next insert lands before 'i'.
+
+    try testing.expect(buffer.feed(&[_]u8{ 0x1b, '[', 'D' }));
+    try testing.expect(buffer.feed("!"));
+    try testing.expectEqualStrings("h!i", buffer.slice());
+
+    // Enter is not an edit, so feed reports no change.
+
+    try testing.expect(!buffer.feed(&[_]u8{'\r'}));
+
+}
+
+test "scroll clamps its offset and hides when content fits" {
+
+    const fits = Scroll{ .offset = 5, .content = 10, .viewport = 20 };
+
+    try testing.expect(!fits.overflowing());
+    try testing.expectEqual(@as(i32, 0), fits.max_offset());
+    try testing.expectEqual(@as(i32, 0), fits.clamped());
+
+    const over = Scroll{ .offset = 999, .content = 100, .viewport = 40 };
+
+    try testing.expect(over.overflowing());
+    try testing.expectEqual(@as(i32, 60), over.max_offset());
+    try testing.expectEqual(@as(i32, 60), over.clamped());
+
+}
+
+test "scroll thumb spans the track proportionally" {
+
+    // Half the content is visible, so the thumb is half the track; at max offset it sits flush against the bottom.
+
+    const top = Scroll{ .offset = 0, .content = 200, .viewport = 100 };
+    const top_thumb = top.thumb(100);
+
+    try testing.expectEqual(@as(i32, 0), top_thumb.pos);
+    try testing.expectEqual(@as(i32, 50), top_thumb.len);
+
+    const bottom = Scroll{ .offset = 100, .content = 200, .viewport = 100 };
+    const bottom_thumb = bottom.thumb(100);
+
+    try testing.expectEqual(@as(i32, 50), bottom_thumb.pos);
+    try testing.expectEqual(@as(i32, 100), bottom_thumb.pos + bottom_thumb.len);
 
 }

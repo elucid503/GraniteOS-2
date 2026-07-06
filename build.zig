@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const test_build = b.option(bool, "test", "Exit QEMU via semihosting on halt/panic") orelse false;
     const smp = b.option(u64, "smp", "Core count for the QEMU run steps") orelse 4;
-    const memory = b.option(u64, "memory", "RAM in MiB for the QEMU run steps") orelse 256;
+    const memory = b.option(u64, "memory", "RAM in MiB for the QEMU run steps") orelse 512;
     const disk = b.option(u64, "disk", "Disk size in MiB for the persistent QEMU disk") orelse default_disk_mib;
 
     if (disk == 0) @panic("-Ddisk must be at least 1 MiB");

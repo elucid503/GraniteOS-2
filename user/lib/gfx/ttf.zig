@@ -571,17 +571,26 @@ fn add_segment(segments: *[max_segments]Segment, count: *usize, a: Point, b: Poi
 }
 
 fn add_quadratic(segments: *[max_segments]Segment, count: *usize, a: Point, b: Point, c: Point) void {
-    const steps: i32 = 12;
+    const steps: i64 = 12;
     var last = a;
-    var step: i32 = 1;
+    var step: i64 = 1;
+
+    // 64-bit accumulation with rounded division: the control points are already in 26.6, so truncating each sample
+    // drops up to a sixty-fourth of a pixel and the drift shows as faint facets on curved stems.
 
     while (step <= steps) : (step += 1) {
         const t = step;
         const mt = steps - step;
         const denom = steps * steps;
+        const ax: i64 = a.x;
+        const ay: i64 = a.y;
+        const bx: i64 = b.x;
+        const by: i64 = b.y;
+        const cx: i64 = c.x;
+        const cy: i64 = c.y;
         const point = Point{
-            .x = @divTrunc(mt * mt * a.x + 2 * mt * t * b.x + t * t * c.x, denom),
-            .y = @divTrunc(mt * mt * a.y + 2 * mt * t * b.y + t * t * c.y, denom),
+            .x = round_div_i64(mt * mt * ax + 2 * mt * t * bx + t * t * cx, denom),
+            .y = round_div_i64(mt * mt * ay + 2 * mt * t * by + t * t * cy, denom),
             .on = true,
         };
 

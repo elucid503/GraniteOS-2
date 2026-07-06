@@ -58,8 +58,8 @@ var app_count: usize = 0;
 var launch_endpoint: cap.Handle = 0;
 
 var keyboard = lib.keymap.Keyboard{};
-var search: [48]u8 = undefined;
-var search_len: usize = 0;
+var search_storage: [48]u8 = undefined;
+var search = ui.EditBuffer{ .bytes = &search_storage };
 
 var bar_ptr_x: i32 = -1;
 var menu_ptr_y: i32 = -1;
@@ -274,31 +274,22 @@ fn menu_key(code: u16) void {
 
     if (bytes.len == 0) return;
 
-    switch (bytes[0]) {
+    if (bytes.len == 1) {
 
-        '\r' => launch_first(),
-        0x1b => close_menu(),
+        switch (bytes[0]) {
 
-        0x7f => {
+            '\r' => return launch_first(),
+            0x1b => return close_menu(),
 
-            if (search_len > 0) search_len -= 1;
-            paint_menu();
+            else => {},
 
-        },
-
-        else => {
-
-            if (bytes[0] >= 0x20 and bytes[0] < 0x7f and search_len < search.len) {
-
-                search[search_len] = bytes[0];
-                search_len += 1;
-                paint_menu();
-
-            }
-
-        },
+        }
 
     }
+
+    // Printable bytes, Backspace/Delete, and the arrow escapes all flow through the shared edit buffer.
+
+    if (search.feed(bytes)) paint_menu();
 
 }
 
@@ -343,7 +334,7 @@ fn toggle_menu() void {
 
 fn open_menu() void {
 
-    search_len = 0;
+    search.clear();
     menu_ptr_y = -1;
     last_menu_hover = -3;
 
@@ -553,16 +544,27 @@ fn paint_menu() void {
     ui.icon(surface, .{ .x = icon_x, .y = icon_y, .w = icon_size, .h = icon_size }, lib.icons.search, ui.theme.text_dim);
 
     const text_x = icon_x + icon_size + 8;
+    const text_w = width - text_x - 8;
+    const query = search.slice();
 
-    if (search_len == 0) {
+    if (query.len == 0) {
 
-        ui.text_in(surface, &font, .{ .x = text_x, .y = search_rect.y, .w = width - text_x - 8, .h = search_rect.h }, 0, 13, "Search applications", ui.theme.text_faint);
+        ui.text_in(surface, &font, .{ .x = text_x, .y = search_rect.y, .w = text_w, .h = search_rect.h }, 0, 13, "Search applications", ui.theme.text_faint);
 
     } else {
 
-        ui.text_in(surface, &font, .{ .x = text_x, .y = search_rect.y, .w = width - text_x - 8, .h = search_rect.h }, 0, 13, search[0..search_len], ui.theme.text);
+        ui.text_in(surface, &font, .{ .x = text_x, .y = search_rect.y, .w = text_w, .h = search_rect.h }, 0, 13, query, ui.theme.text);
 
     }
+
+    // Caret at the edit cursor, clamped to the box.
+
+    const before = query[0..@min(search.cursor, query.len)];
+    const caret_x = @min(text_x + font.text_width(before, 13), text_x + text_w);
+    const caret_h = @min(search_rect.h - 8, font.line_height(13));
+    const caret_y = search_rect.y + @divTrunc(search_rect.h - caret_h, 2);
+
+    surface.fill_rect(.{ .x = caret_x, .y = caret_y, .w = 1, .h = caret_h }, ui.theme.text);
 
     // Filtered application rows.
 
@@ -601,9 +603,11 @@ fn paint_menu() void {
 
 fn matches(app: lib.wm.App) bool {
 
-    if (search_len == 0) return true;
+    const query = search.slice();
 
-    return contains_ignore_case(app.title, search[0..search_len]) or contains_ignore_case(app.program, search[0..search_len]);
+    if (query.len == 0) return true;
+
+    return contains_ignore_case(app.title, query) or contains_ignore_case(app.program, query);
 
 }
 

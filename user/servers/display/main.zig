@@ -120,6 +120,15 @@ var drag_id: u32 = 0;
 var drag_dx: i32 = 0;
 var drag_dy: i32 = 0;
 
+// Interactive resize is drawn as a rubber-band outline while the grip is held; the surface is reallocated once, on
+// release, so a drag never churns a fresh Region per pointer move.
+var resize_id: u32 = 0;
+var resize_outline: Rect = Rect.empty;
+
+// Offset from the pointer to the frame's bottom-right at grab time, so the corner tracks the pointer without jumping.
+var resize_dx: i32 = 0;
+var resize_dy: i32 = 0;
+
 var damage: Rect = Rect.empty;
 
 const ListWatch = struct {
@@ -531,6 +540,7 @@ fn destroy_window(badge: u64, id: u64) i64 {
     const slot = slot_of(window);
 
     if (drag_id == window.id) drag_id = 0;
+    if (resize_id == window.id) resize_id = 0;
 
     release_surface(slot);
 
@@ -569,6 +579,7 @@ fn destroy_owner_windows(owner: u64) void {
         if (!window.used or window.owner != owner) continue;
 
         if (drag_id == window.id) drag_id = 0;
+        if (resize_id == window.id) resize_id = 0;
         if (manager.focus == window.id) focused_changed = true;
 
         release_surface(index);
@@ -862,6 +873,26 @@ fn drain_input() void {
 
 fn handle_pointer_move() void {
 
+    if (resize_id != 0) {
+
+        const window = manager.by_id(resize_id) orelse {
+
+            resize_id = 0;
+
+            return;
+
+        };
+
+        // Redraw the band spanning the old and new outline, then restroke at the new size on the next composite.
+
+        add_damage(resize_outline);
+        resize_outline = proposed_frame(window);
+        add_damage(resize_outline);
+
+        return;
+
+    }
+
     if (drag_id != 0) {
 
         if (manager.move(drag_id, pointer_x - drag_dx, pointer_y - drag_dy)) |moved| add_damage(moved);
@@ -919,6 +950,19 @@ fn handle_button_down(event: events.Event) void {
 
         },
 
+        .resize => {
+
+            const f = window.frame();
+
+            resize_id = window.id;
+            resize_dx = f.x + f.w - pointer_x;
+            resize_dy = f.y + f.h - pointer_y;
+            resize_outline = f;
+
+            add_damage(resize_outline);
+
+        },
+
         .content => forward(window, event),
 
     }
@@ -926,6 +970,14 @@ fn handle_button_down(event: events.Event) void {
 }
 
 fn handle_button_up(event: events.Event) void {
+
+    if (resize_id != 0) {
+
+        commit_resize();
+
+        return;
+
+    }
 
     if (drag_id != 0) {
 
@@ -936,6 +988,72 @@ fn handle_button_up(event: events.Event) void {
     }
 
     if (window_under_pointer()) |window| forward(window, event);
+
+}
+
+// The proposed content extents for the window whose grip is being dragged: the pointer sets the frame's bottom-right,
+// clamped the same way manager.resize_window will clamp on commit so the outline matches the committed size exactly.
+
+fn resize_target(window: *const Window) struct { width: u32, height: u32 } {
+
+    const content = window.content();
+
+    const raw_w = @max(@as(i32, @intCast(manager_module.min_content)), pointer_x + resize_dx - content.x);
+    const raw_h = @max(@as(i32, @intCast(manager_module.min_content)), pointer_y + resize_dy - content.y);
+
+    const width = @min(@as(u32, @intCast(raw_w)), @max(manager_module.min_content, screen_width));
+    const height = @min(@as(u32, @intCast(raw_h)), @max(manager_module.min_content, screen_height));
+
+    return .{ .width = width, .height = height };
+
+}
+
+fn proposed_frame(window: *const Window) Rect {
+
+    const target = resize_target(window);
+    const decoration: i32 = if (window.decorated()) manager_module.title_height else 0;
+
+    return .{
+
+        .x = window.x,
+        .y = window.y,
+
+        .w = @intCast(target.width),
+        .h = decoration + @as(i32, @intCast(target.height)),
+
+    };
+
+}
+
+fn commit_resize() void {
+
+    const id = resize_id;
+
+    resize_id = 0;
+
+    // Erase the outline; the window itself repaints once the client remaps its resized surface.
+
+    add_damage(resize_outline);
+    resize_outline = Rect.empty;
+
+    const window = manager.by_id(id) orelse return;
+    const target = resize_target(window);
+
+    add_damage(manager.resize_window(window, target.width, target.height));
+    add_damage(window.frame());
+
+    send_to_owner(window, .{
+
+        .kind = events.kind_window_resize,
+        .code = 0,
+        .window = window.id,
+
+        .x = @intCast(window.width),
+        .y = @intCast(window.height),
+
+        .value = 0,
+
+    });
 
 }
 
@@ -1155,6 +1273,15 @@ fn composite() !void {
 
     }
 
+    // The resize rubber-band rides above every window; moves always damage its band, so restroking it each pass is
+    // enough to keep the fed-back scanout consistent.
+
+    if (resize_id != 0 and !resize_outline.is_empty()) {
+
+        back.stroke_rect(resize_outline, 2, theme.chrome);
+
+    }
+
     // One pass into the uncached scanout: only the damaged band's rows move.
 
     fb.blit(region.x, region.y, &back, region);
@@ -1232,6 +1359,25 @@ fn draw_window(window: *Window, clip: Rect) void {
     if (window.decorated()) {
 
         back.mask_rounded_rect_bottom_smooth(window.frame(), manager_module.corner_radius, theme.wallpaper);
+        draw_resize_grip(window);
+
+    }
+
+}
+
+// A trio of short diagonal ticks in the bottom-right corner: the affordance that the corner grabs a resize.
+
+fn draw_resize_grip(window: *const Window) void {
+
+    const grip = window.resize_grip_rect();
+    const corner_x = grip.x + grip.w - 3;
+    const corner_y = grip.y + grip.h - 3;
+
+    var step: i32 = 4;
+
+    while (step <= 12) : (step += 4) {
+
+        back.stroke_line_smooth(corner_x - step, corner_y, corner_x, corner_y - step, 1, theme.title_blurred);
 
     }
 

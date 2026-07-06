@@ -61,6 +61,16 @@ fn run() !void {
 
             },
 
+            events.kind_window_resize => {
+
+                try window.resize(@intCast(event.x), @intCast(event.y));
+
+                draw(&window.surface);
+                gfx.fence();
+                try window.present_all();
+
+            },
+
             else => {},
 
         }

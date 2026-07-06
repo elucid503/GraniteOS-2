@@ -253,6 +253,13 @@ fn run() !void {
 
                 },
 
+                events.kind_window_resize => {
+
+                    window.resize(@intCast(event.x), @intCast(event.y)) catch {};
+                    dirty = true;
+
+                },
+
                 else => {},
 
             }

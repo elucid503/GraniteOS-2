@@ -190,6 +190,24 @@ fn handle(event: events.Event) bool {
 
         events.kind_key_down => key(event.code),
 
+        events.kind_window_resize => {
+
+            window.resize(@intCast(event.x), @intCast(event.y)) catch {};
+
+            screen_lock.acquire();
+
+            resize_grid();
+
+            // Keep the cursor inside the reflowed grid so the next write stays in bounds.
+            cx = @min(cx, cols - 1);
+            cy = @min(cy, rows - 1);
+
+            screen_lock.release();
+
+            paint();
+
+        },
+
         events.kind_window_focus => {
 
             focused = true;

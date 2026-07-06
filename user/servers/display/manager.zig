@@ -19,6 +19,9 @@ pub const chrome_size: i32 = 14;
 pub const chrome_margin: i32 = 10;
 pub const title_padding: i32 = 10;
 
+// The square, in the frame's bottom-right corner, that grabs an interactive resize.
+pub const resize_grip: i32 = 18;
+
 pub const min_content: u32 = 32;
 
 pub const Window = struct {
@@ -132,6 +135,24 @@ pub const Window = struct {
 
     }
 
+    /// The bottom-right resize grip, in screen coordinates. Only decorated windows carry one.
+    pub fn resize_grip_rect(self: *const Window) Rect {
+
+        const f = self.frame();
+        const grip = @min(resize_grip, @min(f.w, f.h - title_height));
+
+        return .{
+
+            .x = f.x + f.w - grip,
+            .y = f.y + f.h - grip,
+
+            .w = grip,
+            .h = grip,
+
+        };
+
+    }
+
     pub fn set_title(self: *Window, text: []const u8) void {
 
         const length = @min(text.len, self.title.len);
@@ -148,6 +169,7 @@ pub const Region = enum {
 
     title,
     close,
+    resize,
     content,
 
 };
@@ -490,6 +512,7 @@ pub const Manager = struct {
 
                 if (window.close_button().contains(x, y)) return .{ .id = window.id, .region = .close };
                 if (window.title_bar().contains(x, y)) return .{ .id = window.id, .region = .title };
+                if (window.resize_grip_rect().contains(x, y)) return .{ .id = window.id, .region = .resize };
 
             }
 
@@ -678,6 +701,35 @@ test "hit test respects stacking and decorations" {
     try testing.expectEqual(Region.close, on_close.region);
 
     try testing.expectEqual(@as(?Hit, null), manager.hit_test(639, 479));
+
+}
+
+test "hit test grabs the bottom-right resize grip" {
+
+    var manager = test_manager();
+
+    const window = manager.create(1, 200, 200, 0, "app").?;
+    _ = manager.move(window.id, 100, 100);
+
+    const grip = window.resize_grip_rect();
+
+    // A point inside the grip resizes; a point just inside the frame's interior is plain content.
+
+    const on_grip = manager.hit_test(grip.x + 2, grip.y + 2).?;
+
+    try testing.expectEqual(window.id, on_grip.id);
+    try testing.expectEqual(Region.resize, on_grip.region);
+
+    const inside = manager.hit_test(grip.x - 20, grip.y - 20).?;
+
+    try testing.expectEqual(Region.content, inside.region);
+
+    // An undecorated window exposes no grip.
+
+    const bare = manager.create(2, 200, 200, proto.window.flag_undecorated, "bare").?;
+    _ = manager.move(bare.id, 100, 100);
+
+    try testing.expectEqual(Region.content, manager.hit_test(bare.x + bare.frame().w - 3, bare.y + bare.frame().h - 3).?.region);
 
 }
 

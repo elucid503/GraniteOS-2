@@ -163,18 +163,29 @@ fn draw_path(painter: *const Painter, d: []const u8) void {
     }
 }
 
+// Coordinates are 16.16 fixed point, so the Bézier weights are accumulated in i64: a cubic term reaches
+// steps^3 * coord, which overflows i32 for anything but the tiniest control net. Division rounds to the nearest
+// unit to keep the flattened polyline centered on the true curve.
+
 fn draw_quadratic(painter: *const Painter, a: Point, b: Point, c: Point) void {
-    const steps = 12;
+    const steps: i64 = 16;
     var last = a;
-    var step: i32 = 1;
+    var step: i64 = 1;
+
+    const ax: i64 = a.x;
+    const ay: i64 = a.y;
+    const bx: i64 = b.x;
+    const by: i64 = b.y;
+    const cx: i64 = c.x;
+    const cy: i64 = c.y;
 
     while (step <= steps) : (step += 1) {
         const t = step;
         const mt = steps - step;
         const denom = steps * steps;
         const point = Point{
-            .x = @divTrunc(mt * mt * a.x + 2 * mt * t * b.x + t * t * c.x, denom),
-            .y = @divTrunc(mt * mt * a.y + 2 * mt * t * b.y + t * t * c.y, denom),
+            .x = @intCast(round_div(mt * mt * ax + 2 * mt * t * bx + t * t * cx, denom)),
+            .y = @intCast(round_div(mt * mt * ay + 2 * mt * t * by + t * t * cy, denom)),
         };
 
         painter.line(last, point);
@@ -183,22 +194,37 @@ fn draw_quadratic(painter: *const Painter, a: Point, b: Point, c: Point) void {
 }
 
 fn draw_cubic(painter: *const Painter, a: Point, b: Point, c: Point, d: Point) void {
-    const steps = 16;
+    const steps: i64 = 24;
     var last = a;
-    var step: i32 = 1;
+    var step: i64 = 1;
+
+    const ax: i64 = a.x;
+    const ay: i64 = a.y;
+    const bx: i64 = b.x;
+    const by: i64 = b.y;
+    const cx: i64 = c.x;
+    const cy: i64 = c.y;
+    const dx: i64 = d.x;
+    const dy: i64 = d.y;
 
     while (step <= steps) : (step += 1) {
         const t = step;
         const mt = steps - step;
         const denom = steps * steps * steps;
         const point = Point{
-            .x = @divTrunc(mt * mt * mt * a.x + 3 * mt * mt * t * b.x + 3 * mt * t * t * c.x + t * t * t * d.x, denom),
-            .y = @divTrunc(mt * mt * mt * a.y + 3 * mt * mt * t * b.y + 3 * mt * t * t * c.y + t * t * t * d.y, denom),
+            .x = @intCast(round_div(mt * mt * mt * ax + 3 * mt * mt * t * bx + 3 * mt * t * t * cx + t * t * t * dx, denom)),
+            .y = @intCast(round_div(mt * mt * mt * ay + 3 * mt * mt * t * by + 3 * mt * t * t * cy + t * t * t * dy, denom)),
         };
 
         painter.line(last, point);
         last = point;
     }
+}
+
+fn round_div(numerator: i64, denominator: i64) i64 {
+    const half = @divTrunc(denominator, 2);
+
+    return if (numerator >= 0) @divTrunc(numerator + half, denominator) else -@divTrunc(-numerator + half, denominator);
 }
 
 fn draw_points(painter: *const Painter, text: []const u8, close: bool) void {

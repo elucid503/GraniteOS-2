@@ -99,6 +99,14 @@ fn run() !void {
 
             },
 
+            events.kind_window_resize => {
+
+                window.resize(@intCast(event.x), @intCast(event.y)) catch {};
+                clamp_scroll();
+                paint();
+
+            },
+
             events.kind_button_down => {
 
                 if (event.code == events.button_left) click(event.x, event.y);
@@ -380,9 +388,31 @@ fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
 
 }
 
+fn list_scroll() ui.Scroll {
+
+    return .{
+
+        .offset = @intCast(scroll),
+        .content = @intCast(entry_count),
+        .viewport = @intCast(visible_rows()),
+
+    };
+
+}
+
+fn clamp_scroll() void {
+
+    scroll = @intCast(list_scroll().clamped());
+
+}
+
 fn paint_list(surface: *const gfx.Surface, height: i32) void {
 
     const width = list_width();
+
+    // A gutter on the right holds the scrollbar so long directory listings read as overflowing, not truncated.
+    const gutter = ui.scrollbar_width;
+    const content_w = width - gutter;
 
     surface.fill_rect(.{ .x = 0, .y = list_start, .w = width, .h = height - list_start }, ui.theme.window_bg);
 
@@ -402,7 +432,7 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
         const index = scroll + row;
         const entry = entries[index];
         const y = list_start + @as(i32, @intCast(row)) * row_height;
-        const rect = Rect{ .x = 0, .y = y, .w = width, .h = row_height };
+        const rect = Rect{ .x = 0, .y = y, .w = content_w, .h = row_height };
 
         const is_selected = selected != null and selected.? == index;
         const hovered = pointer_y >= y and pointer_y < y + row_height;
@@ -423,18 +453,20 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
 
         ui.icon(surface, .{ .x = 10, .y = y + 5, .w = 16, .h = 16 }, icon, tint);
 
-        ui.text_in(surface, &font, .{ .x = 34, .y = y, .w = width - 120, .h = row_height }, 0, 13, entry.name[0..entry.name_len], ui.theme.text);
+        ui.text_in(surface, &font, .{ .x = 34, .y = y, .w = content_w - 120, .h = row_height }, 0, 13, entry.name[0..entry.name_len], ui.theme.text);
 
         if (!is_dir) {
 
             var buffer: [24]u8 = undefined;
             const size = human_size(entry.length, &buffer);
 
-            ui.text_in(surface, &font, .{ .x = width - 86, .y = y, .w = 80, .h = row_height }, 0, 12, size, ui.theme.text_faint);
+            ui.text_in(surface, &font, .{ .x = content_w - 86, .y = y, .w = 80, .h = row_height }, 0, 12, size, ui.theme.text_faint);
 
         }
 
     }
+
+    ui.scrollbar(surface, .{ .x = width - gutter, .y = list_start, .w = gutter, .h = height - list_start }, list_scroll());
 
 }
 

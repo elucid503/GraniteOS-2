@@ -333,6 +333,56 @@ pub const Surface = struct {
 
     }
 
+    /// Anti-aliased filled disc: interior pixels fill solid, boundary pixels take 4x4 supersampled coverage so the
+    /// edge stays smooth instead of the stair-stepped span edges fill_circle leaves.
+    pub fn fill_circle_smooth(self: *const Surface, cx: i32, cy: i32, radius: i32, color: Color) void {
+
+        if (radius <= 0) return;
+
+        const raw_bounds = Rect{ .x = cx - radius - 1, .y = cy - radius - 1, .w = 2 * radius + 3, .h = 2 * radius + 3 };
+        const rect = raw_bounds.intersect(self.bounds());
+        const sample_offsets = [_]i32{ 8, 24, 40, 56 };
+        const r2: i64 = @as(i64, radius) * radius * 4096;
+
+        var y = rect.y;
+
+        while (y < rect.y + rect.h) : (y += 1) {
+
+            var x = rect.x;
+
+            while (x < rect.x + rect.w) : (x += 1) {
+
+                var covered: u32 = 0;
+
+                for (sample_offsets) |sy| {
+
+                    for (sample_offsets) |sx| {
+
+                        const dx = (x - cx) * 64 + sx - 32;
+                        const dy = (y - cy) * 64 + sy - 32;
+
+                        if (@as(i64, dx) * dx + @as(i64, dy) * dy <= r2) covered += 1;
+
+                    }
+
+                }
+
+                if (covered == 16) {
+
+                    self.put_pixel(x, y, color);
+
+                } else if (covered != 0) {
+
+                    self.blend_pixel(x, y, color, @intCast((covered * 255) / 16));
+
+                }
+
+            }
+
+        }
+
+    }
+
     /// Midpoint circle outline.
     pub fn stroke_circle(self: *const Surface, cx: i32, cy: i32, radius: i32, color: Color) void {
 
@@ -518,14 +568,39 @@ pub const Surface = struct {
 
             const t = @as(i64, y - rect.y);
 
+            // The channel interpolation depends only on the row, so resolve it once and let the inner loop apply
+            // only the per-pixel Bayer offset. Values are pre-scaled by 16 to keep the dither at sub-step precision.
+
+            var scaled: [3]i64 = undefined;
+
+            inline for (.{ 16, 8, 0 }, 0..) |shift, channel| {
+
+                const a: i64 = (top >> shift) & 0xff;
+                const b: i64 = (bottom >> shift) & 0xff;
+
+                scaled[channel] = a * 16 + @divTrunc((b - a) * 16 * t, span);
+
+            }
+
+            const row_base = @as(u32, @intCast(y)) * self.stride;
+            const dither_row = bayer[@intCast(@mod(y, 4))];
+
             var x = clipped.x;
 
             while (x < clipped.x + clipped.w) : (x += 1) {
 
-                const dither = bayer[@intCast(@mod(y, 4))][@intCast(@mod(x, 4))];
+                const dither = dither_row[@intCast(@mod(x, 4))];
+                var out: u32 = 0;
 
-                self.pixels[@as(u32, @intCast(y)) * self.stride + @as(u32, @intCast(x))] =
-                    mix_dithered(top, bottom, t, span, dither);
+                inline for (.{ 16, 8, 0 }, 0..) |shift, channel| {
+
+                    const value: u32 = @intCast(std.math.clamp(@divTrunc(scaled[channel] + dither, 16), 0, 255));
+
+                    out |= value << shift;
+
+                }
+
+                self.pixels[row_base + @as(u32, @intCast(x))] = out;
 
             }
 
@@ -535,7 +610,24 @@ pub const Surface = struct {
 
     /// Blend `color` onto the surface through a `w`x`h` 8-bit coverage mask (row-major, 0 = clear, 255 = opaque),
     /// its top-left at (x, y). This is the blit path for cached glyph and icon bitmaps: rasterize once, paint many.
+    /// The column span is clipped once and the source color channels are hoisted out of the inner loop - this runs
+    /// for every glyph and icon of every frame, so it stays free of the per-pixel bounds checks blend_pixel repeats.
     pub fn blend_coverage(self: *const Surface, x: i32, y: i32, coverage: []const u8, w: u32, h: u32, color: Color) void {
+
+        const width_i: i32 = @intCast(self.width);
+
+        if (x >= width_i or w == 0) return;
+
+        const col_start: u32 = if (x < 0) @intCast(-x) else 0;
+        const col_end: u32 = if (x + @as(i32, @intCast(w)) > width_i) @intCast(width_i - x) else w;
+
+        if (col_start >= col_end) return;
+
+        const start_x: i32 = x + @as(i32, @intCast(col_start));
+
+        const cr: u32 = red(color);
+        const cg: u32 = green(color);
+        const cb: u32 = blue(color);
 
         var row: u32 = 0;
 
@@ -545,14 +637,35 @@ pub const Surface = struct {
 
             if (dst_y < 0 or dst_y >= self.height) continue;
 
-            const base = row * w;
-            var col: u32 = 0;
+            const cov_base = row * w;
+            const pix_base = @as(u32, @intCast(dst_y)) * self.stride + @as(u32, @intCast(start_x));
 
-            while (col < w) : (col += 1) {
+            var col = col_start;
 
-                const alpha = coverage[base + col];
+            while (col < col_end) : (col += 1) {
 
-                if (alpha != 0) self.blend_pixel(x + @as(i32, @intCast(col)), dst_y, color, alpha);
+                const alpha = coverage[cov_base + col];
+
+                if (alpha == 0) continue;
+
+                const index = pix_base + (col - col_start);
+
+                if (alpha == 255) {
+
+                    self.pixels[index] = color;
+                    continue;
+
+                }
+
+                const dst = self.pixels[index];
+                const a: u32 = alpha;
+                const inv = 255 - a;
+
+                const r = (cr * a + @as(u32, red(dst)) * inv + 127) / 255;
+                const g = (cg * a + @as(u32, green(dst)) * inv + 127) / 255;
+                const b = (cb * a + @as(u32, blue(dst)) * inv + 127) / 255;
+
+                self.pixels[index] = rgb(@intCast(r), @intCast(g), @intCast(b));
 
             }
 
@@ -601,28 +714,6 @@ const bayer = [4][4]i64{
     .{ 15, 7, 13, 5 },
 
 };
-
-fn mix_dithered(top: Color, bottom: Color, t: i64, span: i64, dither: i64) Color {
-
-    var out: u32 = 0;
-
-    inline for (.{ 16, 8, 0 }) |shift| {
-
-        const a: i64 = (top >> shift) & 0xff;
-        const b: i64 = (bottom >> shift) & 0xff;
-
-        // channel*16 interpolation, with the Bayer offset applied before truncation.
-
-        const scaled = a * 16 + @divTrunc((b - a) * 16 * t, span);
-        const channel: u32 = @intCast(std.math.clamp(@divTrunc(scaled + dither, 16), 0, 255));
-
-        out |= channel << shift;
-
-    }
-
-    return out;
-
-}
 
 fn sample_hits_segment(px: i32, py: i32, vx: i32, vy: i32, length_sq: i64, radius: i32) bool {
 
@@ -780,5 +871,48 @@ test "circle stays inside its bounding box" {
     try testing.expectEqual(@as(u32, 0xff), buffer[8 * 16 + 8]);
     try testing.expectEqual(@as(u32, 0xff), buffer[8 * 16 + 3]);
     try testing.expectEqual(@as(u32, 0), buffer[2 * 16 + 2]);
+
+}
+
+test "smooth circle fills solid at the center and leaves the corners clear" {
+
+    var buffer: [256]u32 = undefined;
+    const surface = test_surface(&buffer, 16, 16);
+
+    surface.fill_circle_smooth(8, 8, 5, 0xffffff);
+
+    try testing.expectEqual(@as(u32, 0xffffff), buffer[8 * 16 + 8]);
+    try testing.expectEqual(@as(u32, 0), buffer[0]);
+    try testing.expectEqual(@as(u32, 0), buffer[15 * 16 + 15]);
+
+}
+
+test "blend_coverage clips its column span and honors opaque coverage" {
+
+    var buffer: [16]u32 = undefined;
+    const surface = test_surface(&buffer, 4, 4);
+
+    // A 3-wide opaque run placed one pixel off the left edge: the first cell is clipped, the rest land in row 0.
+
+    const coverage = [_]u8{ 255, 255, 255 };
+
+    surface.blend_coverage(-1, 0, &coverage, 3, 1, 0xabcdef);
+
+    try testing.expectEqual(@as(u32, 0xabcdef), buffer[0]);
+    try testing.expectEqual(@as(u32, 0xabcdef), buffer[1]);
+    try testing.expectEqual(@as(u32, 0), buffer[2]);
+
+    // Half coverage over a black destination is a rounded 50% of the source channels.
+
+    surface.blend_coverage(0, 1, &[_]u8{128}, 1, 1, rgb(200, 100, 40));
+
+    try testing.expectEqual(@as(u32, 100), red(buffer[4]));
+
+    // Fully off the right and left edges: no write, no panic.
+
+    surface.blend_coverage(4, 2, &[_]u8{255}, 1, 1, 0x123456);
+    surface.blend_coverage(-1, 2, &[_]u8{255}, 1, 1, 0x123456);
+
+    try testing.expectEqual(@as(u32, 0), buffer[2 * 4]);
 
 }

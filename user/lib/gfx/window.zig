@@ -262,9 +262,6 @@ pub const Window = struct {
 
         if (reply.handle_count < 1) return error.Invalid;
 
-        sys.unmap(cap.self_space, self.base) catch {};
-        sys.close(self.region) catch {};
-
         unregister(self.id);
         release_surface(self.region, self.base);
 
