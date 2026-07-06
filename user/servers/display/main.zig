@@ -99,9 +99,7 @@ var damage: Rect = Rect.empty;
 
 pub fn main(_: []const []const u8) u8 {
 
-    run() catch |failure| {
-
-        lib.log.fmt("Compositor: failed: {s}\n", .{@errorName(failure)});
+    run() catch {
 
         return 1;
 
@@ -129,8 +127,6 @@ fn run() !void {
 
     add_damage(screen_bounds());
     try composite();
-
-    lib.log.fmt("Compositor: {d}x{d} ... Loaded\n", .{ screen_width, screen_height });
 
     var in = Message.zeroed;
 

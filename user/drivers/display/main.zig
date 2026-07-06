@@ -322,9 +322,7 @@ var display_config_pending = false;
 
 pub fn main(_: []const []const u8) u8 {
 
-    run() catch |failure| {
-
-        lib.log.fmt("Display: virtio-gpu driver failed: {s}\n", .{@errorName(failure)});
+    run() catch {
 
         return 1;
 
@@ -354,8 +352,6 @@ fn run() !void {
 
     try init_device();
     try init_scanout();
-
-    lib.log.fmt("Display: virtio-gpu driver ... Loaded ({d}x{d})\n", .{ mode_width, mode_height });
 
     var in = Message.zeroed;
 

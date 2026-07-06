@@ -25,9 +25,7 @@ var body_font: ?lib.font.Font = null;
 
 pub fn main(_: []const []const u8) u8 {
 
-    run() catch |failure| {
-
-        lib.log.fmt("welcome: failed: {s}\n", .{@errorName(failure)});
+    run() catch {
 
         return 1;
 
@@ -47,8 +45,6 @@ fn run() !void {
     draw(&window.surface);
     gfx.fence();
     try window.present_all();
-
-    lib.log.line("welcome: presented\n");
 
     while (true) {
 

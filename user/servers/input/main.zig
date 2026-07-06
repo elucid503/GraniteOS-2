@@ -183,9 +183,7 @@ var client_pushed = false;
 
 pub fn main(_: []const []const u8) u8 {
 
-    run() catch |failure| {
-
-        lib.log.fmt("Input: server failed: {s}\n", .{@errorName(failure)});
+    run() catch {
 
         return 1;
 
@@ -231,8 +229,6 @@ fn run() !void {
     }
 
     try sys.configure(cap.self_thread, .bound_notification, wake);
-
-    lib.log.fmt("Input: {d} virtio-input device(s) ... Loaded\n", .{device_count});
 
     var in = Message.zeroed;
 

@@ -41,9 +41,7 @@ var accent_index: usize = 0;
 
 pub fn main(_: []const []const u8) u8 {
 
-    run() catch |failure| {
-
-        lib.log.fmt("demo: failed: {s}\n", .{@errorName(failure)});
+    run() catch {
 
         return 1;
 
@@ -70,8 +68,6 @@ fn run() !void {
     try shapes.present_all();
     try text.present_all();
     try about.present_all();
-
-    lib.log.line("demo: presented\n");
 
     var shapes_open = true;
     var text_open = true;
