@@ -1,8 +1,4 @@
-// virtio-gpu display driver (07-userspace-ddd.md Section 12.2): an ordinary process holding its MMIO window,
-// its Interrupt, and a DMA sub-grant. It owns the scanout: a 2D resource whose backing is a shared DMA Region
-// the compositor maps and draws into; `flush` transfers damage to the host and the hardware cursor plane keeps
-// pointer motion off the compositing path. A host window resize arrives as a config interrupt; the driver
-// rebuilds the scanout at the new size and wakes the compositor through the attached Notification.
+// virtio-gpu display driver (07-userspace-ddd.md Section 12.2): an ordinary process holding its MMIO window, its Interrupt, and a DMA sub-grant.
 
 const lib = @import("lib");
 
@@ -727,8 +723,7 @@ fn attach_events(in: *const Message) i64 {
 
 }
 
-// The cursor plane: copy the client's 64x64 ARGB image into DMA, upload it as a resource once, and let
-// MOVE_CURSOR track the pointer without touching the framebuffer.
+// The cursor plane: copy the client's 64x64 ARGB image into DMA, upload it as a resource once, and let MOVE_CURSOR track the pointer without touching the framebuffer.
 
 fn set_cursor(in: *const Message) i64 {
 
@@ -917,8 +912,7 @@ fn apply_display_resize() bool {
 
 }
 
-// Synchronous command submission: one out descriptor (the command), one in descriptor (the response), then
-// poll the used ring. Config events raised while polling are handled on the next endpoint wake.
+// Synchronous command submission: one out descriptor (the command), one in descriptor (the response), then poll the used ring. Config events raised while polling are handled on the next endpoint wake.
 
 fn command(comptime T: type, payload: T) !u32 {
 

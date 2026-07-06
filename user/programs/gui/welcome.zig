@@ -1,5 +1,4 @@
-// The M9 welcome screen: a fullscreen window with the system title and a click-to-continue prompt. Exiting
-// after the click is the hand-off - Flint's supervisor sees this process's death and spawns the demo screen.
+// The M9 welcome screen: a fullscreen window with the system title and a click-to-continue prompt.
 
 const lib = @import("lib");
 

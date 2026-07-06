@@ -1,5 +1,4 @@
 // The M9 test screen (disposable by design): windows exercising text, focus, close, and dragging.
-// Closing every window exits; Flint's supervisor then brings the welcome screen back.
 
 const lib = @import("lib");
 
