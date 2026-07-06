@@ -6,6 +6,8 @@ test {
     _ = @import("lib");
     _ = @import("lib").gfx;
     _ = @import("lib").font;
+    _ = @import("lib").ttf;
+    _ = @import("lib").svg;
     _ = @import("lib").events;
     _ = @import("lib").window;
     _ = @import("servers/naming/main.zig");

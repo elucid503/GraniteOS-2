@@ -13,14 +13,11 @@ comptime {
 
 }
 
-const color_top = gfx.rgb(12, 12, 14);
-const color_bottom = gfx.rgb(42, 42, 46);
-const color_title = gfx.rgb(244, 246, 252);
-const color_subtitle = gfx.rgb(178, 178, 184);
-const color_accent = gfx.rgb(214, 214, 220);
+const color_backdrop = gfx.rgb(0, 0, 0);
+const color_title = gfx.rgb(244, 247, 252);
+const color_subtitle = gfx.rgb(172, 184, 198);
 
-var title_font: ?lib.font.Font = null;
-var body_font: ?lib.font.Font = null;
+var inter: ?lib.ttf.Face = null;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -36,7 +33,7 @@ pub fn main(_: []const []const u8) u8 {
 
 fn run() !void {
 
-    try load_fonts();
+    try load_assets();
 
     var connection = try connect();
     var window = try connection.create_window(0, 0, lib.proto.window.flag_fullscreen, "welcome");
@@ -97,7 +94,7 @@ fn connect() !lib.window.Connection {
 
 }
 
-fn load_fonts() !void {
+fn load_assets() !void {
 
     const length: usize = @intCast(lib.start.word(3));
     const offset: usize = @intCast(lib.start.word(4));
@@ -105,42 +102,31 @@ fn load_fonts() !void {
     const base = try sys.map(cap.self_space, cap.gui.bundle, 0, sys.read);
     const bundle = try lib.bundle.Bundle.open(base + offset, length);
 
-    title_font = lib.font.Font.parse(bundle.find("font-title") orelse return error.NotFound) catch return error.Invalid;
-    body_font = lib.font.Font.parse(bundle.find("font") orelse return error.NotFound) catch return error.Invalid;
+    inter = lib.ttf.Face.parse(bundle.find("font-ttf") orelse return error.NotFound) catch return error.Invalid;
 
 }
 
 fn draw(surface: *const gfx.Surface) void {
 
-    const bounds = surface.bounds();
-    const center_x = @divTrunc(bounds.w, 2);
-    const center_y = @divTrunc(bounds.h, 2);
+    const surface_rect = surface.bounds();
+    const center_x = @divTrunc(surface_rect.w, 2);
+    const center_y = @divTrunc(surface_rect.h, 2);
 
-    surface.fill_gradient(bounds, color_top, color_bottom);
+    surface.fill(color_backdrop);
 
-    if (title_font) |*font| {
+    if (inter) |*font| {
 
-        const text = "GraniteOS 2";
-        const x = center_x - @divTrunc(font.text_width(text), 2);
-        const y = center_y - @as(i32, @intCast(font.height));
+        const title = "GraniteOS 2";
+        const title_x = center_x - @divTrunc(font.text_width(title, 38), 2);
+        const title_y = center_y - 38;
 
-        font.draw(surface, x, y, text, color_title);
+        font.draw(surface, title_x, title_y, 38, title, color_title);
 
-        // An accent rule under the title.
+        const subtitle = "Click anywhere to continue";
+        const subtitle_x = center_x - @divTrunc(font.text_width(subtitle, 17), 2);
+        const subtitle_y = center_y + 28;
 
-        const rule_y = y + @as(i32, @intCast(font.height)) + 12;
-
-        surface.fill_rect(.{ .x = center_x - 120, .y = rule_y, .w = 240, .h = 2 }, color_accent);
-
-    }
-
-    if (body_font) |*font| {
-
-        const text = "Click anywhere to continue";
-        const x = center_x - @divTrunc(font.text_width(text), 2);
-        const y = center_y + 44;
-
-        font.draw(surface, x, y, text, color_subtitle);
+        font.draw(surface, subtitle_x, subtitle_y, 17, subtitle, color_subtitle);
 
     }
 

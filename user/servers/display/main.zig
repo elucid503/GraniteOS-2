@@ -37,12 +37,17 @@ const page_size = 4096;
 
 // Theme
 
-const color_wallpaper = gfx.rgb(30, 33, 42);
-const color_border = gfx.rgb(16, 17, 22);
-const color_title_focused = gfx.rgb(118, 122, 130);
-const color_title_blurred = gfx.rgb(52, 54, 58);
-const color_title_text = gfx.rgb(240, 243, 248);
-const color_close = gfx.rgb(112, 112, 118);
+const theme = .{
+
+    .wallpaper = gfx.rgb(0, 0, 0),
+    .title_focused = gfx.rgb(72, 72, 72),
+    .title_blurred = gfx.rgb(56, 56, 56),
+    .chrome = gfx.rgb(220, 220, 220),
+    .title_font_size = @as(u32, 13),
+
+};
+
+var title_font: ?lib.ttf.Face = null;
 
 var screen_width: u32 = 0;
 var screen_height: u32 = 0;
@@ -57,8 +62,6 @@ var fb: gfx.Surface = undefined;
 var back_region: Handle = 0;
 var back_base: usize = 0;
 var back: gfx.Surface = undefined;
-
-var title_font: ?lib.font.Font = null;
 
 var manager = Manager{};
 
@@ -114,8 +117,8 @@ pub fn main(_: []const []const u8) u8 {
 
 fn run() !void {
 
-    try load_font();
     try acquire_display();
+    try load_font();
 
     // Flint already registered "window" against this endpoint; clients queue here until the loop starts.
 
@@ -159,6 +162,18 @@ fn run() !void {
 
 }
 
+fn load_font() !void {
+
+    const length: usize = @intCast(lib.start.word(3));
+    const offset: usize = @intCast(lib.start.word(4));
+
+    const base = try sys.map(cap.self_space, cap.compositor.bundle, 0, sys.read);
+    const bundle = try lib.bundle.Bundle.open(base + offset, length);
+
+    title_font = lib.ttf.Face.parse(bundle.find("font-ttf") orelse return error.NotFound) catch return error.Invalid;
+
+}
+
 // Startup wiring
 
 fn start_startup_worker() !void {
@@ -186,20 +201,6 @@ fn startup_worker() callconv(.c) noreturn {
 fn exit_thread() noreturn {
 
     while (true) sys.close(cap.self_thread) catch {};
-
-}
-
-fn load_font() !void {
-
-    const length: usize = @intCast(lib.start.word(3));
-    const offset: usize = @intCast(lib.start.word(4));
-
-    const base = try sys.map(cap.self_space, cap.compositor.bundle, 0, sys.read);
-    const bundle = try lib.bundle.Bundle.open(base + offset, length);
-
-    const bytes = bundle.find("font") orelse return error.NotFound;
-
-    title_font = lib.font.Font.parse(bytes) catch return error.Invalid;
 
 }
 
@@ -900,7 +901,7 @@ fn composite() !void {
 
     damage = Rect.empty;
 
-    back.fill_rect(region, color_wallpaper);
+    back.fill_rect(region, theme.wallpaper);
 
     var index: usize = 0;
 
@@ -928,34 +929,48 @@ fn composite() !void {
 
 }
 
+fn draw_title_text(window: *const Window, title_bar: Rect) void {
+
+    const font = title_font orelse return;
+    const title = window.title[0..window.title_length];
+    const max_w = title_bar.w - Window.chrome_reserved_width() - manager_module.title_padding;
+
+    if (max_w <= 0 or title.len == 0) return;
+
+    var length = title.len;
+
+    while (length > 0 and font.text_width(title[0..length], theme.title_font_size) > max_w) : (length -= 1) {}
+
+    const text_y = title_bar.y + @divTrunc(title_bar.h - font.line_height(theme.title_font_size), 2);
+
+    font.draw(&back, title_bar.x + manager_module.title_padding, text_y, theme.title_font_size, title[0..length], theme.chrome);
+
+}
+
+fn draw_close_button(box: Rect) void {
+
+    const cx = box.x + @divTrunc(box.w, 2);
+    const cy = box.y + @divTrunc(box.h, 2);
+    const arm = @max(2, @divTrunc(box.w, 4));
+
+    back.stroke_line_smooth(cx - arm, cy - arm, cx + arm, cy + arm, 1, theme.chrome);
+    back.stroke_line_smooth(cx + arm, cy - arm, cx - arm, cy + arm, 1, theme.chrome);
+
+}
+
 fn draw_window(window: *Window, clip: Rect) void {
 
     const slot = slot_of(window);
+    const title_bar = window.title_bar();
     const content = window.content();
 
     if (window.decorated()) {
 
-        const frame = window.frame();
-        const focused = manager.focus == window.id;
+        const title_color = if (manager.focus == window.id) theme.title_focused else theme.title_blurred;
 
-        back.fill_rect(frame, color_border);
-        back.fill_rect(window.title_bar(), if (focused) color_title_focused else color_title_blurred);
-
-        if (title_font) |*font| {
-
-            const bar = window.title_bar();
-            const text = window.title[0..window.title_length];
-            const baseline = bar.y + @divTrunc(bar.h - @as(i32, @intCast(font.height)), 2);
-
-            font.draw(&back, bar.x + 8, baseline, text, color_title_text);
-
-        }
-
-        const box = window.close_box();
-
-        back.fill_rounded_rect(box, 3, color_close);
-        back.line(box.x + 5, box.y + 5, box.x + box.w - 6, box.y + box.h - 6, color_title_text);
-        back.line(box.x + box.w - 6, box.y + 5, box.x + 5, box.y + box.h - 6, color_title_text);
+        back.fill_rounded_rect_top(title_bar, manager_module.corner_radius, title_color);
+        draw_title_text(window, title_bar);
+        draw_close_button(window.close_button());
 
     }
 
@@ -973,5 +988,11 @@ fn draw_window(window: *Window, clip: Rect) void {
     gfx.fence();
 
     back.blit(visible.x, visible.y, &surface, visible.translated(-content.x, -content.y));
+
+    if (window.decorated()) {
+
+        back.mask_rounded_rect_bottom_smooth(window.frame(), manager_module.corner_radius, theme.wallpaper);
+
+    }
 
 }

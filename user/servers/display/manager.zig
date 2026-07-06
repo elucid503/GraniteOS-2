@@ -13,11 +13,11 @@ const Rect = gfx.Rect;
 
 pub const max_windows = 16;
 
-// Decoration geometry: a title bar above the content and a uniform border around both.
-
-pub const title_height: i32 = 24;
-pub const border: i32 = 2;
-pub const close_size: i32 = 16;
+pub const title_height: i32 = 28;
+pub const corner_radius: i32 = 8;
+pub const chrome_size: i32 = 14;
+pub const chrome_margin: i32 = 10;
+pub const title_padding: i32 = 10;
 
 pub const min_content: u32 = 32;
 
@@ -61,8 +61,8 @@ pub const Window = struct {
             .x = self.x,
             .y = self.y,
 
-            .w = @as(i32, @intCast(self.width)) + 2 * border,
-            .h = @as(i32, @intCast(self.height)) + title_height + 2 * border,
+            .w = @intCast(self.width),
+            .h = title_height + @as(i32, @intCast(self.height)),
 
         };
 
@@ -79,8 +79,8 @@ pub const Window = struct {
 
         return .{
 
-            .x = self.x + border,
-            .y = self.y + border + title_height,
+            .x = self.x,
+            .y = self.y + title_height,
 
             .w = @intCast(self.width),
             .h = @intCast(self.height),
@@ -93,8 +93,8 @@ pub const Window = struct {
 
         return .{
 
-            .x = self.x + border,
-            .y = self.y + border,
+            .x = self.x,
+            .y = self.y,
 
             .w = @intCast(self.width),
             .h = title_height,
@@ -103,18 +103,24 @@ pub const Window = struct {
 
     }
 
-    pub fn close_box(self: *const Window) Rect {
+    pub fn chrome_reserved_width() i32 {
+
+        return chrome_size + chrome_margin;
+
+    }
+
+    pub fn close_button(self: *const Window) Rect {
 
         const bar = self.title_bar();
-        const inset = @divTrunc(title_height - close_size, 2);
+        const inset = @divTrunc(title_height - chrome_size, 2);
 
         return .{
 
-            .x = bar.x + bar.w - close_size - inset,
+            .x = bar.x + bar.w - chrome_size - chrome_margin,
             .y = bar.y + inset,
 
-            .w = close_size,
-            .h = close_size,
+            .w = chrome_size,
+            .h = chrome_size,
 
         };
 
@@ -301,7 +307,7 @@ pub const Manager = struct {
 
             if (window.decorated()) {
 
-                if (window.close_box().contains(x, y)) return .{ .id = window.id, .region = .close };
+                if (window.close_button().contains(x, y)) return .{ .id = window.id, .region = .close };
                 if (window.title_bar().contains(x, y)) return .{ .id = window.id, .region = .title };
 
             }
@@ -369,7 +375,7 @@ pub const Manager = struct {
 
         }
 
-        const limit_x: i32 = @max(0, @as(i32, @intCast(self.screen_width)) - 4 * border);
+        const limit_x: i32 = @max(0, @as(i32, @intCast(self.screen_width)) - 32);
         const limit_y: i32 = @max(0, @as(i32, @intCast(self.screen_height)) - title_height);
 
         window.x = @max(0, @min(window.x, limit_x));
@@ -446,12 +452,12 @@ test "hit test respects stacking and decorations" {
     try testing.expectEqual(above.id, inside.id);
     try testing.expectEqual(Region.content, inside.region);
 
-    const bar = manager.hit_test(110, 100 + border + 2).?;
+    const bar = manager.hit_test(110, 100 + 2).?;
 
     try testing.expectEqual(above.id, bar.id);
     try testing.expectEqual(Region.title, bar.region);
 
-    const close = above.close_box();
+    const close = above.close_button();
     const on_close = manager.hit_test(close.x + 2, close.y + 2).?;
 
     try testing.expectEqual(Region.close, on_close.region);

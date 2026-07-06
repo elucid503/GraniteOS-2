@@ -14,6 +14,24 @@ pub fn rgb(r: u8, g: u8, b: u8) Color {
 
 }
 
+pub fn red(color: Color) u8 {
+
+    return @intCast((color >> 16) & 0xff);
+
+}
+
+pub fn green(color: Color) u8 {
+
+    return @intCast((color >> 8) & 0xff);
+
+}
+
+pub fn blue(color: Color) u8 {
+
+    return @intCast(color & 0xff);
+
+}
+
 pub fn fence() void {
 
     if (comptime builtin.target.cpu.arch == .aarch64) {
@@ -140,6 +158,31 @@ pub const Surface = struct {
 
     }
 
+    pub fn fill_rect_alpha(self: *const Surface, rect: Rect, color: Color, alpha: u8) void {
+
+        if (alpha == 0) return;
+        if (alpha == 255) return self.fill_rect(rect, color);
+
+        const clipped = rect.intersect(self.bounds());
+
+        if (clipped.is_empty()) return;
+
+        var y = clipped.y;
+
+        while (y < clipped.y + clipped.h) : (y += 1) {
+
+            var x = clipped.x;
+
+            while (x < clipped.x + clipped.w) : (x += 1) {
+
+                self.blend_pixel(x, y, color, alpha);
+
+            }
+
+        }
+
+    }
+
     /// A `thickness`-pixel frame just inside `rect`.
     pub fn stroke_rect(self: *const Surface, rect: Rect, thickness: i32, color: Color) void {
 
@@ -157,6 +200,25 @@ pub const Surface = struct {
         if (x < 0 or y < 0 or x >= self.width or y >= self.height) return;
 
         self.pixels[@as(u32, @intCast(y)) * self.stride + @as(u32, @intCast(x))] = color;
+
+    }
+
+    pub fn blend_pixel(self: *const Surface, x: i32, y: i32, color: Color, alpha: u8) void {
+
+        if (x < 0 or y < 0 or x >= self.width or y >= self.height or alpha == 0) return;
+
+        if (alpha == 255) return self.put_pixel(x, y, color);
+
+        const index = @as(u32, @intCast(y)) * self.stride + @as(u32, @intCast(x));
+        const dst = self.pixels[index];
+        const a: u32 = alpha;
+        const inv = 255 - a;
+
+        const r = (@as(u32, red(color)) * a + @as(u32, red(dst)) * inv + 127) / 255;
+        const g = (@as(u32, green(color)) * a + @as(u32, green(dst)) * inv + 127) / 255;
+        const b = (@as(u32, blue(color)) * a + @as(u32, blue(dst)) * inv + 127) / 255;
+
+        self.pixels[index] = rgb(@intCast(r), @intCast(g), @intCast(b));
 
     }
 
@@ -192,6 +254,61 @@ pub const Surface = struct {
 
                 err += @as(i64, dx);
                 y += step_y;
+
+            }
+
+        }
+
+    }
+
+    /// Supersampled stroked segment with round caps.
+    pub fn stroke_line_smooth(self: *const Surface, x0: i32, y0: i32, x1: i32, y1: i32, thickness: i32, color: Color) void {
+
+        const radius = @max(1, thickness);
+        const raw_bounds = Rect{
+
+            .x = @min(x0, x1) - radius - 1,
+            .y = @min(y0, y1) - radius - 1,
+
+            .w = @as(i32, @intCast(@abs(x1 - x0))) + 2 * radius + 3,
+            .h = @as(i32, @intCast(@abs(y1 - y0))) + 2 * radius + 3,
+
+        };
+        const clipped_line = raw_bounds.intersect(self.bounds());
+
+        if (clipped_line.is_empty()) return;
+
+        const vx = x1 - x0;
+        const vy = y1 - y0;
+        const length_sq = @as(i64, vx) * vx + @as(i64, vy) * vy;
+        const radius_64 = @max(32, @divTrunc(thickness * 64, 2));
+        const sample_offsets = [_]i32{ 8, 24, 40, 56 };
+
+        var y = clipped_line.y;
+
+        while (y < clipped_line.y + clipped_line.h) : (y += 1) {
+
+            var x = clipped_line.x;
+
+            while (x < clipped_line.x + clipped_line.w) : (x += 1) {
+
+                var covered: u32 = 0;
+
+                for (sample_offsets) |sy| {
+
+                    for (sample_offsets) |sx| {
+
+                        if (sample_hits_segment((x - x0) * 64 + sx, (y - y0) * 64 + sy, vx * 64, vy * 64, length_sq * 4096, radius_64)) {
+
+                            covered += 1;
+
+                        }
+
+                    }
+
+                }
+
+                if (covered != 0) self.blend_pixel(x, y, color, @intCast((covered * 255) / 16));
 
             }
 
@@ -253,16 +370,57 @@ pub const Surface = struct {
 
     }
 
-    /// Filled rectangle with quarter-circle corners.
-    pub fn fill_rounded_rect(self: *const Surface, rect: Rect, radius_in: i32, color: Color) void {
+    pub fn stroke_circle_smooth(self: *const Surface, cx: i32, cy: i32, radius: i32, thickness: i32, color: Color) void {
+
+        if (radius <= 0 or thickness <= 0) return;
+
+        const outer = radius + @divTrunc(thickness + 1, 2);
+        const inner = @max(0, radius - @divTrunc(thickness, 2));
+        const raw_bounds = Rect{ .x = cx - outer - 1, .y = cy - outer - 1, .w = 2 * outer + 3, .h = 2 * outer + 3 };
+        const rect = raw_bounds.intersect(self.bounds());
+        const sample_offsets = [_]i32{ 8, 24, 40, 56 };
+
+        var y = rect.y;
+
+        while (y < rect.y + rect.h) : (y += 1) {
+
+            var x = rect.x;
+
+            while (x < rect.x + rect.w) : (x += 1) {
+
+                var covered: u32 = 0;
+
+                for (sample_offsets) |sy| {
+
+                    for (sample_offsets) |sx| {
+
+                        const dx = (x - cx) * 64 + sx - 32;
+                        const dy = (y - cy) * 64 + sy - 32;
+                        const d2 = dx * dx + dy * dy;
+
+                        if (d2 <= outer * outer * 4096 and d2 >= inner * inner * 4096) covered += 1;
+
+                    }
+
+                }
+
+                if (covered != 0) self.blend_pixel(x, y, color, @intCast((covered * 255) / 16));
+
+            }
+
+        }
+
+    }
+
+    /// Filled rectangle with rounded top corners only.
+    pub fn fill_rounded_rect_top(self: *const Surface, rect: Rect, radius_in: i32, color: Color) void {
 
         const radius = @min(radius_in, @min(@divTrunc(rect.w, 2), @divTrunc(rect.h, 2)));
 
         if (radius <= 0) return self.fill_rect(rect, color);
 
-        self.fill_rect(.{ .x = rect.x, .y = rect.y + radius, .w = rect.w, .h = rect.h - 2 * radius }, color);
+        self.fill_rect(.{ .x = rect.x, .y = rect.y + radius, .w = rect.w, .h = rect.h - radius }, color);
         self.fill_rect(.{ .x = rect.x + radius, .y = rect.y, .w = rect.w - 2 * radius, .h = radius }, color);
-        self.fill_rect(.{ .x = rect.x + radius, .y = rect.y + rect.h - radius, .w = rect.w - 2 * radius, .h = radius }, color);
 
         var dy: i32 = 0;
 
@@ -273,10 +431,73 @@ pub const Surface = struct {
 
             self.fill_rect(.{ .x = rect.x + radius - span, .y = rect.y + dy, .w = span, .h = 1 }, color);
             self.fill_rect(.{ .x = rect.x + rect.w - radius, .y = rect.y + dy, .w = span, .h = 1 }, color);
-            self.fill_rect(.{ .x = rect.x + radius - span, .y = rect.y + rect.h - 1 - dy, .w = span, .h = 1 }, color);
-            self.fill_rect(.{ .x = rect.x + rect.w - radius, .y = rect.y + rect.h - 1 - dy, .w = span, .h = 1 }, color);
 
         }
+
+    }
+
+    /// Anti-aliased clip of square bottom corners against an outside color (typically the wallpaper).
+    pub fn mask_rounded_rect_bottom_smooth(self: *const Surface, rect: Rect, radius_in: i32, outside_color: Color) void {
+
+        const radius = @max(0, @min(radius_in, @min(@divTrunc(rect.w, 2), @divTrunc(rect.h, 2))));
+
+        if (radius <= 1) return;
+
+        const clipped = rect.intersect(self.bounds());
+        const sample_offsets = [_]i32{ 8, 24, 40, 56 };
+        const y_start = @max(clipped.y, rect.y + rect.h - radius);
+
+        var y = y_start;
+
+        while (y < clipped.y + clipped.h) : (y += 1) {
+
+            var x = clipped.x;
+
+            while (x < clipped.x + clipped.w) : (x += 1) {
+
+                if (x >= rect.x + radius and x < rect.x + rect.w - radius) continue;
+
+                var covered: u32 = 0;
+
+                for (sample_offsets) |sy| {
+
+                    for (sample_offsets) |sx| {
+
+                        if (rounded_rect_contains(rect, radius, x * 64 + sx, y * 64 + sy)) covered += 1;
+
+                    }
+
+                }
+
+                if (covered >= 16) continue;
+
+                const alpha: u8 = @intCast(((16 - covered) * 255) / 16);
+
+                self.blend_pixel(x, y, outside_color, alpha);
+
+            }
+
+        }
+
+    }
+
+    pub fn stroke_rounded_rect_smooth(self: *const Surface, rect: Rect, radius: i32, thickness: i32, color: Color) void {
+
+        const r = @max(0, @min(radius, @min(@divTrunc(rect.w, 2), @divTrunc(rect.h, 2))));
+        const left = rect.x + r;
+        const right = rect.x + rect.w - r - 1;
+        const top = rect.y + r;
+        const bottom = rect.y + rect.h - r - 1;
+
+        self.stroke_line_smooth(left, rect.y, right, rect.y, thickness, color);
+        self.stroke_line_smooth(left, rect.y + rect.h - 1, right, rect.y + rect.h - 1, thickness, color);
+        self.stroke_line_smooth(rect.x, top, rect.x, bottom, thickness, color);
+        self.stroke_line_smooth(rect.x + rect.w - 1, top, rect.x + rect.w - 1, bottom, thickness, color);
+
+        self.stroke_circle_smooth(left, top, r, thickness, color);
+        self.stroke_circle_smooth(right, top, r, thickness, color);
+        self.stroke_circle_smooth(left, bottom, r, thickness, color);
+        self.stroke_circle_smooth(right, bottom, r, thickness, color);
 
     }
 
@@ -373,6 +594,49 @@ fn mix_dithered(top: Color, bottom: Color, t: i64, span: i64, dither: i64) Color
     }
 
     return out;
+
+}
+
+fn sample_hits_segment(px: i32, py: i32, vx: i32, vy: i32, length_sq: i64, radius: i32) bool {
+
+    if (length_sq <= 0) return px * px + py * py <= radius * radius;
+
+    const dot = @as(i64, px) * vx + @as(i64, py) * vy;
+
+    if (dot <= 0) return @as(i64, px) * px + @as(i64, py) * py <= @as(i64, radius) * radius;
+    if (dot >= length_sq) {
+
+        const dx = px - vx;
+        const dy = py - vy;
+
+        return @as(i64, dx) * dx + @as(i64, dy) * dy <= @as(i64, radius) * radius;
+
+    }
+
+    const cross = @as(i64, px) * vy - @as(i64, py) * vx;
+
+    return cross * cross <= @as(i64, radius) * radius * length_sq;
+
+}
+
+fn rounded_rect_contains(rect: Rect, radius: i32, sample_x: i32, sample_y: i32) bool {
+
+    const x = @divTrunc(sample_x, 64);
+    const y = @divTrunc(sample_y, 64);
+
+    if (!rect.contains(x, y)) return false;
+
+    const left = (rect.x + radius) * 64;
+    const right = (rect.x + rect.w - radius) * 64;
+    const top = (rect.y + radius) * 64;
+    const bottom = (rect.y + rect.h - radius) * 64;
+
+    const cx = std.math.clamp(sample_x, left, right);
+    const cy = std.math.clamp(sample_y, top, bottom);
+    const dx = sample_x - cx;
+    const dy = sample_y - cy;
+
+    return @as(i64, dx) * dx + @as(i64, dy) * dy <= @as(i64, radius) * radius * 4096;
 
 }
 

@@ -141,10 +141,9 @@ pub fn build(b: *std.Build) void {
     add_artifact_module(bundle_run, "welcome", welcome);
     add_artifact_module(bundle_run, "demo", demo);
 
-    // The GUI's fonts ride in the bundle as plain modules: real PSF font files (user/fonts/, BSD-licensed Spleen).
+    // GUI assets ride in the bundle as plain modules.
 
-    add_module(bundle_run, "font", b.path("user/fonts/spleen-8x16.psfu"));
-    add_module(bundle_run, "font-title", b.path("user/fonts/spleen-16x32.psfu"));
+    add_module(bundle_run, "font-ttf", b.path("user/fonts/InterVariable.ttf"));
 
     b.installArtifact(kernel);
     b.getInstallStep().dependOn(&b.addInstallBinFile(kernel_image, "granite-kernel.bin").step);
