@@ -13,9 +13,7 @@ comptime {
 
 }
 
-const color_backdrop = gfx.rgb(0, 0, 0);
-const color_title = gfx.rgb(244, 244, 244);
-const color_subtitle = gfx.rgb(172, 172, 172);
+const ui = lib.ui;
 
 var inter: ?lib.ttf.Face = null;
 
@@ -32,6 +30,8 @@ pub fn main(_: []const []const u8) u8 {
 }
 
 fn run() !void {
+
+    lib.prefs.refresh();
 
     try load_assets();
 
@@ -112,7 +112,7 @@ fn draw(surface: *const gfx.Surface) void {
     const center_x = @divTrunc(surface_rect.w, 2);
     const center_y = @divTrunc(surface_rect.h, 2);
 
-    surface.fill(color_backdrop);
+    surface.fill(lib.prefs.wallpaper());
 
     if (inter) |*font| {
 
@@ -120,13 +120,13 @@ fn draw(surface: *const gfx.Surface) void {
         const title_x = center_x - @divTrunc(font.text_width(title, 38), 2);
         const title_y = center_y - 38;
 
-        font.draw(surface, title_x, title_y, 38, title, color_title);
+        font.draw(surface, title_x, title_y, 38, title, ui.theme.text);
 
         const subtitle = "Click anywhere to continue";
         const subtitle_x = center_x - @divTrunc(font.text_width(subtitle, 17), 2);
         const subtitle_y = center_y + 28;
 
-        font.draw(surface, subtitle_x, subtitle_y, 17, subtitle, color_subtitle);
+        font.draw(surface, subtitle_x, subtitle_y, 17, subtitle, ui.theme.text_dim);
 
     }
 

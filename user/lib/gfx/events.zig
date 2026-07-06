@@ -31,6 +31,7 @@ pub const kind_window_close: u16 = 16;
 pub const kind_window_resize: u16 = 17; // x,y carry the new content width,height
 pub const kind_window_focus: u16 = 18;
 pub const kind_window_blur: u16 = 19;
+pub const kind_prefs_changed: u16 = 20;
 
 pub const button_left: u16 = 1;
 pub const button_right: u16 = 2;

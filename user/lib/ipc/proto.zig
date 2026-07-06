@@ -195,11 +195,14 @@ pub const window = struct {
     pub const minimize: u16 = 11; // request: window id                              reply: status
     pub const restore: u16 = 12; // request: window id                              reply: status
     pub const subscribe_list: u16 = 13; // request: info Region in handle 0, Notification in handle 1   reply: window count (and later notifications on changes)
+    pub const notify_prefs: u16 = 14; // request: -                                    reply: status (broadcasts prefs_changed to every connected client)
+    pub const set_cursor: u16 = 15; // request: cursor kind (0=pointer, 1=clicker, 2=selector)   reply: status
 
     pub const flag_undecorated: u64 = 1; // no title bar or border
     pub const flag_fullscreen: u64 = 2; // sized to the screen, tracks mode changes
     pub const flag_panel: u64 = 4; // an undecorated dock pinned to the screen bottom, always above ordinary windows
     pub const flag_minimized: u64 = 8; // hidden from the desktop but still tracked by the compositor
+    pub const flag_desktop: u64 = 16; // fullscreen undecorated layer pinned beneath ordinary windows, for desktop chrome
 
     // Titles ride inline in message words 3-5, NUL-padded.
     pub const max_title: usize = 24;

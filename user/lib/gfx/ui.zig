@@ -13,27 +13,98 @@ const Rect = gfx.Rect;
 const Color = gfx.Color;
 const Face = ttf.Face;
 
-pub const theme = struct {
+pub const Theme = struct {
 
-    pub const window_bg = gfx.rgb(30, 30, 30);
-    pub const surface = gfx.rgb(38, 38, 38);
-    pub const surface_alt = gfx.rgb(46, 46, 46);
-    pub const border = gfx.rgb(58, 58, 58);
+    window_bg: Color = gfx.rgb(30, 30, 30),
+    surface: Color = gfx.rgb(38, 38, 38),
+    surface_alt: Color = gfx.rgb(46, 46, 46),
+    border: Color = gfx.rgb(58, 58, 58),
 
-    pub const hover = gfx.rgb(52, 52, 52);
-    pub const active = gfx.rgb(70, 70, 70);
+    hover: Color = gfx.rgb(52, 52, 52),
+    active: Color = gfx.rgb(70, 70, 70),
 
-    pub const accent = gfx.rgb(200, 200, 200);
-    pub const accent_dim = gfx.rgb(100, 100, 100);
+    accent: Color = gfx.rgb(200, 200, 200),
+    accent_dim: Color = gfx.rgb(100, 100, 100),
 
-    pub const text = gfx.rgb(230, 230, 230);
-    pub const text_dim = gfx.rgb(160, 160, 160);
-    pub const text_faint = gfx.rgb(110, 110, 110);
+    text: Color = gfx.rgb(230, 230, 230),
+    text_dim: Color = gfx.rgb(160, 160, 160),
+    text_faint: Color = gfx.rgb(110, 110, 110),
 
-    pub const good = gfx.rgb(190, 190, 190);
-    pub const warn = gfx.rgb(140, 140, 140);
+    good: Color = gfx.rgb(190, 190, 190),
+    warn: Color = gfx.rgb(140, 140, 140),
 
 };
+
+pub var theme = Theme{};
+
+pub const MenuItem = struct {
+
+    label: []const u8,
+
+};
+
+/// Flat highlight for a list row.
+pub fn row_hover(surface: *const Surface, rect: Rect) void {
+
+    surface.fill_rect(rect, theme.hover);
+
+}
+
+/// A flat panel: fill plus a 1px border.
+pub fn panel(surface: *const Surface, rect: Rect, fill_color: Color) void {
+
+    surface.fill_rect(rect, fill_color);
+    surface.stroke_rect(rect, 1, theme.border);
+
+}
+
+/// A simple vertical context menu anchored at (x, y).
+pub fn context_menu(surface: *const Surface, font: *const Face, x: i32, y: i32, items: []const MenuItem, hover: ?usize) void {
+
+    const row_h: i32 = 28;
+    const pad: i32 = 12;
+    const width: i32 = 200;
+    const height = row_h * @as(i32, @intCast(items.len));
+
+    const rect = Rect{ .x = x, .y = y, .w = width, .h = height };
+
+    panel(surface, rect, theme.surface);
+
+    for (items, 0..) |item, index| {
+
+        const row = Rect{ .x = rect.x, .y = rect.y + @as(i32, @intCast(index)) * row_h, .w = rect.w, .h = row_h };
+
+        if (hover != null and hover.? == index) row_hover(surface, row);
+
+        text_in(surface, font, row, pad, 13, item.label, theme.text);
+
+    }
+
+}
+
+pub fn menu_rect(x: i32, y: i32, item_count: usize) Rect {
+
+    const row_h: i32 = 28;
+    const width: i32 = 200;
+
+    return .{ .x = x, .y = y, .w = width, .h = row_h * @as(i32, @intCast(item_count)) };
+
+}
+
+pub fn menu_hit(x: i32, y: i32, origin_x: i32, origin_y: i32, item_count: usize) ?usize {
+
+    const rect = menu_rect(origin_x, origin_y, item_count);
+
+    if (!rect.contains(x, y)) return null;
+
+    const row_h: i32 = 28;
+    const row = @divTrunc(y - rect.y, row_h);
+
+    if (row < 0 or row >= @as(i32, @intCast(item_count))) return null;
+
+    return @intCast(row);
+
+}
 
 pub const ButtonStyle = enum {
 
@@ -783,22 +854,22 @@ pub const GanttSample = struct {
 
 };
 
-const gantt_palette = [_]Color{
-    theme.accent,
-    theme.text,
-    theme.text_dim,
-    theme.good,
-    theme.warn,
-    theme.accent_dim,
-    theme.hover,
-    theme.active,
-};
-
 fn gantt_color(pid: u32, tid: u32) Color {
 
     if (tid == 0) return theme.surface_alt;
 
-    return gantt_palette[pid % gantt_palette.len];
+    return switch (pid % 8) {
+
+        0 => theme.accent,
+        1 => theme.text,
+        2 => theme.text_dim,
+        3 => theme.good,
+        4 => theme.warn,
+        5 => theme.accent_dim,
+        6 => theme.hover,
+        else => theme.active,
+
+    };
 
 }
 

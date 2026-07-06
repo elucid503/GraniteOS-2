@@ -34,14 +34,20 @@ const used_label_chart_gap: i32 = 20;
 const max_pie_entries = 5;
 const gantt_label_w: i32 = 56;
 
-const pie_colors = [_]gfx.Color{
-    ui.theme.text,
-    ui.theme.text_dim,
-    ui.theme.accent,
-    ui.theme.accent_dim,
-    ui.theme.text_faint,
-    ui.theme.surface_alt,
-};
+fn pie_color(index: usize) gfx.Color {
+
+    return switch (index % 6) {
+
+        0 => ui.theme.text,
+        1 => ui.theme.text_dim,
+        2 => ui.theme.accent,
+        3 => ui.theme.accent_dim,
+        4 => ui.theme.text_faint,
+        else => ui.theme.surface_alt,
+
+    };
+
+}
 
 const MemoryRank = struct {
 
@@ -207,6 +213,8 @@ pub fn main(_: []const []const u8) u8 {
 
 fn run() !void {
 
+    lib.prefs.refresh();
+
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
 
@@ -259,6 +267,15 @@ fn run() !void {
                     dirty = true;
 
                 },
+
+                events.kind_prefs_changed => {
+
+                    lib.prefs.refresh();
+                    dirty = true;
+
+                },
+
+                events.kind_pointer_move => update_cursor(event.x, event.y),
 
                 else => {},
 
@@ -380,6 +397,13 @@ fn busy_cores(snapshot: sysinfo.CpuSnapshot) u32 {
     }
 
     return busy;
+
+}
+
+fn update_cursor(_: i32, y: i32) void {
+
+    if (y < tab_height) lib.cursor.set(&connection, .clicker)
+    else lib.cursor.set(&connection, .pointer);
 
 }
 
@@ -703,7 +727,7 @@ fn paint_memory(surface: *const gfx.Surface) void {
 
                 slices[index] = .{
                     .value = entry.value,
-                    .color = pie_colors[index % pie_colors.len],
+                    .color = pie_color(index),
                 };
 
             }
@@ -715,7 +739,7 @@ fn paint_memory(surface: *const gfx.Surface) void {
 
             for (entries[0..entry_count], 0..) |entry, index| {
 
-                const color = pie_colors[index % pie_colors.len];
+                const color = pie_color(index);
                 const percent: u64 = if (total == 0) 0 else entry.value * 100 / total;
                 const row = @as(i32, @intCast(index / @as(usize, @intCast(legend_cols))));
                 const col = @as(i32, @intCast(index % @as(usize, @intCast(legend_cols))));

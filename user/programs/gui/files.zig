@@ -70,6 +70,8 @@ pub fn main(_: []const []const u8) u8 {
 
 fn run() !void {
 
+    lib.prefs.refresh();
+
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
 
@@ -113,6 +115,13 @@ fn run() !void {
 
             },
 
+            events.kind_prefs_changed => {
+
+                lib.prefs.refresh();
+                paint();
+
+            },
+
             events.kind_scroll => wheel(event.value),
 
             events.kind_pointer_move => {
@@ -127,6 +136,8 @@ fn run() !void {
                     paint();
 
                 }
+
+                update_cursor(event.x, event.y);
 
             },
 
@@ -216,6 +227,14 @@ fn precedes(a: Entry, b: Entry) bool {
 
 // Interaction
 
+fn update_cursor(x: i32, y: i32) void {
+
+    if (y < toolbar_height and x < lib.prefs.scale_px(40)) lib.cursor.set(&connection, .clicker)
+    else if (hover_token(x, y) >= 0) lib.cursor.set(&connection, .clicker)
+    else lib.cursor.set(&connection, .pointer);
+
+}
+
 fn hover_token(x: i32, y: i32) i32 {
 
     if (y < list_start or x >= list_width()) return -1;
@@ -266,9 +285,44 @@ fn open_entry(index: usize) void {
 
     }
 
+    var path_buffer: [max_path]u8 = undefined;
+    const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch return;
+
+    if (is_text_file(entry)) {
+
+        lib.wm.launch_with_path("notepad", path);
+        return;
+
+    }
+
     selected = index;
     load_preview(entry);
     paint();
+
+}
+
+fn is_text_file(entry: Entry) bool {
+
+    if (entry.length == 0) return true;
+
+    const handle = if (client) |*c| c else return false;
+
+    var path_buffer: [max_path]u8 = undefined;
+    const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch return false;
+
+    const file = handle.open_path(path, 0) catch return false;
+    defer handle.close_file(file) catch {};
+
+    var sample: [256]u8 = undefined;
+    const read = handle.read(file, 0, &sample) catch return false;
+
+    for (sample[0..read]) |byte| {
+
+        if (byte != '\n' and byte != '\r' and byte != '\t' and (byte < 0x20 or byte > 0x7e)) return false;
+
+    }
+
+    return true;
 
 }
 
@@ -443,7 +497,7 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
 
         } else if (hovered) {
 
-            surface.fill_rect(rect, ui.theme.hover);
+            ui.row_hover(surface, rect);
 
         }
 

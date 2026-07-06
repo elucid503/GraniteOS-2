@@ -14,7 +14,6 @@ const Rect = gfx.Rect;
 pub const max_windows = proto.window.max_windows;
 
 pub const title_height: i32 = 28;
-pub const corner_radius: i32 = 8;
 pub const chrome_size: i32 = 14;
 pub const chrome_margin: i32 = 10;
 pub const title_padding: i32 = 10;
@@ -23,6 +22,14 @@ pub const title_padding: i32 = 10;
 pub const resize_grip: i32 = 18;
 
 pub const min_content: u32 = 32;
+
+pub const StackKind = enum {
+
+    desktop,
+    ordinary,
+    panel,
+
+};
 
 pub const Window = struct {
 
@@ -46,13 +53,28 @@ pub const Window = struct {
 
     pub fn decorated(self: *const Window) bool {
 
-        return self.flags & (proto.window.flag_undecorated | proto.window.flag_fullscreen | proto.window.flag_panel) == 0;
+        return self.flags & (proto.window.flag_undecorated | proto.window.flag_fullscreen | proto.window.flag_panel | proto.window.flag_desktop) == 0;
 
     }
 
     pub fn is_panel(self: *const Window) bool {
 
         return self.flags & proto.window.flag_panel != 0;
+
+    }
+
+    pub fn is_desktop(self: *const Window) bool {
+
+        return self.flags & proto.window.flag_desktop != 0;
+
+    }
+
+    pub fn stack_kind(self: *const Window) StackKind {
+
+        if (self.is_panel()) return .panel;
+        if (self.is_desktop()) return .desktop;
+
+        return .ordinary;
 
     }
 
@@ -229,6 +251,13 @@ pub const Manager = struct {
             window.width = self.screen_width;
             window.height = self.clamp_content_height(height);
 
+        } else if (flags & proto.window.flag_desktop != 0) {
+
+            window.x = 0;
+            window.y = 0;
+            window.width = self.screen_width;
+            window.height = self.screen_height;
+
         } else {
 
             window.width = self.clamp_content_width(width);
@@ -245,7 +274,7 @@ pub const Manager = struct {
         window.set_title(title);
         self.clamp(window);
 
-        self.insert(slot, window.is_panel());
+        self.insert(slot, window.stack_kind());
         self.focus = id;
 
         return window;
@@ -284,12 +313,17 @@ pub const Manager = struct {
 
     }
 
-    // Panels (the taskbar) stay above every ordinary window, so `order` keeps them in one block at the top; an
-    // ordinary window is inserted (and raised) just beneath the lowest panel, never over it.
+    // Panels stay above ordinary windows; desktop layers stay beneath them. Ordinary windows live in the middle.
 
-    fn insert(self: *Manager, slot: usize, panel: bool) void {
+    fn insert(self: *Manager, slot: usize, kind: StackKind) void {
 
-        const position = if (panel) self.count else self.count - self.trailing_panels();
+        const position = switch (kind) {
+
+            .panel => self.count,
+            .desktop => self.leading_desktops(),
+            .ordinary => self.count - self.trailing_panels(),
+
+        };
 
         var index = self.count;
 
@@ -301,6 +335,20 @@ pub const Manager = struct {
 
         self.order[position] = slot;
         self.count += 1;
+
+    }
+
+    fn leading_desktops(self: *Manager) usize {
+
+        var found: usize = 0;
+
+        while (found < self.count and self.windows[self.order[found]].is_desktop()) {
+
+            found += 1;
+
+        }
+
+        return found;
 
     }
 
@@ -328,7 +376,7 @@ pub const Manager = struct {
 
             const window = &self.windows[self.order[index]];
 
-            if (window.is_panel()) continue;
+            if (window.is_panel() or window.is_desktop()) continue;
 
             const frame = window.frame();
 
@@ -361,7 +409,7 @@ pub const Manager = struct {
 
         const window = self.by_id(id) orelse return null;
 
-        if (window.is_panel()) return null;
+        if (window.is_panel() or window.is_desktop()) return null;
         if (window.flags & proto.window.flag_minimized != 0) return null;
 
         const damage = window.frame();
@@ -479,7 +527,9 @@ pub const Manager = struct {
 
         const index = self.order_index(id) orelse return;
         const slot = self.order[index];
-        const panel = self.windows[slot].is_panel();
+        const kind = self.windows[slot].stack_kind();
+
+        if (kind == .desktop) return;
 
         var position = index;
 
@@ -490,7 +540,7 @@ pub const Manager = struct {
         }
 
         self.count -= 1;
-        self.insert(slot, panel);
+        self.insert(slot, kind);
 
     }
 

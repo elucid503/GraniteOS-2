@@ -40,10 +40,6 @@ const worker_stack_pages = 16;
 const page_size = 4096;
 const shutdown_method: u64 = 0xffff_ffff_ffff_fffe;
 
-const fg = gfx.rgb(206, 206, 206);
-const bg = gfx.rgb(16, 16, 16);
-const cursor_color = gfx.rgb(200, 200, 200);
-
 var console: lib.font.Font = undefined;
 
 var connection: lib.window.Connection = undefined;
@@ -121,6 +117,8 @@ pub fn main(_: []const []const u8) u8 {
 
 fn run() !void {
 
+    lib.prefs.refresh();
+
     bundle_length = @intCast(lib.start.word(3));
     bundle_offset = @intCast(lib.start.word(4));
     core_count = @max(1, lib.start.word(proto.init.core_count_word));
@@ -172,6 +170,22 @@ fn resize_grid() void {
 
 }
 
+fn update_cursor(x: i32, y: i32) void {
+
+    const content = gfx.Rect{
+
+        .x = margin,
+        .y = margin,
+        .w = @as(i32, @intCast(window.surface.width)) - 2 * margin,
+        .h = @as(i32, @intCast(window.surface.height)) - 2 * margin,
+
+    };
+
+    if (content.contains(x, y)) lib.cursor.set(&connection, .selector)
+    else lib.cursor.set(&connection, .pointer);
+
+}
+
 // Keyboard
 
 fn handle(event: events.Event) bool {
@@ -218,6 +232,15 @@ fn handle(event: events.Event) bool {
         events.kind_window_blur => {
 
             focused = false;
+            paint();
+
+        },
+
+        events.kind_pointer_move => update_cursor(event.x, event.y),
+
+        events.kind_prefs_changed => {
+
+            lib.prefs.refresh();
             paint();
 
         },
@@ -708,6 +731,10 @@ fn parse_number(index: *usize) usize {
 var snapshot: [max_rows * max_cols]u8 = undefined;
 
 fn paint() void {
+
+    const bg = ui.theme.window_bg;
+    const fg = ui.theme.text;
+    const cursor_color = ui.theme.accent;
 
     screen_lock.acquire();
 

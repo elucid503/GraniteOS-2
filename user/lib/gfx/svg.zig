@@ -94,6 +94,695 @@ pub fn draw_icon(surface: *const gfx.Surface, rect: gfx.Rect, svg: []const u8, c
     }
 }
 
+const max_polygon_points = 256;
+
+const Raster = struct {
+    surface: gfx.Surface,
+    rect: gfx.Rect,
+    view_box: ViewBox,
+
+    fn x(self: *const Raster, value: i32) i32 {
+        return self.rect.x + @as(i32, @intCast(@divTrunc(@as(i64, value - self.view_box.x) * self.rect.w, self.view_box.w)));
+    }
+
+    fn y(self: *const Raster, value: i32) i32 {
+        return self.rect.y + @as(i32, @intCast(@divTrunc(@as(i64, value - self.view_box.y) * self.rect.h, self.view_box.h)));
+    }
+
+    fn stroke(self: *const Raster, a: Point, b: Point, thickness: i32, color: gfx.Color) void {
+        stroke_segment_opaque(&self.surface, self.x(a.x), self.y(a.y), self.x(b.x), self.y(b.y), thickness, color);
+    }
+
+    fn fill_polygon(self: *const Raster, points: []const Point, color: gfx.Color) void {
+        if (points.len < 3) return;
+
+        var min_y: i32 = self.y(points[0].y);
+        var max_y = min_y;
+
+        for (points[1..]) |point| {
+
+            const py = self.y(point.y);
+            min_y = @min(min_y, py);
+            max_y = @max(max_y, py);
+
+        }
+
+        var scan_y = min_y;
+
+        while (scan_y <= max_y) : (scan_y += 1) {
+
+            var intersections: [max_polygon_points]i32 = undefined;
+            var count: usize = 0;
+
+            var index: usize = 0;
+
+            while (index < points.len) : (index += 1) {
+
+                const next = (index + 1) % points.len;
+                const y0 = self.y(points[index].y);
+                const y1 = self.y(points[next].y);
+
+                if (y0 == y1) continue;
+
+                const low = @min(y0, y1);
+                const high = @max(y0, y1);
+
+                if (scan_y < low or scan_y >= high) continue;
+                if (scan_y == high and y0 < y1) continue;
+
+                const x0 = self.x(points[index].x);
+                const x1 = self.x(points[next].x);
+                const cross = x0 + @divTrunc((scan_y - y0) * (x1 - x0), y1 - y0);
+
+                if (count < intersections.len) {
+
+                    intersections[count] = cross;
+                    count += 1;
+
+                }
+
+            }
+
+            if (count < 2) continue;
+
+            sort_intersections(intersections[0..count]);
+
+            var pair: usize = 0;
+
+            while (pair + 1 < count) : (pair += 2) {
+
+                const left = intersections[pair];
+                const right = intersections[pair + 1];
+
+                self.surface.fill_rect(.{ .x = left, .y = scan_y, .w = right - left + 1, .h = 1 }, color);
+
+            }
+
+        }
+
+    }
+};
+
+pub const CursorStyle = enum {
+
+    filled,
+    stroked,
+    white_line,
+
+};
+
+/// Rasterize an SVG glyph into a square ARGB buffer for hardware cursors.
+pub fn raster_cursor(
+    side: usize,
+    pixels: [*]u32,
+    svg: []const u8,
+    dst: gfx.Rect,
+    fill: gfx.Color,
+    outline: gfx.Color,
+    style: CursorStyle,
+) void {
+
+    @memset(pixels[0 .. side * side], 0);
+
+    const view_box = parse_view_box(svg);
+    const surface = gfx.Surface.from_base(@intFromPtr(pixels), @intCast(side), @intCast(side), @intCast(side * 4));
+    const raster = Raster{ .surface = surface, .rect = dst, .view_box = view_box };
+
+    const thin = @max(1, @divTrunc(@min(dst.w, dst.h), 24));
+    const thick = @max(2, @divTrunc(@min(dst.w, dst.h), 8));
+    const inner = @max(1, thick - 1);
+
+    if (style == .filled) {
+
+        const edge = thin + 1;
+
+        var offset: usize = 0;
+        while (find_tag(svg, "path", &offset)) |tag| {
+            if (attr(tag, "d")) |d| stroke_path(&raster, d, edge, outline);
+        }
+
+        offset = 0;
+        while (find_tag(svg, "path", &offset)) |tag| {
+            if (attr(tag, "d")) |d| fill_path(&raster, d, fill);
+        }
+
+        offset = 0;
+        while (find_tag(svg, "polygon", &offset)) |tag| {
+            if (attr(tag, "points")) |points| fill_points(&raster, points, fill);
+        }
+
+        offset = 0;
+        while (find_tag(svg, "rect", &offset)) |tag| {
+            const x = parse_attr_number(tag, "x") orelse 0;
+            const y = parse_attr_number(tag, "y") orelse 0;
+            const w = parse_attr_number(tag, "width") orelse continue;
+            const h = parse_attr_number(tag, "height") orelse continue;
+            const radius = parse_attr_number(tag, "rx") orelse 0;
+            const px = raster.x(x);
+            const py = raster.y(y);
+            const pw = @max(1, raster.x(x + w) - px);
+            const ph = @max(1, raster.y(y + h) - py);
+            const pr = @as(i32, @intCast(@divTrunc(@as(i64, radius) * dst.w, view_box.w)));
+
+            if (pr > 0) raster.surface.fill_rounded_rect(.{ .x = px, .y = py, .w = pw, .h = ph }, pr, fill)
+            else raster.surface.fill_rect(.{ .x = px, .y = py, .w = pw, .h = ph }, fill);
+
+        }
+
+        return;
+
+    }
+
+    if (style == .white_line) {
+
+        var offset: usize = 0;
+        while (find_tag(svg, "line", &offset)) |tag| {
+            const x1 = parse_attr_number(tag, "x1") orelse continue;
+            const y1 = parse_attr_number(tag, "y1") orelse continue;
+            const x2 = parse_attr_number(tag, "x2") orelse continue;
+            const y2 = parse_attr_number(tag, "y2") orelse continue;
+
+            raster.stroke(Point{ .x = x1, .y = y1 }, Point{ .x = x2, .y = y2 }, thin, fill);
+        }
+
+        return;
+
+    }
+
+    const outer = thick;
+
+    var offset: usize = 0;
+    while (find_tag(svg, "path", &offset)) |tag| {
+        if (attr(tag, "d")) |d| stroke_path(&raster, d, outer, outline);
+    }
+
+    offset = 0;
+    while (find_tag(svg, "line", &offset)) |tag| {
+        const x1 = parse_attr_number(tag, "x1") orelse continue;
+        const y1 = parse_attr_number(tag, "y1") orelse continue;
+        const x2 = parse_attr_number(tag, "x2") orelse continue;
+        const y2 = parse_attr_number(tag, "y2") orelse continue;
+
+        raster.stroke(Point{ .x = x1, .y = y1 }, Point{ .x = x2, .y = y2 }, outer, outline);
+    }
+
+    offset = 0;
+    while (find_tag(svg, "polyline", &offset)) |tag| {
+        if (attr(tag, "points")) |points| stroke_points(&raster, points, false, outer, outline);
+    }
+
+    if (style != .stroked) return;
+
+    offset = 0;
+    while (find_tag(svg, "path", &offset)) |tag| {
+        if (attr(tag, "d")) |d| stroke_path(&raster, d, inner, fill);
+    }
+
+    offset = 0;
+    while (find_tag(svg, "line", &offset)) |tag| {
+        const x1 = parse_attr_number(tag, "x1") orelse continue;
+        const y1 = parse_attr_number(tag, "y1") orelse continue;
+        const x2 = parse_attr_number(tag, "x2") orelse continue;
+        const y2 = parse_attr_number(tag, "y2") orelse continue;
+
+        raster.stroke(Point{ .x = x1, .y = y1 }, Point{ .x = x2, .y = y2 }, inner, fill);
+    }
+
+    offset = 0;
+    while (find_tag(svg, "polyline", &offset)) |tag| {
+        if (attr(tag, "points")) |points| stroke_points(&raster, points, false, inner, fill);
+    }
+
+}
+
+fn stroke_segment_opaque(surface: *const gfx.Surface, x0: i32, y0: i32, x1: i32, y1: i32, thickness: i32, color: gfx.Color) void {
+
+    const radius = @max(1, thickness);
+    const raw_bounds = gfx.Rect{
+
+        .x = @min(x0, x1) - radius - 1,
+        .y = @min(y0, y1) - radius - 1,
+
+        .w = @as(i32, @intCast(@abs(x1 - x0))) + 2 * radius + 3,
+        .h = @as(i32, @intCast(@abs(y1 - y0))) + 2 * radius + 3,
+
+    };
+    const clipped_line = raw_bounds.intersect(surface.bounds());
+
+    if (clipped_line.is_empty()) return;
+
+    const vx = x1 - x0;
+    const vy = y1 - y0;
+    const length_sq = @as(i64, vx) * vx + @as(i64, vy) * vy;
+    const radius_64 = @max(32, @divTrunc(thickness * 64, 2));
+    const sample_offsets = [_]i32{ 8, 24, 40, 56 };
+
+    var y = clipped_line.y;
+
+    while (y < clipped_line.y + clipped_line.h) : (y += 1) {
+
+        var x = clipped_line.x;
+
+        while (x < clipped_line.x + clipped_line.w) : (x += 1) {
+
+            var covered: u32 = 0;
+
+            for (sample_offsets) |sy| {
+
+                for (sample_offsets) |sx| {
+
+                    if (sample_hits_segment((x - x0) * 64 + sx, (y - y0) * 64 + sy, vx * 64, vy * 64, length_sq * 4096, radius_64)) {
+
+                        covered += 1;
+
+                    }
+
+                }
+
+            }
+
+            if (covered >= 8) surface.put_pixel(x, y, color);
+
+        }
+
+    }
+
+}
+
+fn sample_hits_segment(px: i32, py: i32, vx: i32, vy: i32, length_sq: i64, radius: i64) bool {
+
+    if (length_sq == 0) {
+
+        const dist_sq = @as(i64, px) * px + @as(i64, py) * py;
+        return dist_sq <= radius * radius;
+
+    }
+
+    const dot = @as(i64, px) * vx + @as(i64, py) * vy;
+
+    if (dot <= 0) {
+
+        const dist_sq = @as(i64, px) * px + @as(i64, py) * py;
+        return dist_sq <= radius * radius;
+
+    }
+
+    if (dot >= length_sq) {
+
+        const tx = px - vx;
+        const ty = py - vy;
+        const dist_sq = @as(i64, tx) * tx + @as(i64, ty) * ty;
+        return dist_sq <= radius * radius;
+
+    }
+
+    const cross = @as(i64, px) * vy - @as(i64, py) * vx;
+    const dist_sq = @divTrunc(cross * cross, length_sq);
+
+    return dist_sq <= radius * radius;
+
+}
+
+fn sort_intersections(values: []i32) void {
+    var i: usize = 0;
+
+    while (i < values.len) : (i += 1) {
+
+        var best = i;
+        var j = i + 1;
+
+        while (j < values.len) : (j += 1) {
+
+            if (values[j] < values[best]) best = j;
+
+        }
+
+        if (best != i) std.mem.swap(i32, &values[i], &values[best]);
+
+    }
+
+}
+
+fn fill_path(raster: *const Raster, d: []const u8, color: gfx.Color) void {
+    var parser = PathParser{ .text = d };
+    var command: u8 = 0;
+    var current = Point{ .x = 0, .y = 0 };
+    var start = current;
+    var control = current;
+    var polygon: [max_polygon_points]Point = undefined;
+    var polygon_len: usize = 0;
+
+    const flush = struct {
+        fn go(r: *const Raster, points: []const Point, c: gfx.Color) void {
+            if (points.len < 3) return;
+            r.fill_polygon(points, c);
+        }
+    }.go;
+
+    while (parser.more()) {
+        if (parser.peek_command()) |found| command = found;
+        if (command == 0) break;
+
+        const relative = command >= 'a' and command <= 'z';
+        const upper = if (relative) command - 32 else command;
+
+        switch (upper) {
+            'M' => {
+                if (polygon_len >= 3) flush(raster, polygon[0..polygon_len], color);
+
+                polygon_len = 0;
+
+                const point = parser.point(relative, current) orelse break;
+                current = point;
+                start = point;
+
+                if (polygon_len < polygon.len) {
+
+                    polygon[polygon_len] = point;
+                    polygon_len += 1;
+
+                }
+
+                command = if (relative) 'l' else 'L';
+            },
+            'L' => {
+                const point = parser.point(relative, current) orelse break;
+
+                if (polygon_len < polygon.len) {
+
+                    polygon[polygon_len] = point;
+                    polygon_len += 1;
+
+                }
+
+                current = point;
+            },
+            'H' => {
+                const x = parser.number() orelse break;
+                const point = Point{ .x = if (relative) current.x + x else x, .y = current.y };
+
+                if (polygon_len < polygon.len) {
+
+                    polygon[polygon_len] = point;
+                    polygon_len += 1;
+
+                }
+
+                current = point;
+            },
+            'V' => {
+                const y = parser.number() orelse break;
+                const point = Point{ .x = current.x, .y = if (relative) current.y + y else y };
+
+                if (polygon_len < polygon.len) {
+
+                    polygon[polygon_len] = point;
+                    polygon_len += 1;
+
+                }
+
+                current = point;
+            },
+            'Q' => {
+                const c = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
+                flatten_quadratic(&polygon, &polygon_len, current, c, end);
+                current = end;
+                control = c;
+            },
+            'C' => {
+                const c1 = parser.point(relative, current) orelse break;
+                const c2 = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
+                flatten_cubic(&polygon, &polygon_len, current, c1, c2, end);
+                current = end;
+                control = c2;
+            },
+            'T' => {
+                const reflected = Point{ .x = current.x * 2 - control.x, .y = current.y * 2 - control.y };
+                const end = parser.point(relative, current) orelse break;
+                flatten_quadratic(&polygon, &polygon_len, current, reflected, end);
+                current = end;
+                control = reflected;
+            },
+            'Z' => {
+                if (polygon_len < polygon.len) {
+
+                    polygon[polygon_len] = start;
+                    polygon_len += 1;
+
+                }
+
+                flush(raster, polygon[0..polygon_len], color);
+                polygon_len = 0;
+                current = start;
+            },
+            else => break,
+        }
+    }
+
+    if (polygon_len >= 3) flush(raster, polygon[0..polygon_len], color);
+
+}
+
+fn stroke_path(raster: *const Raster, d: []const u8, thickness: i32, color: gfx.Color) void {
+    var parser = PathParser{ .text = d };
+    var command: u8 = 0;
+    var current = Point{ .x = 0, .y = 0 };
+    var start = current;
+    var control = current;
+
+    while (parser.more()) {
+        if (parser.peek_command()) |found| command = found;
+        if (command == 0) break;
+
+        const relative = command >= 'a' and command <= 'z';
+        const upper = if (relative) command - 32 else command;
+
+        switch (upper) {
+            'M' => {
+                const point = parser.point(relative, current) orelse break;
+                current = point;
+                start = point;
+                command = if (relative) 'l' else 'L';
+            },
+            'L' => {
+                const point = parser.point(relative, current) orelse break;
+                raster.stroke(current, point, thickness, color);
+                current = point;
+            },
+            'H' => {
+                const x = parser.number() orelse break;
+                const point = Point{ .x = if (relative) current.x + x else x, .y = current.y };
+                raster.stroke(current, point, thickness, color);
+                current = point;
+            },
+            'V' => {
+                const y = parser.number() orelse break;
+                const point = Point{ .x = current.x, .y = if (relative) current.y + y else y };
+                raster.stroke(current, point, thickness, color);
+                current = point;
+            },
+            'Q' => {
+                const c = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
+                stroke_quadratic(raster, current, c, end, thickness, color);
+                current = end;
+                control = c;
+            },
+            'C' => {
+                const c1 = parser.point(relative, current) orelse break;
+                const c2 = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
+                stroke_cubic(raster, current, c1, c2, end, thickness, color);
+                current = end;
+                control = c2;
+            },
+            'T' => {
+                const reflected = Point{ .x = current.x * 2 - control.x, .y = current.y * 2 - control.y };
+                const end = parser.point(relative, current) orelse break;
+                stroke_quadratic(raster, current, reflected, end, thickness, color);
+                current = end;
+                control = reflected;
+            },
+            'Z' => {
+                raster.stroke(current, start, thickness, color);
+                current = start;
+            },
+            else => break,
+        }
+    }
+
+}
+
+fn fill_points(raster: *const Raster, text: []const u8, color: gfx.Color) void {
+    var parser = PathParser{ .text = text };
+    var polygon: [max_polygon_points]Point = undefined;
+    var polygon_len: usize = 0;
+    const first = parser.point(false, .{ .x = 0, .y = 0 }) orelse return;
+
+    if (polygon_len < polygon.len) {
+
+        polygon[polygon_len] = first;
+        polygon_len += 1;
+
+    }
+
+    while (parser.point(false, first)) |point| {
+
+        if (polygon_len < polygon.len) {
+
+            polygon[polygon_len] = point;
+            polygon_len += 1;
+
+        }
+
+    }
+
+    raster.fill_polygon(polygon[0..polygon_len], color);
+
+}
+
+fn stroke_points(raster: *const Raster, text: []const u8, close: bool, thickness: i32, color: gfx.Color) void {
+    var parser = PathParser{ .text = text };
+    const first = parser.point(false, .{ .x = 0, .y = 0 }) orelse return;
+    var last = first;
+
+    while (parser.point(false, last)) |point| {
+
+        raster.stroke(last, point, thickness, color);
+        last = point;
+
+    }
+
+    if (close) raster.stroke(last, first, thickness, color);
+
+}
+
+fn push_point(polygon: *[max_polygon_points]Point, polygon_len: *usize, point: Point) void {
+    if (polygon_len.* >= polygon.len) return;
+
+    polygon[polygon_len.*] = point;
+    polygon_len.* += 1;
+
+}
+
+fn flatten_quadratic(polygon: *[max_polygon_points]Point, polygon_len: *usize, a: Point, b: Point, c: Point) void {
+    const steps: i64 = 16;
+    var step: i64 = 1;
+
+    const ax: i64 = a.x;
+    const ay: i64 = a.y;
+    const bx: i64 = b.x;
+    const by: i64 = b.y;
+    const cx: i64 = c.x;
+    const cy: i64 = c.y;
+
+    while (step <= steps) : (step += 1) {
+
+        const t = step;
+        const mt = steps - step;
+        const denom = steps * steps;
+        const point = Point{
+            .x = @intCast(round_div(mt * mt * ax + 2 * mt * t * bx + t * t * cx, denom)),
+            .y = @intCast(round_div(mt * mt * ay + 2 * mt * t * by + t * t * cy, denom)),
+        };
+
+        push_point(polygon, polygon_len, point);
+
+    }
+
+}
+
+fn flatten_cubic(polygon: *[max_polygon_points]Point, polygon_len: *usize, a: Point, b: Point, c: Point, d: Point) void {
+    const steps: i64 = 24;
+    var step: i64 = 1;
+
+    const ax: i64 = a.x;
+    const ay: i64 = a.y;
+    const bx: i64 = b.x;
+    const by: i64 = b.y;
+    const cx: i64 = c.x;
+    const cy: i64 = c.y;
+    const dx: i64 = d.x;
+    const dy: i64 = d.y;
+
+    while (step <= steps) : (step += 1) {
+
+        const t = step;
+        const mt = steps - step;
+        const denom = steps * steps * steps;
+        const point = Point{
+            .x = @intCast(round_div(mt * mt * mt * ax + 3 * mt * mt * t * bx + 3 * mt * t * t * cx + t * t * t * dx, denom)),
+            .y = @intCast(round_div(mt * mt * mt * ay + 3 * mt * mt * t * by + 3 * mt * t * t * cy + t * t * t * dy, denom)),
+        };
+
+        push_point(polygon, polygon_len, point);
+
+    }
+
+}
+
+fn stroke_quadratic(raster: *const Raster, a: Point, b: Point, c: Point, thickness: i32, color: gfx.Color) void {
+    const steps: i64 = 16;
+    var last = a;
+    var step: i64 = 1;
+
+    const ax: i64 = a.x;
+    const ay: i64 = a.y;
+    const bx: i64 = b.x;
+    const by: i64 = b.y;
+    const cx: i64 = c.x;
+    const cy: i64 = c.y;
+
+    while (step <= steps) : (step += 1) {
+
+        const t = step;
+        const mt = steps - step;
+        const denom = steps * steps;
+        const point = Point{
+            .x = @intCast(round_div(mt * mt * ax + 2 * mt * t * bx + t * t * cx, denom)),
+            .y = @intCast(round_div(mt * mt * ay + 2 * mt * t * by + t * t * cy, denom)),
+        };
+
+        raster.stroke(last, point, thickness, color);
+        last = point;
+
+    }
+
+}
+
+fn stroke_cubic(raster: *const Raster, a: Point, b: Point, c: Point, d: Point, thickness: i32, color: gfx.Color) void {
+    const steps: i64 = 24;
+    var last = a;
+    var step: i64 = 1;
+
+    const ax: i64 = a.x;
+    const ay: i64 = a.y;
+    const bx: i64 = b.x;
+    const by: i64 = b.y;
+    const cx: i64 = c.x;
+    const cy: i64 = c.y;
+    const dx: i64 = d.x;
+    const dy: i64 = d.y;
+
+    while (step <= steps) : (step += 1) {
+
+        const t = step;
+        const mt = steps - step;
+        const denom = steps * steps * steps;
+        const point = Point{
+            .x = @intCast(round_div(mt * mt * mt * ax + 3 * mt * mt * t * bx + 3 * mt * t * t * cx + t * t * t * dx, denom)),
+            .y = @intCast(round_div(mt * mt * mt * ay + 3 * mt * mt * t * by + 3 * mt * t * t * cy + t * t * t * dy, denom)),
+        };
+
+        raster.stroke(last, point, thickness, color);
+        last = point;
+
+    }
+
+}
+
 fn draw_path(painter: *const Painter, d: []const u8) void {
     var parser = PathParser{ .text = d };
     var command: u8 = 0;

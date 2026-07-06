@@ -8,10 +8,12 @@ const app_catalog = @import("../boot/app_catalog.zig");
 const bundle_mod = @import("../boot/bundle.zig");
 const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
+const stream = @import("../io/stream.zig");
 const sys = @import("../syscall/sys.zig");
 
 const desktop_mod = @import("desktop.zig");
 const icons = @import("icons.zig");
+const prefs = @import("prefs.zig");
 const window = @import("window.zig");
 
 const Error = sys.Error;
@@ -191,8 +193,38 @@ pub fn icon_by_name(name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "cpu")) return icons.cpu;
     if (std.mem.eql(u8, name, "disk")) return icons.disk;
     if (std.mem.eql(u8, name, "memory")) return icons.memory;
+    if (std.mem.eql(u8, name, "settings")) return icons.apps;
 
     return icons.apps;
+
+}
+
+/// Ask the launcher server to start a bundled desktop program by name.
+pub fn launch(program: []const u8) void {
+
+    const endpoint = stream.lookup_endpoint("launch") catch return;
+
+    var words = [_]u64{ program.len, 0, 0, 0, 0 };
+    var packed_name = [_]u8{0} ** proto.launch.max_length;
+
+    const length = @min(program.len, packed_name.len);
+    @memcpy(packed_name[0..length], program[0..length]);
+
+    for (0..4) |index| {
+
+        words[index + 1] = std.mem.readInt(u64, packed_name[index * 8 ..][0..8], .little);
+
+    }
+
+    _ = ipc.request(endpoint, proto.launch.spawn, &words, &.{}) catch {};
+
+}
+
+/// Stage a file path for the next program launch, then spawn it (used by the file manager to open Notepad).
+pub fn launch_with_path(program: []const u8, path: []const u8) void {
+
+    prefs.write_open_path(path);
+    launch(program);
 
 }
 

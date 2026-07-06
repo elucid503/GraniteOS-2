@@ -1,0 +1,375 @@
+// Desktop preferences: theme palettes, display scale, and a small config file on disk. GUI apps call refresh()
+// after prefs_changed notifications (or once at startup) so each process picks up the user's choices.
+
+const std = @import("std");
+
+const cap = @import("../cap/cap.zig");
+const gfx = @import("gfx.zig");
+const fs = @import("../fs/fs.zig");
+const ipc = @import("../ipc/ipc.zig");
+const proto = @import("../ipc/proto.zig");
+const ui = @import("ui.zig");
+const window = @import("window.zig");
+
+const Color = gfx.Color;
+
+pub const config_path = "/root/user/settings.cfg";
+pub const open_path_file = "/root/user/.open-path";
+
+pub const max_scale = 200;
+pub const min_scale = 75;
+
+pub const ThemeId = enum(u8) {
+
+    mono,
+    ocean,
+    forest,
+    sunset,
+    grape,
+
+};
+
+pub const theme_count: usize = 5;
+
+pub const theme_names = [_][]const u8{
+
+    "Monochrome",
+    "Ocean",
+    "Forest",
+    "Sunset",
+    "Grape",
+
+};
+
+pub const Chrome = struct {
+
+    wallpaper: Color,
+    title_focused: Color,
+    title_blurred: Color,
+    chrome: Color,
+
+};
+
+pub var active_theme: ThemeId = .mono;
+pub var scale_percent: u32 = 100;
+
+var loaded_generation: u64 = 0;
+
+const Palette = struct {
+
+    window_bg: Color,
+    surface: Color,
+    surface_alt: Color,
+    border: Color,
+    hover: Color,
+    active: Color,
+    accent: Color,
+    accent_dim: Color,
+    text: Color,
+    text_dim: Color,
+    text_faint: Color,
+    good: Color,
+    warn: Color,
+    wallpaper: Color,
+
+};
+
+const palettes = [_]Palette{
+
+    .{
+
+        .window_bg = gfx.rgb(30, 30, 30),
+        .surface = gfx.rgb(38, 38, 38),
+        .surface_alt = gfx.rgb(46, 46, 46),
+        .border = gfx.rgb(58, 58, 58),
+        .hover = gfx.rgb(52, 52, 52),
+        .active = gfx.rgb(70, 70, 70),
+        .accent = gfx.rgb(200, 200, 200),
+        .accent_dim = gfx.rgb(100, 100, 100),
+        .text = gfx.rgb(230, 230, 230),
+        .text_dim = gfx.rgb(160, 160, 160),
+        .text_faint = gfx.rgb(110, 110, 110),
+        .good = gfx.rgb(190, 190, 190),
+        .warn = gfx.rgb(140, 140, 140),
+        .wallpaper = gfx.rgb(22, 22, 22),
+
+    },
+
+    .{
+
+        .window_bg = gfx.rgb(18, 28, 42),
+        .surface = gfx.rgb(24, 36, 54),
+        .surface_alt = gfx.rgb(30, 44, 64),
+        .border = gfx.rgb(48, 72, 98),
+        .hover = gfx.rgb(34, 52, 76),
+        .active = gfx.rgb(52, 88, 120),
+        .accent = gfx.rgb(120, 190, 255),
+        .accent_dim = gfx.rgb(60, 110, 170),
+        .text = gfx.rgb(220, 235, 255),
+        .text_dim = gfx.rgb(150, 180, 210),
+        .text_faint = gfx.rgb(100, 130, 160),
+        .good = gfx.rgb(100, 200, 180),
+        .warn = gfx.rgb(220, 170, 90),
+        .wallpaper = gfx.rgb(14, 22, 34),
+
+    },
+
+    .{
+
+        .window_bg = gfx.rgb(18, 32, 22),
+        .surface = gfx.rgb(24, 40, 28),
+        .surface_alt = gfx.rgb(30, 48, 34),
+        .border = gfx.rgb(48, 78, 54),
+        .hover = gfx.rgb(34, 56, 40),
+        .active = gfx.rgb(52, 90, 60),
+        .accent = gfx.rgb(120, 220, 140),
+        .accent_dim = gfx.rgb(70, 140, 90),
+        .text = gfx.rgb(220, 245, 225),
+        .text_dim = gfx.rgb(150, 190, 160),
+        .text_faint = gfx.rgb(100, 140, 110),
+        .good = gfx.rgb(140, 230, 160),
+        .warn = gfx.rgb(200, 180, 90),
+        .wallpaper = gfx.rgb(12, 24, 16),
+
+    },
+
+    .{
+
+        .window_bg = gfx.rgb(38, 24, 18),
+        .surface = gfx.rgb(48, 30, 22),
+        .surface_alt = gfx.rgb(58, 36, 26),
+        .border = gfx.rgb(90, 58, 42),
+        .hover = gfx.rgb(68, 42, 30),
+        .active = gfx.rgb(110, 68, 48),
+        .accent = gfx.rgb(255, 170, 100),
+        .accent_dim = gfx.rgb(180, 110, 60),
+        .text = gfx.rgb(255, 235, 220),
+        .text_dim = gfx.rgb(210, 170, 140),
+        .text_faint = gfx.rgb(160, 120, 90),
+        .good = gfx.rgb(200, 220, 120),
+        .warn = gfx.rgb(255, 140, 90),
+        .wallpaper = gfx.rgb(28, 16, 12),
+
+    },
+
+    .{
+
+        .window_bg = gfx.rgb(28, 20, 38),
+        .surface = gfx.rgb(36, 26, 48),
+        .surface_alt = gfx.rgb(44, 32, 58),
+        .border = gfx.rgb(72, 54, 96),
+        .hover = gfx.rgb(50, 36, 68),
+        .active = gfx.rgb(80, 58, 110),
+        .accent = gfx.rgb(190, 140, 255),
+        .accent_dim = gfx.rgb(120, 80, 180),
+        .text = gfx.rgb(240, 230, 255),
+        .text_dim = gfx.rgb(180, 160, 210),
+        .text_faint = gfx.rgb(130, 110, 160),
+        .good = gfx.rgb(160, 220, 180),
+        .warn = gfx.rgb(230, 160, 200),
+        .wallpaper = gfx.rgb(20, 14, 30),
+
+    },
+
+};
+
+pub fn wallpaper() Color {
+
+    return palettes[@intFromEnum(active_theme)].wallpaper;
+
+}
+
+pub fn chrome() Chrome {
+
+    const palette = palettes[@intFromEnum(active_theme)];
+
+    return .{
+
+        .wallpaper = palette.wallpaper,
+        .title_focused = palette.surface_alt,
+        .title_blurred = palette.surface,
+        .chrome = palette.text,
+
+    };
+
+}
+
+pub fn apply_theme(id: ThemeId) void {
+
+    active_theme = id;
+
+    const palette = palettes[@intFromEnum(id)];
+
+    ui.theme.window_bg = palette.window_bg;
+    ui.theme.surface = palette.surface;
+    ui.theme.surface_alt = palette.surface_alt;
+    ui.theme.border = palette.border;
+    ui.theme.hover = palette.hover;
+    ui.theme.active = palette.active;
+    ui.theme.accent = palette.accent;
+    ui.theme.accent_dim = palette.accent_dim;
+    ui.theme.text = palette.text;
+    ui.theme.text_dim = palette.text_dim;
+    ui.theme.text_faint = palette.text_faint;
+    ui.theme.good = palette.good;
+    ui.theme.warn = palette.warn;
+
+}
+
+pub fn set_scale(percent: u32) void {
+
+    scale_percent = @max(min_scale, @min(max_scale, percent));
+
+}
+
+pub fn scale_px(px: i32) i32 {
+
+    return @divTrunc(px * @as(i32, @intCast(scale_percent)), 100);
+
+}
+
+pub fn scale_u(px: u32) u32 {
+
+    return @intCast(scale_px(@intCast(px)));
+
+}
+
+/// Reload settings from disk when the on-disk generation changes.
+pub fn refresh_if_changed() bool {
+
+    var client = fs.Client.connect(cap.memory) catch return false;
+
+    const file = client.open_path(config_path, 0) catch return false;
+    defer client.close_file(file) catch {};
+
+    var buffer: [256]u8 = undefined;
+    const read = client.read(file, 0, &buffer) catch return false;
+
+    const generation = config_generation(buffer[0..read]);
+
+    if (generation != 0 and generation == loaded_generation) return false;
+
+    parse_config(buffer[0..read]);
+    loaded_generation = generation;
+
+    return true;
+
+}
+
+/// Force a reload from disk; keeps the current theme when the file is missing or unreadable.
+pub fn refresh() void {
+
+    _ = refresh_if_changed();
+
+}
+
+pub fn save() void {
+
+    var client = fs.Client.connect(cap.memory) catch return;
+
+    var buffer: [128]u8 = undefined;
+    const stamp = loaded_generation +% 1;
+    const text = std.fmt.bufPrint(&buffer, "theme={d}\nscale={d}\nstamp={d}\n", .{ @intFromEnum(active_theme), scale_percent, stamp }) catch return;
+
+    if (client.open_path(config_path, 0)) |file| {
+
+        defer client.close_file(file) catch {};
+
+        if ((client.write(file, 0, text) catch 0) > 0) loaded_generation = stamp;
+
+        return;
+
+    } else |_| {}
+
+    client.create(config_path, proto.filesystem.kind_file) catch return;
+
+    const file = client.open_path(config_path, 0) catch return;
+    defer client.close_file(file) catch {};
+
+    if ((client.write(file, 0, text) catch 0) > 0) loaded_generation = stamp;
+
+}
+
+/// Ask the compositor to broadcast prefs_changed to every connected GUI client.
+pub fn broadcast_change(connection: *window.Connection) void {
+
+    _ = ipc.request(connection.endpoint, proto.window.notify_prefs, &.{}, &.{}) catch {};
+
+}
+
+pub fn write_open_path(path: []const u8) void {
+
+    var client = fs.Client.connect(cap.memory) catch return;
+
+    _ = client.delete(open_path_file) catch {};
+    _ = client.create(open_path_file, @import("../ipc/proto.zig").filesystem.kind_file) catch return;
+
+    const file = client.open_path(open_path_file, 0) catch return;
+    defer client.close_file(file) catch {};
+
+    _ = client.write(file, 0, path) catch {};
+
+}
+
+pub fn take_open_path(out: []u8) ?[]const u8 {
+
+    var client = fs.Client.connect(cap.memory) catch return null;
+
+    const file = client.open_path(open_path_file, 0) catch return null;
+    defer client.close_file(file) catch {};
+
+    const read = client.read(file, 0, out) catch return null;
+
+    _ = client.delete(open_path_file) catch {};
+
+    if (read == 0) return null;
+
+    return out[0..read];
+
+}
+
+fn config_generation(text: []const u8) u64 {
+
+    var lines = std.mem.tokenizeScalar(u8, text, '\n');
+
+    while (lines.next()) |line| {
+
+        if (std.mem.startsWith(u8, line, "stamp=")) {
+
+            return std.fmt.parseInt(u64, line[6..], 10) catch 0;
+
+        }
+
+    }
+
+    var hash: u64 = 0;
+
+    for (text) |byte| hash = hash *% 33 +% byte;
+
+    return if (hash == 0) 1 else hash;
+
+}
+
+fn parse_config(text: []const u8) void {
+
+    var lines = std.mem.tokenizeScalar(u8, text, '\n');
+
+    while (lines.next()) |line| {
+
+        if (std.mem.startsWith(u8, line, "theme=")) {
+
+            const value = std.fmt.parseInt(u8, line[6..], 10) catch continue;
+
+            if (value < theme_count) apply_theme(@enumFromInt(value));
+
+        } else if (std.mem.startsWith(u8, line, "scale=")) {
+
+            const value = std.fmt.parseInt(u32, line[6..], 10) catch continue;
+
+            set_scale(value);
+
+        }
+
+    }
+
+}

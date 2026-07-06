@@ -462,6 +462,38 @@ pub const Surface = struct {
 
     }
 
+    /// Filled rectangle with rounded corners (scanline quarters — no stroked corner rings).
+    pub fn fill_rounded_rect(self: *const Surface, rect: Rect, radius_in: i32, color: Color) void {
+
+        const radius = @min(radius_in, @min(@divTrunc(rect.w, 2), @divTrunc(rect.h, 2)));
+
+        if (radius <= 0) return self.fill_rect(rect, color);
+
+        self.fill_rect(.{ .x = rect.x + radius, .y = rect.y + radius, .w = rect.w - 2 * radius, .h = rect.h - 2 * radius }, color);
+        self.fill_rect(.{ .x = rect.x + radius, .y = rect.y, .w = rect.w - 2 * radius, .h = radius }, color);
+        self.fill_rect(.{ .x = rect.x + radius, .y = rect.y + rect.h - radius, .w = rect.w - 2 * radius, .h = radius }, color);
+        self.fill_rect(.{ .x = rect.x, .y = rect.y + radius, .w = radius, .h = rect.h - 2 * radius }, color);
+        self.fill_rect(.{ .x = rect.x + rect.w - radius, .y = rect.y + radius, .w = radius, .h = rect.h - 2 * radius }, color);
+
+        var dy: i32 = 0;
+
+        while (dy < radius) : (dy += 1) {
+
+            const rest = radius - 1 - dy;
+            const span: i32 = @intCast(isqrt(@as(u64, @intCast(radius * radius - rest * rest))));
+
+            self.fill_rect(.{ .x = rect.x + radius - span, .y = rect.y + dy, .w = span, .h = 1 }, color);
+            self.fill_rect(.{ .x = rect.x + rect.w - radius, .y = rect.y + dy, .w = span, .h = 1 }, color);
+
+            const bottom_y = rect.y + rect.h - radius + dy;
+
+            self.fill_rect(.{ .x = rect.x + radius - span, .y = bottom_y, .w = span, .h = 1 }, color);
+            self.fill_rect(.{ .x = rect.x + rect.w - radius, .y = bottom_y, .w = span, .h = 1 }, color);
+
+        }
+
+    }
+
     /// Filled rectangle with rounded top corners only.
     pub fn fill_rounded_rect_top(self: *const Surface, rect: Rect, radius_in: i32, color: Color) void {
 

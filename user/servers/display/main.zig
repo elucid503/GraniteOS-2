@@ -39,15 +39,27 @@ const page_size = 4096;
 
 // Theme
 
-const theme = .{
+const CompositorTheme = struct {
+
+    wallpaper: gfx.Color,
+    title_focused: gfx.Color,
+    title_blurred: gfx.Color,
+    chrome: gfx.Color,
+    title_font_size: u32,
+
+};
+
+var theme = CompositorTheme{
 
     .wallpaper = gfx.rgb(22, 22, 22),
     .title_focused = gfx.rgb(72, 72, 72),
     .title_blurred = gfx.rgb(56, 56, 56),
     .chrome = gfx.rgb(220, 220, 220),
-    .title_font_size = @as(u32, 13),
+    .title_font_size = 13,
 
 };
+
+var active_cursor: lib.cursor.Kind = .pointer;
 
 var title_font: ?lib.ttf.Face = null;
 
@@ -157,6 +169,8 @@ fn run() !void {
 
     try acquire_display();
     try load_font();
+    load_compositor_theme();
+    upload_cursor(.pointer) catch {};
 
     // Flint already registered "window" against this endpoint; clients queue here until the loop starts.
 
@@ -200,6 +214,87 @@ fn run() !void {
 
 }
 
+fn load_compositor_theme() void {
+
+    lib.prefs.refresh();
+
+    const chrome = lib.prefs.chrome();
+
+    theme.wallpaper = chrome.wallpaper;
+    theme.title_focused = chrome.title_focused;
+    theme.title_blurred = chrome.title_blurred;
+    theme.chrome = chrome.chrome;
+
+}
+
+fn broadcast_prefs_changed() void {
+
+    for (&sessions.slots) |*slot| {
+
+        if (!slot.used or slot.base == 0) continue;
+
+        const ring = events.Ring.open(slot.base);
+
+        if (ring.push(.{
+
+            .kind = events.kind_prefs_changed,
+            .code = 0,
+            .window = 0,
+
+            .x = 0,
+            .y = 0,
+
+            .value = 0,
+
+        })) {
+
+            sys.notify(slot.extra.notification, proto.window.ring_bit) catch {};
+
+        }
+
+    }
+
+}
+
+fn notify_prefs_changed() i64 {
+
+    load_compositor_theme();
+    broadcast_prefs_changed();
+    add_damage(screen_bounds());
+
+    return 0;
+
+}
+
+fn set_client_cursor(kind_word: u64) i64 {
+
+    if (kind_word > @intFromEnum(lib.cursor.Kind.selector)) return -7;
+
+    apply_cursor(@enumFromInt(@as(u8, @truncate(kind_word))));
+
+    return 0;
+
+}
+
+fn update_chrome_cursor() void {
+
+    const hit = manager.hit_test(pointer_x, pointer_y) orelse {
+
+        apply_cursor(.pointer);
+        return;
+
+    };
+
+    switch (hit.region) {
+
+        .close => apply_cursor(.clicker),
+        .title, .resize => apply_cursor(.pointer),
+        .content => {},
+
+    }
+
+}
+
 fn load_font() !void {
 
     const length: usize = @intCast(lib.start.word(3));
@@ -231,7 +326,7 @@ fn startup_worker() callconv(.c) noreturn {
     attach_input() catch exit_thread();
 
     input_attached = true;
-    upload_cursor() catch {};
+    upload_cursor(active_cursor) catch {};
     move_cursor();
 
     exit_thread();
@@ -317,33 +412,17 @@ fn build_back_buffer() !void {
 
 }
 
-// The classic arrow, rasterized into a 64x64 ARGB Region for the device's cursor plane.
+fn apply_cursor(kind: lib.cursor.Kind) void {
 
-const arrow = [_][]const u8{
+    if (kind == active_cursor) return;
 
-    "X           ",
-    "XX          ",
-    "X.X         ",
-    "X..X        ",
-    "X...X       ",
-    "X....X      ",
-    "X.....X     ",
-    "X......X    ",
-    "X.......X   ",
-    "X........X  ",
-    "X.....XXXXX ",
-    "X..X..X     ",
-    "X.X X..X    ",
-    "XX  X..X    ",
-    "X    X..X   ",
-    "     X..X   ",
-    "      X..X  ",
-    "      X..X  ",
-    "       XX   ",
+    active_cursor = kind;
 
-};
+    upload_cursor(kind) catch {};
 
-fn upload_cursor() !void {
+}
+
+fn upload_cursor(kind: lib.cursor.Kind) !void {
 
     const side = proto.display.cursor_size;
     const bytes = side * side * 4;
@@ -352,28 +431,17 @@ fn upload_cursor() !void {
     const base = try sys.map(cap.self_space, region, 0, sys.read | sys.write);
     const pixels: [*]u32 = @ptrFromInt(base);
 
-    @memset(pixels[0 .. side * side], 0);
-
-    for (arrow, 0..) |row, y| {
-
-        for (row, 0..) |cell, x| {
-
-            pixels[y * side + x] = switch (cell) {
-
-                'X' => 0xff00_0000,
-                '.' => 0xffff_ffff,
-
-                else => 0,
-
-            };
-
-        }
-
-    }
+    lib.cursor.paint(side, kind, pixels);
 
     sys.unmap(cap.self_space, base) catch {};
 
-    _ = try ipc.request(cap.compositor.display, proto.display.set_cursor, &.{0}, &.{
+    const hot = lib.cursor.hot_spot(kind);
+
+    _ = try ipc.request(cap.compositor.display, proto.display.set_cursor, &.{
+
+        lib.window.pack_pair(hot.x, hot.y),
+
+    }, &.{
 
         .{ .handle = region, .move = true },
 
@@ -403,6 +471,8 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.window.minimize => minimize_window(in.data[1]),
         proto.window.restore => restore_window(in.data[1]),
         proto.window.subscribe_list => subscribe_list(badge, in, out),
+        proto.window.notify_prefs => notify_prefs_changed(),
+        proto.window.set_cursor => set_client_cursor(in.data[1]),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
 
@@ -756,12 +826,13 @@ fn minimize_window(id: u64) i64 {
 fn restore_window(id: u64) i64 {
 
     const window = manager.by_id(@intCast(id)) orelse return -7;
+    const previous = manager.focus;
 
     if (manager.restore(window.id)) |shown| {
 
         add_damage(shown);
         publish_list();
-        notify_focus(0, window.id);
+        notify_focus(previous, window.id);
 
     }
 
@@ -872,6 +943,8 @@ fn drain_input() void {
 }
 
 fn handle_pointer_move() void {
+
+    update_chrome_cursor();
 
     if (resize_id != 0) {
 
@@ -1223,7 +1296,7 @@ fn handle_mode_change() void {
     add_damage(screen_bounds());
     composite() catch {};
 
-    upload_cursor() catch {};
+    upload_cursor(active_cursor) catch {};
     move_cursor();
 
 }
@@ -1335,7 +1408,7 @@ fn draw_window(window: *Window, clip: Rect) void {
 
         const title_color = if (manager.focus == window.id) theme.title_focused else theme.title_blurred;
 
-        back.fill_rounded_rect_top(title_bar, manager_module.corner_radius, title_color);
+        back.fill_rect(title_bar, title_color);
         draw_title_text(window, title_bar);
         draw_close_button(window.close_button());
 
@@ -1356,12 +1429,7 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     back.blit(visible.x, visible.y, &surface, visible.translated(-content.x, -content.y));
 
-    if (window.decorated()) {
-
-        back.mask_rounded_rect_bottom_smooth(window.frame(), manager_module.corner_radius, theme.wallpaper);
-        draw_resize_grip(window);
-
-    }
+    if (window.decorated()) draw_resize_grip(window);
 
 }
 

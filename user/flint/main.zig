@@ -56,9 +56,9 @@ const display_id: u64 = 6;
 const input_id: u64 = 7;
 const compositor_id: u64 = 8;
 const welcome_id: u64 = 9;
-const demo_id: u64 = 10;
 const launcher_id: u64 = 11;
 const taskbar_id: u64 = 12;
+const context_id: u64 = 13;
 
 // The filesystem attaches its block session under this badge; badge 0 stays the shared console/logging session.
 
@@ -646,6 +646,12 @@ fn spawn_taskbar() !void {
 
 }
 
+fn spawn_context() !void {
+
+    try spawn_gui_program("context", context_id);
+
+}
+
 fn supervise() noreturn {
 
     var message = ipc.Message.zeroed;
@@ -745,13 +751,24 @@ fn restart(who: u64) !void {
 
         welcome_id => {
 
-            if (gpu_device != null) try spawn_taskbar();
+            if (gpu_device != null) {
+
+                try spawn_taskbar();
+                try spawn_context();
+
+            }
 
         },
 
         taskbar_id => {
 
             if (gpu_device != null) try spawn_taskbar();
+
+        },
+
+        context_id => {
+
+            if (gpu_device != null) try spawn_context();
 
         },
 

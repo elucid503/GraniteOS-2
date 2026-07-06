@@ -93,3 +93,29 @@ pub const memory =
     \\<line x1="12" y1="12" x2="18" y2="17"/>
     \\</svg>
 ;
+
+// Lucide mouse-pointer-2 — default arrow cursor.
+pub const pointer =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M4 4l7 16 2-7 7-2z"/>
+    \\</svg>
+;
+
+// Lucide hand — open hand for clickable targets.
+pub const hand =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/>
+    \\<path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/>
+    \\<path d="M10 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/>
+    \\<path d="M6 10V4a2 2 0 0 0-2-2"/>
+    \\<path d="M18 11v2a8 8 0 0 1-8 8"/>
+    \\<path d="M6 10v10"/>
+    \\</svg>
+;
+
+// Single caret line for text fields.
+pub const text_cursor =
+    \\<svg viewBox="0 0 24 24">
+    \\<line x1="12" y1="4" x2="12" y2="20"/>
+    \\</svg>
+;
