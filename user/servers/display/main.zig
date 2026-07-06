@@ -32,15 +32,17 @@ const input_bit: u64 = 1 << 0;
 const display_bit: u64 = 1 << 1;
 
 const input_ring_capacity: u32 = 512;
+const worker_stack_pages = 16;
+const page_size = 4096;
 
 // Theme
 
 const color_wallpaper = gfx.rgb(30, 33, 42);
 const color_border = gfx.rgb(16, 17, 22);
-const color_title_focused = gfx.rgb(64, 106, 190);
-const color_title_blurred = gfx.rgb(52, 56, 68);
+const color_title_focused = gfx.rgb(118, 122, 130);
+const color_title_blurred = gfx.rgb(52, 54, 58);
 const color_title_text = gfx.rgb(240, 243, 248);
-const color_close = gfx.rgb(178, 72, 72);
+const color_close = gfx.rgb(112, 112, 118);
 
 var screen_width: u32 = 0;
 var screen_height: u32 = 0;
@@ -90,6 +92,7 @@ var sessions: Sessions = .{};
 var input_ring: events.Ring = undefined;
 var pointer_x: i32 = 0;
 var pointer_y: i32 = 0;
+var input_attached = false;
 
 var drag_id: u32 = 0;
 var drag_dx: i32 = 0;
@@ -113,8 +116,6 @@ fn run() !void {
 
     try load_font();
     try acquire_display();
-    try attach_input();
-    try upload_cursor();
 
     // Flint already registered "window" against this endpoint; clients queue here until the loop starts.
 
@@ -128,6 +129,8 @@ fn run() !void {
     add_damage(screen_bounds());
     try composite();
 
+    start_startup_worker() catch {};
+
     var in = Message.zeroed;
 
     while (true) {
@@ -138,7 +141,7 @@ fn run() !void {
 
             const bits = in.data[0];
 
-            if (bits & input_bit != 0) drain_input();
+            if (input_attached and bits & input_bit != 0) drain_input();
             if (bits & display_bit != 0) handle_mode_change();
 
         } else {
@@ -157,6 +160,34 @@ fn run() !void {
 }
 
 // Startup wiring
+
+fn start_startup_worker() !void {
+
+    const stack = try sys.create(.region, worker_stack_pages * page_size, cap.memory);
+    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
+    const thread = try sys.create_thread(@intFromPtr(&startup_worker), base + worker_stack_pages * page_size);
+
+    try sys.start(thread);
+
+}
+
+fn startup_worker() callconv(.c) noreturn {
+
+    attach_input() catch exit_thread();
+
+    input_attached = true;
+    upload_cursor() catch {};
+    move_cursor();
+
+    exit_thread();
+
+}
+
+fn exit_thread() noreturn {
+
+    while (true) sys.close(cap.self_thread) catch {};
+
+}
 
 fn load_font() !void {
 
@@ -841,6 +872,9 @@ fn handle_mode_change() void {
 
     add_damage(screen_bounds());
     composite() catch {};
+
+    upload_cursor() catch {};
+    move_cursor();
 
 }
 

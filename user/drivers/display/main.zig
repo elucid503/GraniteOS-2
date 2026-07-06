@@ -285,7 +285,7 @@ const cursorq = 1;
 const cursor_resource: u32 = 1;
 
 const notification_bit: u64 = 1;
-const submit_poll_limit = 1_000_000;
+const cursor_submit_poll_limit = 1_000_000;
 
 var regs: usize = 0;
 var version: u32 = 0;
@@ -675,6 +675,8 @@ fn push_damage(x: u32, y: u32, w: u32, h: u32) !void {
 
     _ = .{ x, y, w, h };
 
+    if (!host_display_enabled) return;
+
     barrier();
 
     // The scanout backing is guest RAM the compositor maps and writes; sync it to the host with transfer
@@ -715,6 +717,12 @@ fn attach_events(in: *const Message) i64 {
     event_notification = in.handles[0].handle;
     event_bits = if (in.data[1] != 0) in.data[1] else proto.display.mode_bit;
 
+    if (event_notification) |notification| {
+
+        sys.notify(notification, event_bits) catch {};
+
+    }
+
     return 0;
 
 }
@@ -725,6 +733,14 @@ fn attach_events(in: *const Message) i64 {
 fn set_cursor(in: *const Message) i64 {
 
     if (in.handle_count < 1) return -7;
+
+    if (!host_display_enabled) {
+
+        sys.close(in.handles[0].handle) catch {};
+
+        return 0;
+
+    }
 
     const image = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read) catch return -7;
 
@@ -802,6 +818,7 @@ fn set_cursor(in: *const Message) i64 {
 
 fn move_cursor(position: u64) i64 {
 
+    if (!host_display_enabled) return 0;
     if (!cursor_ready) return -7;
 
     _ = command_on(cursorq, UpdateCursor, .{
@@ -855,32 +872,7 @@ fn drain_display_config() void {
 
     display_config_pending = false;
 
-    _ = apply_display_config();
-
-}
-
-fn apply_display_config() bool {
-
-    const events = reg_read(config_events_read);
-
-    if (events & event_display == 0) return false;
-
-    reg_write(config_events_clear, event_display);
-
-    host_display_enabled = true;
-
-    if (fb_resource == 0) return false;
-
-    // Reattach the existing scanout; the compositor will repaint and flush after the notification.
-    rewire_scanout() catch {};
-
-    if (event_notification) |notification| {
-
-        sys.notify(notification, event_bits) catch {};
-
-    }
-
-    return true;
+    _ = apply_display_resize();
 
 }
 
@@ -890,17 +882,24 @@ fn apply_display_resize() bool {
 
     if (events & event_display == 0) return false;
 
-    reg_write(config_events_clear, event_display);
-
     const size = query_display() catch return false;
 
-    if (!host_display_enabled) return false;
+    if (!host_display_enabled) {
+
+        display_config_pending = true;
+
+        return false;
+
+    }
+
+    reg_write(config_events_clear, event_display);
 
     if (size.width == mode_width and size.height == mode_height) {
 
         if (fb_resource == 0) return false;
 
         rewire_scanout() catch {};
+        push_damage(0, 0, mode_width, mode_height) catch {};
 
     } else {
 
@@ -973,7 +972,7 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
 
     var polls: usize = 0;
 
-    while (polls < submit_poll_limit) : (polls += 1) {
+    while (true) {
 
         barrier();
 
@@ -992,9 +991,15 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
 
         sys.yield();
 
-    }
+        if (queue == cursorq) {
 
-    return error.Gone;
+            polls += 1;
+
+            if (polls >= cursor_submit_poll_limit) return error.Gone;
+
+        }
+
+    }
 
 }
 

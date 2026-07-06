@@ -14,11 +14,11 @@ comptime {
 
 }
 
-const color_top = gfx.rgb(18, 22, 40);
-const color_bottom = gfx.rgb(52, 32, 76);
+const color_top = gfx.rgb(12, 12, 14);
+const color_bottom = gfx.rgb(42, 42, 46);
 const color_title = gfx.rgb(244, 246, 252);
-const color_subtitle = gfx.rgb(168, 176, 196);
-const color_accent = gfx.rgb(96, 140, 230);
+const color_subtitle = gfx.rgb(178, 178, 184);
+const color_accent = gfx.rgb(214, 214, 220);
 
 var title_font: ?lib.font.Font = null;
 var body_font: ?lib.font.Font = null;
