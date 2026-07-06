@@ -285,6 +285,7 @@ const cursorq = 1;
 const cursor_resource: u32 = 1;
 
 const notification_bit: u64 = 1;
+const submit_poll_limit = 1_000_000;
 
 var regs: usize = 0;
 var version: u32 = 0;
@@ -340,6 +341,10 @@ fn run() !void {
     const window = try sys.map(cap.self_space, cap.driver.device, 0, sys.read | sys.write);
     regs = window + @as(usize, @intCast(lib.start.word(3)));
 
+    device_wake = try sys.create(.notification, 0, 0);
+    try sys.bind(cap.driver.interrupt, device_wake, notification_bit);
+    try sys.configure(cap.self_thread, .bound_notification, device_wake);
+
     const dma = try sys.create_dma(dma_pages * page_size, cap.driver.dma);
     dma_base = try sys.map(cap.self_space, dma.region, 0, sys.read | sys.write);
     dma_physical = dma.physical_base;
@@ -349,10 +354,6 @@ fn run() !void {
 
     try init_device();
     try init_scanout();
-
-    device_wake = try sys.create(.notification, 0, 0);
-    try sys.bind(cap.driver.interrupt, device_wake, notification_bit);
-    try sys.configure(cap.self_thread, .bound_notification, device_wake);
 
     lib.log.fmt("Display: virtio-gpu driver ... Loaded ({d}x{d})\n", .{ mode_width, mode_height });
 
@@ -974,7 +975,9 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
 
     const used: *volatile Used = @ptrFromInt(queue_base + used_offset);
 
-    while (true) {
+    var polls: usize = 0;
+
+    while (polls < submit_poll_limit) : (polls += 1) {
 
         barrier();
 
@@ -989,17 +992,13 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
 
         acknowledge_used();
 
-        if (used.idx == last_used[queue]) {
+        note_display_config_event();
 
-            _ = sys.wait(device_wake) catch {};
-
-            note_display_config_event();
-
-            sys.yield();
-
-        }
+        sys.yield();
 
     }
+
+    return error.Gone;
 
 }
 

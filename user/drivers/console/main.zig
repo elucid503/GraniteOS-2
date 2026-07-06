@@ -39,6 +39,7 @@ const rx_bit: u64 = 1; // the notification bit the interrupt is bound to
 
 var uart: usize = 0;
 var rx_notification: Handle = 0;
+var uart_lock: ipc.Lock = .{};
 
 // Per-client shared buffers (05-server-protocol.md): attached once, then reused by every read/write. Sessions are keyed
 // by the caller's badge — small ones granted by Flint/Marble, larger ones minted per lookup by the name service.
@@ -91,25 +92,13 @@ fn run() !void {
 
     put_text("Console: PL011 driver ... Loaded\n");
 
-    // The canonical loop, inlined because `read` blocks inside its handler on the RX notification.
-
-    var in = Message.zeroed;
-
-    while (true) {
-
-        const badge = try sys.receive(cap.driver.endpoint, &in);
-        var out = Message.zeroed;
-        out.data[0] = @bitCast(dispatch(badge, &in, &out));
-
-        try sys.reply(in.reply, &out);
-
-    }
+    ipc.serve_pool(cap.driver.endpoint, 2, dispatch);
 
 }
 
-fn dispatch(badge: u64, in: *const Message, out: *Message) i64 {
+fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
 
-    return switch (in.data[0]) {
+    return switch (method) {
 
         proto.identify => identify(out),
         proto.stream.read => read(badge, in.data[1], in.data[2]),
@@ -117,7 +106,7 @@ fn dispatch(badge: u64, in: *const Message, out: *Message) i64 {
         proto.stream.set_mode => set_mode(badge, in.data[1]),
         proto.stream.attach => attach(badge, in),
 
-        else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
+        else => -7,
 
     };
 
@@ -167,9 +156,12 @@ fn read_cooked(span: []u8) i64 {
 
     while (true) {
 
-        while (receive_pending()) {
+        uart_lock.acquire();
+
+        if (receive_pending()) {
 
             const byte: u8 = @truncate(register(data).*);
+            uart_lock.release();
 
             if (byte == '\r' or byte == '\n') {
 
@@ -202,7 +194,11 @@ fn read_cooked(span: []u8) i64 {
 
             }
 
+            continue;
+
         }
+
+        uart_lock.release();
 
         _ = sys.acknowledge(cap.driver.interrupt) catch {};
         _ = sys.wait(rx_notification) catch return @intCast(length);
@@ -219,15 +215,20 @@ fn read_raw(span: []u8) i64 {
 
     while (true) {
 
-        while (receive_pending()) {
+        uart_lock.acquire();
+
+        if (receive_pending()) {
 
             span[0] = @truncate(register(data).*);
+            uart_lock.release();
 
             _ = sys.acknowledge(cap.driver.interrupt) catch {};
 
             return 1;
 
         }
+
+        uart_lock.release();
 
         _ = sys.acknowledge(cap.driver.interrupt) catch {};
         _ = sys.wait(rx_notification) catch return 0;
@@ -311,6 +312,8 @@ fn put_text(text: []const u8) void {
 
 fn put_byte(byte: u8) void {
 
+    uart_lock.acquire();
+
     // PL011 TX is polled; yield while the host chardev drains - a tight spin here blocks the console
     // server's reply and every caller waiting on stream.write (including drivers mid-startup).
 
@@ -321,6 +324,8 @@ fn put_byte(byte: u8) void {
     }
 
     register(data).* = byte;
+
+    uart_lock.release();
 
 }
 

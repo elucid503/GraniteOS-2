@@ -125,6 +125,12 @@ fn run(arg: u64) !void {
 
     try spawn_marble();
 
+    start_gui() catch {};
+
+}
+
+fn start_gui() !void {
+
     if (gpu_device != null) {
 
         try spawn_display();

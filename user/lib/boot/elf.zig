@@ -11,7 +11,7 @@ const Handle = cap.Handle;
 const Error = sys.Error;
 
 const page_size = 4096;
-const stack_pages = 64;
+const stack_pages = 128;
 const stack_base = 0x80_1000_0000;
 
 const e_entry = 0x18;

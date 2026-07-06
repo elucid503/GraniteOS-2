@@ -449,6 +449,8 @@ fn set_title(badge: u64, in: *const Message) i64 {
 
     add_damage(window.frame());
 
+    composite() catch return -7;
+
     return 0;
 
 }
@@ -476,6 +478,8 @@ fn destroy_window(badge: u64, id: u64) i64 {
         .value = 0,
 
     });
+
+    composite() catch return -7;
 
     return 0;
 
