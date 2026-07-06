@@ -44,6 +44,7 @@ const Number = enum(u64) {
     copy,
     inspect,
     set_name,
+    sleep,
 
 };
 
@@ -136,6 +137,14 @@ pub fn start(thread: Handle) Error!void {
 pub fn yield() void {
 
     _ = invoke(.yield, 0, 0, 0, 0, 0);
+
+}
+
+/// Block this thread for at least `ns` nanoseconds (the kernel wakes it off the generic timer). Unlike a yield loop
+/// it consumes no CPU while waiting, so it is how periodic user work (chart tickers, backoffs) should pace itself.
+pub fn sleep(ns: u64) void {
+
+    _ = invoke(.sleep, ns, 0, 0, 0, 0);
 
 }
 

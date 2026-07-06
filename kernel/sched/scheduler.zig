@@ -60,6 +60,10 @@ pub const Core = struct {
     // The thread being switched away from; whoever runs next on this core publishes its saved context.
     outgoing: ?*Thread,
 
+    // Threads parked in a timed `sleep`, woken by this core's tick once their deadline passes. Only ever touched by
+    // this core with interrupts off (sleep on the running thread, or the tick), so it needs no lock.
+    sleepers: ?*Thread,
+
     online: bool,
 
 };
@@ -96,6 +100,8 @@ pub fn init(count: usize) void {
 
             .lock = .{},
             .outgoing = null,
+
+            .sleepers = null,
 
             .online = index == 0,
 
@@ -285,6 +291,7 @@ fn next_admit_core() *Core {
 /// then return the thread that should run next (or null for idle). Pure policy - no switch.
 pub fn on_tick(core: *Core, now_ns: u64) ?*Thread {
 
+    wake_sleepers(core, now_ns);
     boost(core, now_ns);
 
     if (core.current) |current| {
@@ -432,6 +439,77 @@ pub fn yield() void {
     core.current = null;
 
     reschedule(core, current, pick_next(core), now, .pending);
+
+}
+
+/// Syscall `sleep`: park the current thread until `now + ns`, then it returns to its syscall. Self-contained like
+/// `yield` - it stages the thread onto its core's sleeper list, which `on_tick` drains once the deadline passes.
+/// This is what lets user code wait on time (a chart ticker, a respawn backoff) without ever busy-spinning.
+pub fn sleep(ns: u64) void {
+
+    if (ns == 0) return yield();
+
+    const saved = arch.disable_interrupts();
+    defer arch.restore_interrupts(saved);
+
+    const core = current_core();
+    const current = core.current orelse return;
+    const now = arch.now_ns();
+
+    current.wake_at_ns = now + ns;
+    current.state = .blocked_sleep;
+
+    defer_dispatch(current);
+
+    current.sleep_next = core.sleepers;
+    core.sleepers = current;
+
+    core.current = null;
+
+    reschedule(core, current, pick_next(core), now, .pending);
+
+}
+
+// Move every sleeper whose deadline has passed back onto the run queues. Runs at the top of `on_tick`, so a woken
+// sleeper is immediately eligible to be picked.
+
+fn wake_sleepers(core: *Core, now_ns: u64) void {
+
+    var link = &core.sleepers;
+
+    while (link.*) |thread| {
+
+        if (thread.wake_at_ns <= now_ns) {
+
+            link.* = thread.sleep_next;
+            thread.sleep_next = null;
+
+            enqueue(core, thread);
+
+        } else {
+
+            link = &thread.sleep_next;
+
+        }
+
+    }
+
+}
+
+// The soonest deadline among this core's sleepers, so an otherwise-idle core still arms a timer to wake them.
+
+fn earliest_sleeper(core: *Core) ?u64 {
+
+    var soonest: ?u64 = null;
+    var thread = core.sleepers;
+
+    while (thread) |sleeper| : (thread = sleeper.sleep_next) {
+
+        if (soonest == null or sleeper.wake_at_ns < soonest.?) soonest = sleeper.wake_at_ns;
+
+    }
+
+    return soonest;
 
 }
 
@@ -702,11 +780,25 @@ fn idle_deadline(core: *Core, now_ns: u64) u64 {
 
 }
 
+// The minimum a sleep deadline is armed to, so an already-expired sleeper fires promptly rather than arming zero.
+const min_sleep_arm_ns: u64 = 50_000;
+
 fn arm_idle_timer(core: *Core, now_ns: u64) void {
+
+    const sleeper_delay = if (earliest_sleeper(core)) |at|
+        @max(min_sleep_arm_ns, if (at > now_ns) at - now_ns else 0)
+    else
+        null;
 
     if (system_has_runnable_work()) {
 
-        arch.arm_deadline(idle_deadline(core, now_ns));
+        const deadline = idle_deadline(core, now_ns);
+
+        arch.arm_deadline(if (sleeper_delay) |delay| @min(deadline, delay) else deadline);
+
+    } else if (sleeper_delay) |delay| {
+
+        arch.arm_deadline(delay);
 
     } else {
 
@@ -960,6 +1052,34 @@ test "blocking and waking keeps the level" {
 
     try testing.expectEqual(@as(u8, 2), sleeper.scheduling.level);
     try testing.expectEqual(&sleeper, pick_next(core).?);
+
+}
+
+test "sleepers wake onto the run queue only once their deadline passes" {
+
+    init(1);
+
+    const core = current_core();
+
+    var early = test_thread();
+    var late = test_thread();
+
+    early.wake_at_ns = 100;
+    late.wake_at_ns = 1000;
+
+    early.sleep_next = null;
+    core.sleepers = &early;
+    late.sleep_next = &early;
+    core.sleepers = &late;
+
+    wake_sleepers(core, 200);
+
+    // `early` is now runnable; `late` stays parked until its own deadline.
+
+    try testing.expectEqual(&early, pick_next(core).?);
+    try testing.expectEqual(@as(?*Thread, null), pick_next(core));
+    try testing.expectEqual(&late, core.sleepers.?);
+    try testing.expectEqual(@as(u64, 1000), earliest_sleeper(core).?);
 
 }
 

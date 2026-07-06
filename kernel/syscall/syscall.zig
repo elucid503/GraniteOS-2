@@ -51,6 +51,7 @@ pub const Number = enum(u64) {
     copy,
     inspect,
     set_name,
+    sleep,
 
 };
 
@@ -119,6 +120,7 @@ fn run(frame: *SyscallFrame) Error!u64 {
         .copy => copy(a0, a1),
         .inspect => inspect_call(a0, a1, a2),
         .set_name => set_name(a0, a1),
+        .sleep => sleep(a0),
 
     };
 
@@ -300,6 +302,14 @@ fn start(raw: u64) Error!u64 {
 fn yield() Error!u64 {
 
     scheduler.yield();
+
+    return 0;
+
+}
+
+fn sleep(ns: u64) Error!u64 {
+
+    scheduler.sleep(ns);
 
     return 0;
 

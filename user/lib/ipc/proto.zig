@@ -188,15 +188,48 @@ pub const window = struct {
     pub const destroy: u16 = 4; // request: window id                              reply: status
     pub const attach_events: u16 = 5; // request: ring capacity in events, ring Region in handle 0, Notification in handle 1   reply: status
     pub const resize: u16 = 6; // request: window id, (w<<32)|h                   reply: (w<<32)|h, stride bytes, surface Region in handle 0
+    pub const list: u16 = 7; // request: info Region in handle 0 (attached once)   reply: window count, records written to the info buffer
+    pub const activate: u16 = 8; // request: window id                              reply: status (focus and raise, for the taskbar)
 
     pub const flag_undecorated: u64 = 1; // no title bar or border
     pub const flag_fullscreen: u64 = 2; // sized to the screen, tracks mode changes
+    pub const flag_panel: u64 = 4; // an undecorated dock pinned to the screen bottom, always above ordinary windows
 
     // Titles ride inline in message words 3-5, NUL-padded.
     pub const max_title: usize = 24;
 
+    // The compositor's window-table capacity, so a `list` client can size its info buffer (mirrors the manager).
+    pub const max_windows: usize = 16;
+
     // The Notification bit the compositor signals when it pushes into a client's event ring.
     pub const ring_bit: u64 = 1;
+
+    /// One record the compositor writes into a `list` client's info buffer, so the taskbar can show open windows.
+    pub const WindowInfo = extern struct {
+
+        id: u32,
+        flags: u32,
+        focused: u32,
+        title_len: u32,
+
+        title: [max_title]u8,
+
+    };
+
+};
+
+// Launcher interface (the desktop program spawner): GUI clients ask it to start a bundled program by name, so a
+// taskbar menu can launch apps without holding any spawn authority of its own. Names ride inline like the name
+// service's, in words 1-4.
+
+pub const launch = struct {
+
+    pub const interface_id: u32 = 0x4c4e_4348; // "LNCH"
+    pub const version: u32 = 1;
+
+    pub const max_length: usize = 32;
+
+    pub const spawn: u16 = 1; // request: name length, name in words 1-4          reply: status
 
 };
 

@@ -43,7 +43,13 @@ pub const Window = struct {
 
     pub fn decorated(self: *const Window) bool {
 
-        return self.flags & (proto.window.flag_undecorated | proto.window.flag_fullscreen) == 0;
+        return self.flags & (proto.window.flag_undecorated | proto.window.flag_fullscreen | proto.window.flag_panel) == 0;
+
+    }
+
+    pub fn is_panel(self: *const Window) bool {
+
+        return self.flags & proto.window.flag_panel != 0;
 
     }
 
@@ -196,6 +202,11 @@ pub const Manager = struct {
             window.width = self.screen_width;
             window.height = self.screen_height;
 
+        } else if (flags & proto.window.flag_panel != 0) {
+
+            window.width = self.screen_width;
+            window.height = @max(min_content, height);
+
         } else {
 
             window.width = @max(min_content, width);
@@ -212,11 +223,75 @@ pub const Manager = struct {
         window.set_title(title);
         self.clamp(window);
 
-        self.order[self.count] = slot;
-        self.count += 1;
+        self.insert(slot, window.is_panel());
         self.focus = id;
 
         return window;
+
+    }
+
+    // Panels (the taskbar) stay above every ordinary window, so `order` keeps them in one block at the top; an
+    // ordinary window is inserted (and raised) just beneath the lowest panel, never over it.
+
+    fn insert(self: *Manager, slot: usize, panel: bool) void {
+
+        const position = if (panel) self.count else self.count - self.trailing_panels();
+
+        var index = self.count;
+
+        while (index > position) : (index -= 1) {
+
+            self.order[index] = self.order[index - 1];
+
+        }
+
+        self.order[position] = slot;
+        self.count += 1;
+
+    }
+
+    fn trailing_panels(self: *Manager) usize {
+
+        var found: usize = 0;
+
+        while (found < self.count and self.windows[self.order[self.count - 1 - found]].is_panel()) {
+
+            found += 1;
+
+        }
+
+        return found;
+
+    }
+
+    /// Fill `out` with a record per ordinary (non-panel) window, bottom to top, for the taskbar; returns the count.
+    pub fn list_info(self: *Manager, out: []proto.window.WindowInfo) usize {
+
+        var written: usize = 0;
+        var index: usize = 0;
+
+        while (index < self.count and written < out.len) : (index += 1) {
+
+            const window = &self.windows[self.order[index]];
+
+            if (window.is_panel()) continue;
+
+            out[written] = .{
+
+                .id = window.id,
+                .flags = @truncate(window.flags),
+                .focused = @intFromBool(self.focus == window.id),
+                .title_len = @intCast(window.title_length),
+
+                .title = window.title,
+
+            };
+
+            written += 1;
+
+        }
+
+        return written;
 
     }
 
@@ -279,6 +354,7 @@ pub const Manager = struct {
 
         const index = self.order_index(id) orelse return;
         const slot = self.order[index];
+        const panel = self.windows[slot].is_panel();
 
         var position = index;
 
@@ -288,7 +364,8 @@ pub const Manager = struct {
 
         }
 
-        self.order[self.count - 1] = slot;
+        self.count -= 1;
+        self.insert(slot, panel);
 
     }
 
@@ -370,6 +447,18 @@ pub const Manager = struct {
 
             window.x = 0;
             window.y = 0;
+
+            return;
+
+        }
+
+        // A panel is pinned full-width to the screen bottom; it never moves off it.
+
+        if (window.is_panel()) {
+
+            window.width = self.screen_width;
+            window.x = 0;
+            window.y = @max(0, @as(i32, @intCast(self.screen_height)) - @as(i32, @intCast(window.height)));
 
             return;
 
@@ -537,5 +626,63 @@ test "the table refuses a seventeenth window" {
     }
 
     try testing.expectEqual(@as(?*Window, null), manager.create(1, 50, 50, 0, "overflow"));
+
+}
+
+test "a panel docks to the bottom and stays above ordinary windows" {
+
+    var manager = test_manager();
+
+    const panel = manager.create(1, 0, 44, proto.window.flag_panel, "taskbar").?;
+
+    try testing.expectEqual(@as(u32, 640), panel.width);
+    try testing.expectEqual(@as(i32, 480 - 44), panel.y);
+    try testing.expect(!panel.decorated());
+
+    const app = manager.create(1, 200, 200, 0, "app").?;
+
+    // The panel is created first but must remain the topmost window.
+
+    try testing.expectEqual(panel.id, manager.stacked(manager.count - 1).id);
+    try testing.expectEqual(app.id, manager.stacked(0).id);
+
+    // Raising the app keeps it beneath the panel.
+
+    manager.raise(app.id);
+
+    try testing.expectEqual(panel.id, manager.stacked(manager.count - 1).id);
+    try testing.expectEqual(app.id, manager.stacked(0).id);
+
+}
+
+test "list_info reports ordinary windows and skips panels" {
+
+    var manager = test_manager();
+
+    _ = manager.create(1, 0, 44, proto.window.flag_panel, "taskbar").?;
+    const first = manager.create(1, 100, 100, 0, "first").?;
+    const second = manager.create(1, 100, 100, 0, "second").?;
+
+    var records: [max_windows]proto.window.WindowInfo = undefined;
+    const count = manager.list_info(&records);
+
+    try testing.expectEqual(@as(usize, 2), count);
+    try testing.expectEqual(first.id, records[0].id);
+    try testing.expectEqual(second.id, records[1].id);
+    try testing.expectEqual(@as(u32, 1), records[1].focused);
+    try testing.expectEqualStrings("second", records[1].title[0..records[1].title_len]);
+
+}
+
+test "panels reposition when the screen resizes" {
+
+    var manager = test_manager();
+
+    const panel = manager.create(1, 0, 40, proto.window.flag_panel, "taskbar").?;
+
+    manager.resize_screen(1024, 768);
+
+    try testing.expectEqual(@as(u32, 1024), panel.width);
+    try testing.expectEqual(@as(i32, 768 - 40), panel.y);
 
 }

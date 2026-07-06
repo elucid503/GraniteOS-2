@@ -16,6 +16,9 @@ const marble_budget = 16 * 1024 * 1024;
 // The compositor allocates the back buffer and every window surface, so its budget scales with the display.
 const compositor_budget = 64 * 1024 * 1024;
 
+// The launcher parents a memory authority for each GUI app it spawns, so its budget covers several open apps at once.
+const launcher_budget = 80 * 1024 * 1024;
+
 var bundle: lib.bundle.Bundle = undefined;
 var bundle_length: usize = 0;
 var bundle_offset: usize = 0;
@@ -29,6 +32,7 @@ var files_endpoint: Handle = 0;
 var display_endpoint: Handle = 0;
 var input_endpoint: Handle = 0;
 var window_endpoint: Handle = 0;
+var launcher_endpoint: Handle = 0;
 
 var console_uart: lib.dtb.Uart = undefined;
 var block_device: ?lib.dtb.Device = null;
@@ -52,6 +56,8 @@ const input_id: u64 = 7;
 const compositor_id: u64 = 8;
 const welcome_id: u64 = 9;
 const demo_id: u64 = 10;
+const launcher_id: u64 = 11;
+const taskbar_id: u64 = 12;
 
 // The filesystem attaches its block session under this badge; badge 0 stays the shared console/logging session.
 
@@ -105,6 +111,7 @@ fn run(arg: u64) !void {
     display_endpoint = try sys.create(.endpoint, 0, 0);
     input_endpoint = try sys.create(.endpoint, 0, 0);
     window_endpoint = try sys.create(.endpoint, 0, 0);
+    launcher_endpoint = try sys.create(.endpoint, 0, 0);
 
     try spawn_naming();
     try spawn_console();
@@ -148,6 +155,13 @@ fn start_gui() !void {
 
         try spawn_compositor();
         try lib.stream.register_with(naming_endpoint, "window", window_endpoint);
+
+        // The launcher server backs the taskbar's app menu; register it up front too so the menu resolves it
+        // immediately. The welcome screen is the splash - clicking it hands off to the persistent taskbar desktop.
+
+        try spawn_launcher();
+        try lib.stream.register_with(naming_endpoint, "launch", launcher_endpoint);
+
         try spawn_welcome();
 
     }
@@ -527,6 +541,44 @@ fn spawn_compositor() !void {
 
 }
 
+fn spawn_launcher() !void {
+
+    const image = bundle.find("launcher") orelse return error.NotFound;
+    const memory = try sys.create(.memory_authority, launcher_budget, cap.flint.memory);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
+    const report = try sys.copy(supervisor_endpoint, launcher_id);
+
+    // Layout per cap.launcher: the request endpoint in the stdio slots, then naming, its budget, startup, report, a
+    // console endpoint to pass on to GUI children, and the module bundle to load their images from.
+
+    const grants = [_]Handle{
+
+        launcher_endpoint,
+        launcher_endpoint,
+        launcher_endpoint,
+        naming_endpoint,
+        memory,
+        init_endpoint,
+        report,
+        console_endpoint,
+        cap.flint.module,
+
+    };
+
+    _ = try lib.elf.spawn_program(.{
+
+        .image = image,
+        .authority = memory,
+        .args = &.{"launcher"},
+        .grants = &grants,
+        .data3 = bundle_length,
+        .data4 = bundle_offset,
+        .data5 = machine_core_count,
+
+    });
+
+}
+
 fn spawn_gui_program(name: []const u8, id: u64) !void {
 
     const image = bundle.find(name) orelse return error.NotFound;
@@ -566,9 +618,9 @@ fn spawn_welcome() !void {
 
 }
 
-fn spawn_demo() !void {
+fn spawn_taskbar() !void {
 
-    try spawn_gui_program("demo", demo_id);
+    try spawn_gui_program("taskbar", taskbar_id);
 
 }
 
@@ -655,18 +707,29 @@ fn restart(who: u64) !void {
 
         },
 
-        // The GUI hand-off cycle: the welcome screen's exit is the click-through to the demo, and closing
-        // the demo returns to the welcome screen (08-roadmap.md M9).
+        launcher_id => {
 
-        welcome_id => {
+            if (gpu_device != null) {
 
-            if (gpu_device != null) try spawn_demo();
+                try spawn_launcher();
+                try lib.stream.register_with(naming_endpoint, "launch", launcher_endpoint);
+
+            }
 
         },
 
-        demo_id => {
+        // The welcome splash hands off to the taskbar on exit; the taskbar is the persistent desktop, so it is
+        // relaunched if it ever dies. The rest of the apps are user-launched through the launcher.
 
-            if (gpu_device != null) try spawn_welcome();
+        welcome_id => {
+
+            if (gpu_device != null) try spawn_taskbar();
+
+        },
+
+        taskbar_id => {
+
+            if (gpu_device != null) try spawn_taskbar();
 
         },
 

@@ -97,8 +97,13 @@ pub fn build(b: *std.Build) void {
     const display = user_program(b, target, optimize, user_lib, "granite-display.elf", "user/drivers/display/main.zig");
     const input = user_program(b, target, optimize, user_lib, "granite-input.elf", "user/servers/input/main.zig");
     const compositor = user_program(b, target, optimize, user_lib, "granite-compositor.elf", "user/servers/display/main.zig");
+    const launcher = user_program(b, target, optimize, user_lib, "granite-launcher.elf", "user/servers/launcher/main.zig");
     const welcome = user_program(b, target, optimize, user_lib, "granite-welcome.elf", "user/programs/gui/welcome.zig");
     const demo = user_program(b, target, optimize, user_lib, "granite-demo.elf", "user/programs/gui/demo.zig");
+    const taskbar = user_program(b, target, optimize, user_lib, "granite-taskbar.elf", "user/programs/gui/taskbar.zig");
+    const files_gui = user_program(b, target, optimize, user_lib, "granite-files.elf", "user/programs/gui/files.zig");
+    const status_gui = user_program(b, target, optimize, user_lib, "granite-statusgui.elf", "user/programs/gui/status.zig");
+    const shell_gui = user_program(b, target, optimize, user_lib, "granite-shell.elf", "user/programs/gui/shell.zig");
 
     const flatten = host_tool(b, "flatten", "tools/flatten.zig");
     const bundle_tool = host_tool(b, "bundle", "tools/bundle.zig");
@@ -138,12 +143,18 @@ pub fn build(b: *std.Build) void {
     add_artifact_module(bundle_run, "display", display);
     add_artifact_module(bundle_run, "input", input);
     add_artifact_module(bundle_run, "compositor", compositor);
+    add_artifact_module(bundle_run, "launcher", launcher);
     add_artifact_module(bundle_run, "welcome", welcome);
     add_artifact_module(bundle_run, "demo", demo);
+    add_artifact_module(bundle_run, "taskbar", taskbar);
+    add_artifact_module(bundle_run, "files", files_gui);
+    add_artifact_module(bundle_run, "status-gui", status_gui);
+    add_artifact_module(bundle_run, "shell", shell_gui);
 
     // GUI assets ride in the bundle as plain modules.
 
     add_module(bundle_run, "font-ttf", b.path("user/fonts/InterVariable.ttf"));
+    add_module(bundle_run, "font-console", b.path("user/fonts/spleen-8x16.psfu"));
 
     b.installArtifact(kernel);
     b.getInstallStep().dependOn(&b.addInstallBinFile(kernel_image, "granite-kernel.bin").step);

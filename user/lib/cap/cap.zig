@@ -122,3 +122,15 @@ pub const gui = struct {
     pub const bundle: Handle = reserved_grants;
 
 };
+
+// The launcher server (the desktop program spawner). Its request endpoint sits in the STDIN/OUT/ERR slots (like the
+// naming server); it holds a console endpoint to hand its GUI children as their tty, and the module bundle to load
+// program images from. Children it spawns get the plain `gui` layout above.
+
+pub const launcher = struct {
+
+    pub const endpoint: Handle = stdin; // spawn requests arrive here
+    pub const console: Handle = reserved_grants; // the console endpoint passed on to GUI children
+    pub const bundle: Handle = reserved_grants + 1; // read-only module bundle Region
+
+};

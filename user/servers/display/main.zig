@@ -39,7 +39,7 @@ const page_size = 4096;
 
 const theme = .{
 
-    .wallpaper = gfx.rgb(0, 0, 0),
+    .wallpaper = gfx.rgb(22, 24, 30),
     .title_focused = gfx.rgb(72, 72, 72),
     .title_blurred = gfx.rgb(56, 56, 56),
     .chrome = gfx.rgb(220, 220, 220),
@@ -83,6 +83,9 @@ var surfaces = Surfaces{};
 const ClientExtra = struct {
 
     notification: Handle = 0,
+
+    // The taskbar's window-list buffer, mapped once on its first `list` call and reused after.
+    info_base: usize = 0,
 
 };
 
@@ -354,6 +357,8 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.window.destroy => destroy_window(badge, in.data[1]),
         proto.window.attach_events => attach_events(badge, in),
         proto.window.resize => resize_window(badge, in, out),
+        proto.window.list => list_windows(badge, in, out),
+        proto.window.activate => activate_window(in.data[1]),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
 
@@ -562,6 +567,40 @@ fn resize_window(badge: u64, in: *const Message, out: *Message) i64 {
     out.data[3] = window.width * 4;
     out.handles[0] = .{ .handle = surfaces.region[slot], .move = false };
     out.handle_count = 1;
+
+    return 0;
+
+}
+
+// The taskbar attaches an info Region on its first call, then polls for the open-window list; the compositor is the
+// authority on what windows exist, so the bar reflects it exactly.
+
+fn list_windows(badge: u64, in: *const Message, out: *Message) i64 {
+
+    const session = sessions.find(badge) orelse return -7;
+
+    if (in.handle_count >= 1) {
+
+        session.extra.info_base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
+
+    }
+
+    if (session.extra.info_base == 0) return -7;
+
+    const records: [*]proto.window.WindowInfo = @ptrFromInt(session.extra.info_base);
+
+    out.data[1] = manager.list_info(records[0..manager_module.max_windows]);
+
+    return 0;
+
+}
+
+fn activate_window(id: u64) i64 {
+
+    const window = manager.by_id(@intCast(id)) orelse return -7;
+
+    focus_and_raise(window);
+    composite() catch return -7;
 
     return 0;
 

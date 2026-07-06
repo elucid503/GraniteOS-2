@@ -236,7 +236,35 @@ pub const Face = struct {
         return scale_metric(read_u16(self.hmtx, offset), px, self.units_per_em);
     }
 
+    // Text is drawn every frame, so glyph scan-conversion is cached: each (glyph, size) is rasterized to an 8-bit
+    // coverage bitmap once, then blitted. Only the compositor and desktop use this face, all at small sizes, so a
+    // modest direct-mapped-with-probing cache holds the whole working set; larger glyphs fall back to direct fill.
+
     fn draw_glyph(self: *const Face, surface: *const gfx.Surface, glyph: u16, pen_x: i32, baseline: i32, px: u32, color: gfx.Color) void {
+
+        if (px >= 6 and px <= cache_max_px) {
+
+            if (cached_glyph(self, glyph, px)) |slot| {
+
+                const entry = glyph_meta[slot];
+
+                if (entry.w != 0) {
+
+                    surface.blend_coverage(pen_x + entry.left, baseline + entry.top, glyph_coverage[slot][0 .. @as(u32, entry.w) * entry.h], entry.w, entry.h, color);
+
+                }
+
+                return;
+
+            }
+
+        }
+
+        self.draw_glyph_direct(surface, glyph, pen_x, baseline, px, color);
+
+    }
+
+    fn draw_glyph_direct(self: *const Face, surface: *const gfx.Surface, glyph: u16, pen_x: i32, baseline: i32, px: u32, color: gfx.Color) void {
         var segments: [max_segments]Segment = undefined;
         var count: usize = 0;
 
@@ -708,6 +736,237 @@ fn sort_intersections(values: []Intersection) void {
         }
 
         values[j] = value;
+    }
+
+}
+
+// Glyph coverage cache. A single Inter face is used process-wide and only from the paint thread, so the store is a
+// plain static table with no locking. Keyed by (glyph_index << 8) | px; px is bounded by cache_max_px.
+
+const cache_max_px: u32 = 28;
+const cache_box_w: u32 = 30;
+const cache_box_h: u32 = 34;
+const cache_capacity: usize = 1024;
+
+const GlyphEntry = struct {
+
+    used: bool = false,
+    key: u32 = 0,
+
+    left: i16 = 0,
+    top: i16 = 0,
+
+    w: u16 = 0,
+    h: u16 = 0,
+
+};
+
+var glyph_meta = [_]GlyphEntry{.{}} ** cache_capacity;
+var glyph_coverage: [cache_capacity][cache_box_w * cache_box_h]u8 = undefined;
+
+fn cached_glyph(face: *const Face, glyph: u16, px: u32) ?usize {
+
+    const key = (@as(u32, glyph) << 8) | px;
+    const start = key % cache_capacity;
+
+    var probe: usize = 0;
+    var slot = start;
+
+    while (probe < 12) : (probe += 1) {
+
+        const entry = &glyph_meta[slot];
+
+        if (entry.used and entry.key == key) return slot;
+
+        if (!entry.used) return if (rasterize_into(face, slot, glyph, px, key)) slot else null;
+
+        slot = (slot + 1) % cache_capacity;
+
+    }
+
+    // The probe window is full: reuse the home slot rather than grow the table.
+
+    return if (rasterize_into(face, start, glyph, px, key)) start else null;
+
+}
+
+fn rasterize_into(face: *const Face, slot: usize, glyph: u16, px: u32, key: u32) bool {
+
+    var segments: [max_segments]Segment = undefined;
+    var count: usize = 0;
+
+    face.build_glyph_segments(glyph, 0, 0, px, 0, &segments, &count) catch return false;
+
+    if (count == 0) {
+
+        glyph_meta[slot] = .{ .used = true, .key = key };
+
+        return true;
+
+    }
+
+    var min_x: i32 = std.math.maxInt(i32);
+    var max_x: i32 = std.math.minInt(i32);
+    var min_y: i32 = std.math.maxInt(i32);
+    var max_y: i32 = std.math.minInt(i32);
+
+    for (segments[0..count]) |segment| {
+
+        min_x = @min(min_x, @min(segment.x0, segment.x1));
+        max_x = @max(max_x, @max(segment.x0, segment.x1));
+        min_y = @min(min_y, @min(segment.y0, segment.y1));
+        max_y = @max(max_y, @max(segment.y0, segment.y1));
+
+    }
+
+    const x0 = @divFloor(min_x, 64);
+    const y0 = @divFloor(min_y, 64);
+    const w: i32 = @divFloor(max_x + 63, 64) - x0;
+    const h: i32 = @divFloor(max_y + 63, 64) - y0;
+
+    if (w <= 0 or h <= 0) {
+
+        glyph_meta[slot] = .{ .used = true, .key = key };
+
+        return true;
+
+    }
+
+    if (w > cache_box_w or h > cache_box_h) return false;
+
+    const cells: u32 = @intCast(w * h);
+
+    @memset(glyph_coverage[slot][0..cells], 0);
+
+    fill_coverage(segments[0..count], glyph_coverage[slot][0..cells], x0, y0, @intCast(w), @intCast(h));
+
+    glyph_meta[slot] = .{
+
+        .used = true,
+        .key = key,
+
+        .left = @intCast(x0),
+        .top = @intCast(y0),
+
+        .w = @intCast(w),
+        .h = @intCast(h),
+
+    };
+
+    return true;
+
+}
+
+// Scan-convert `segments` into `coverage` (row-major, stride `w`) in the glyph-local pixel box at (x0, y0). Mirrors
+// fill_segments but accumulates into the byte grid and scales the 4x4 sample count to an 8-bit alpha.
+
+fn fill_coverage(segments: []const Segment, coverage: []u8, x0: i32, y0: i32, w: u32, h: u32) void {
+
+    const sample_offsets = [_]i32{ 8, 24, 40, 56 };
+
+    var row: u32 = 0;
+
+    while (row < h) : (row += 1) {
+
+        const line = coverage[row * w .. row * w + w];
+        const py = y0 + @as(i32, @intCast(row));
+
+        for (sample_offsets) |sample_y| {
+
+            const scan = py * 64 + sample_y;
+
+            var intersections: [max_intersections]Intersection = undefined;
+            var count: usize = 0;
+
+            for (segments) |segment| {
+
+                if (segment.y0 == segment.y1) continue;
+                if (scan < @min(segment.y0, segment.y1) or scan >= @max(segment.y0, segment.y1)) continue;
+                if (count >= intersections.len) break;
+
+                intersections[count] = .{
+
+                    .x = segment.x0 + @as(i32, @intCast(@divTrunc(@as(i64, scan - segment.y0) * @as(i64, segment.x1 - segment.x0), @as(i64, segment.y1 - segment.y0)))),
+                    .winding = if (segment.y1 > segment.y0) 1 else -1,
+
+                };
+
+                count += 1;
+
+            }
+
+            sort_intersections(intersections[0..count]);
+
+            var index: usize = 0;
+            var winding: i32 = 0;
+            var span_start: ?i32 = null;
+
+            while (index < count) : (index += 1) {
+
+                const was_inside = winding != 0;
+
+                winding += @as(i32, intersections[index].winding);
+
+                const is_inside = winding != 0;
+
+                if (!was_inside and is_inside) {
+
+                    span_start = intersections[index].x;
+
+                } else if (was_inside and !is_inside) {
+
+                    if (span_start) |left| {
+
+                        const right = intersections[index].x;
+
+                        if (right > left) accumulate_row(line, x0, left, right);
+
+                    }
+
+                    span_start = null;
+
+                }
+
+            }
+
+        }
+
+    }
+
+    for (coverage) |*value| {
+
+        value.* = @intCast(@as(u16, value.*) * 255 / (fill_samples * fill_samples));
+
+    }
+
+}
+
+fn accumulate_row(line: []u8, x0: i32, left: i32, right: i32) void {
+
+    const sample_offsets = [_]i32{ 8, 24, 40, 56 };
+    const first = @max(x0, @divFloor(left, 64));
+    const last = @min(x0 + @as(i32, @intCast(line.len)) - 1, @divFloor(right + 63, 64));
+
+    var x = first;
+
+    while (x <= last) : (x += 1) {
+
+        const cell: usize = @intCast(x - x0);
+
+        if (cell >= line.len) break;
+
+        var covered: u8 = 0;
+
+        for (sample_offsets) |sample_x| {
+
+            const sx = x * 64 + sample_x;
+
+            if (sx >= left and sx < right) covered += 1;
+
+        }
+
+        line[cell] = @intCast(@min(@as(u16, line[cell]) + covered, fill_samples * fill_samples));
+
     }
 
 }

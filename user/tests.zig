@@ -8,6 +8,9 @@ test {
     _ = @import("lib").font;
     _ = @import("lib").ttf;
     _ = @import("lib").svg;
+    _ = @import("lib").ui;
+    _ = @import("lib").icons;
+    _ = @import("lib").time;
     _ = @import("lib").events;
     _ = @import("lib").window;
     _ = @import("servers/naming/main.zig");

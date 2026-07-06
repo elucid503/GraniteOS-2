@@ -533,6 +533,33 @@ pub const Surface = struct {
 
     }
 
+    /// Blend `color` onto the surface through a `w`x`h` 8-bit coverage mask (row-major, 0 = clear, 255 = opaque),
+    /// its top-left at (x, y). This is the blit path for cached glyph and icon bitmaps: rasterize once, paint many.
+    pub fn blend_coverage(self: *const Surface, x: i32, y: i32, coverage: []const u8, w: u32, h: u32, color: Color) void {
+
+        var row: u32 = 0;
+
+        while (row < h) : (row += 1) {
+
+            const dst_y = y + @as(i32, @intCast(row));
+
+            if (dst_y < 0 or dst_y >= self.height) continue;
+
+            const base = row * w;
+            var col: u32 = 0;
+
+            while (col < w) : (col += 1) {
+
+                const alpha = coverage[base + col];
+
+                if (alpha != 0) self.blend_pixel(x + @as(i32, @intCast(col)), dst_y, color, alpha);
+
+            }
+
+        }
+
+    }
+
     /// Copy `src_rect` out of `src` so its origin lands at (dst_x, dst_y), clipped to both surfaces.
     pub fn blit(self: *const Surface, dst_x: i32, dst_y: i32, src: *const Surface, src_rect: Rect) void {
 

@@ -32,6 +32,7 @@ pub const ThreadState = enum {
     blocked_send,
     blocked_receive,
     blocked_notify,
+    blocked_sleep,
     suspended,
     dead,
 
@@ -57,6 +58,10 @@ pub const Thread = struct {
     scheduling: scheduler.SchedulingState,
     blocked_on: ?*object.Object,
     queue_link: runqueue.Link,
+
+    // Timed sleep (the `sleep` syscall): the monotonic deadline and this thread's link in its core's sleeper list.
+    wake_at_ns: u64,
+    sleep_next: ?*Thread,
 
     // The server's own state parked while it runs on a caller's donated scheduling (M8, 06-kernel-ddd.md Section 10).
     donated_scheduling: ?scheduler.SchedulingState,
@@ -273,6 +278,9 @@ fn alloc(process: *Process) Error!*Thread {
         .scheduling = .{},
         .blocked_on = null,
         .queue_link = .{},
+
+        .wake_at_ns = 0,
+        .sleep_next = null,
 
         .donated_scheduling = null,
         .context_saved = true,
