@@ -597,7 +597,7 @@ pub const Manager = struct {
 
             if (!window.used) continue;
 
-            if (window.flags & proto.window.flag_fullscreen != 0) {
+            if (window.flags & proto.window.flag_fullscreen != 0 or window.is_desktop()) {
 
                 window.x = 0;
                 window.y = 0;
@@ -612,6 +612,17 @@ pub const Manager = struct {
             }
 
         }
+
+    }
+
+    /// True when a screen resize changes this window's content size (its owner must reallocate the surface).
+    pub fn tracks_screen(_: *const Manager, window: *const Window) bool {
+
+        if (window.flags & proto.window.flag_fullscreen != 0) return true;
+        if (window.is_desktop()) return true;
+        if (window.is_panel()) return true;
+
+        return false;
 
     }
 
@@ -924,6 +935,22 @@ test "minimize hides a window and restore brings it back" {
 
     try testing.expect(window.flags & proto.window.flag_minimized == 0);
     try testing.expectEqual(window.id, manager.focus);
+
+}
+
+test "desktop layers track the screen size" {
+
+    var manager = test_manager();
+
+    const desktop = manager.create(1, 0, 0, proto.window.flag_desktop, "desktop").?;
+
+    try testing.expectEqual(@as(u32, 640), desktop.width);
+
+    manager.resize_screen(1024, 768);
+
+    try testing.expectEqual(@as(u32, 1024), desktop.width);
+    try testing.expectEqual(@as(u32, 768), desktop.height);
+    try testing.expect(manager.tracks_screen(desktop));
 
 }
 

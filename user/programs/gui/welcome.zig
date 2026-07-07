@@ -15,7 +15,7 @@ comptime {
 
 const ui = lib.ui;
 
-var inter: ?lib.ttf.Face = null;
+var inter: ?lib.draw.text.Face = null;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -102,31 +102,44 @@ fn load_assets() !void {
     const base = try sys.map(cap.self_space, cap.gui.bundle, 0, sys.read);
     const bundle = try lib.bundle.Bundle.open(base + offset, length);
 
-    inter = lib.ttf.Face.parse(bundle.find("font-ttf") orelse return error.NotFound) catch return error.Invalid;
+    inter = lib.draw.text.Face.parse(bundle.find("font-ttf") orelse return error.NotFound) catch return error.Invalid;
 
 }
 
 fn draw(surface: *const gfx.Surface) void {
 
-    const surface_rect = surface.bounds();
-    const center_x = @divTrunc(surface_rect.w, 2);
-    const center_y = @divTrunc(surface_rect.h, 2);
-
-    surface.fill(lib.prefs.wallpaper());
-
     if (inter) |*font| {
 
-        const title = "GraniteOS 2";
-        const title_x = center_x - @divTrunc(font.text_width(title, 38), 2);
-        const title_y = center_y - 38;
+        var page = ui.Page{ .font = font };
 
-        font.draw(surface, title_x, title_y, 38, title, ui.theme.text);
+        page.begin(@intCast(surface.width), @intCast(surface.height), .{
 
-        const subtitle = "Click anywhere to continue";
-        const subtitle_x = center_x - @divTrunc(font.text_width(subtitle, 17), 2);
-        const subtitle_y = center_y + 28;
+            .direction = .column,
+            .width = .{ .px = @intCast(surface.width) },
+            .height = .{ .px = @intCast(surface.height) },
+            .align_main = .center,
+            .align_cross = .center,
+            .gap = 24,
+            .background = lib.prefs.wallpaper(),
 
-        font.draw(surface, subtitle_x, subtitle_y, 17, subtitle, ui.theme.text_dim);
+        });
+
+        _ = page.label(ui.Page.root, "GraniteOS 2", .{
+
+            .size = 38,
+            .color = ui.theme.text,
+
+        });
+
+        _ = page.label(ui.Page.root, "Click anywhere to continue", .{
+
+            .size = 17,
+            .color = ui.theme.text_dim,
+
+        });
+
+        page.end();
+        page.paint(surface);
 
     }
 

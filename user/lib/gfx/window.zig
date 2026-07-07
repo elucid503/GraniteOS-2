@@ -11,7 +11,7 @@ const stream = @import("../io/stream.zig");
 const sys = @import("../syscall/sys.zig");
 
 const events = @import("events.zig");
-const gfx = @import("gfx.zig");
+const gfx = @import("../draw/draw.zig");
 
 const Handle = cap.Handle;
 const Error = sys.Error;

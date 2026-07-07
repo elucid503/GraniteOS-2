@@ -7,8 +7,6 @@ const events = lib.events;
 const gfx = lib.gfx;
 const ui = lib.ui;
 
-const Rect = gfx.Rect;
-
 pub const app_meta = .{
     .title = "Settings",
     .description = "Color theme",
@@ -23,9 +21,11 @@ comptime {
 
 const pad: i32 = 24;
 const swatch_size: i32 = 36;
-const theme_col_w: i32 = 76;
+const theme_col_w: i32 = 78;
+const swatch_id_base: u32 = 100;
 
-var font: lib.ttf.Face = undefined;
+var font: lib.draw.text.Face = undefined;
+var page: ui.Page = .{ .font = &font };
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
@@ -88,17 +88,11 @@ fn run() !void {
 
 fn click(x: i32, y: i32) void {
 
-    const theme_y = pad + 36;
-    const swatch_y = theme_y + 28;
+    const hit = page.hit(x, y);
 
-    const label_h = 18;
-    const theme_row_h = swatch_size + 6 + label_h;
+    if (hit < swatch_id_base or hit >= swatch_id_base + lib.prefs.theme_count) return;
 
-    if (y < swatch_y or y >= swatch_y + theme_row_h) return;
-
-    const col = @divTrunc(x - pad, theme_col_w);
-
-    if (col < 0 or col >= @as(i32, @intCast(lib.prefs.theme_count))) return;
+    const col = hit - swatch_id_base;
 
     lib.prefs.apply_theme(@enumFromInt(@as(u8, @intCast(col))));
     lib.prefs.save();
@@ -110,39 +104,93 @@ fn click(x: i32, y: i32) void {
 fn paint() void {
 
     const surface = &window.surface;
+    const width: i32 = @intCast(surface.width);
+    const height: i32 = @intCast(surface.height);
 
-    surface.fill(ui.theme.window_bg);
+    page.begin(width, height, .{
 
-    ui.text(surface, &font, pad, pad, 18, "Settings", ui.theme.text);
+        .direction = .column,
+        .width = .{ .px = width },
+        .height = .{ .px = height },
+        .padding = ui.Edge.all(pad),
+        .gap = 18,
+        .background = ui.theme.window_bg,
 
-    const theme_y = pad + 36;
+    });
 
-    ui.label(surface, &font, pad, theme_y, 14, "Color theme");
+    _ = page.label(ui.Page.root, "Settings", .{
 
-    const swatch_y = theme_y + 28;
+        .size = 18,
+        .color = ui.theme.text,
 
-    const col_w = theme_col_w;
-    const swatch = swatch_size;
+    });
+
+    const content = page.box(ui.Page.root, .{
+
+        .direction = .column,
+        .gap = 14,
+
+    });
+
+    _ = page.label(content, "Color theme", .{
+
+        .size = 14,
+        .color = ui.theme.text,
+
+    });
+
+    const row = page.box(content, .{
+
+        .direction = .row,
+        .gap = 8,
+
+    });
 
     for (0..lib.prefs.theme_count) |index| {
 
-        const col_x = pad + @as(i32, @intCast(index)) * col_w;
-        const rect = Rect{ .x = col_x + @divTrunc(col_w - swatch, 2), .y = swatch_y, .w = swatch, .h = swatch };
-
         const selected = @intFromEnum(lib.prefs.active_theme) == index;
-
         const theme_id: lib.prefs.ThemeId = @enumFromInt(@as(u8, @intCast(index)));
-
-        surface.fill_rect(rect, swatch_color(theme_id));
-
-        if (selected) surface.stroke_rect(rect, 2, ui.theme.accent);
-
         const name = lib.prefs.theme_names[index];
-        const label_rect = Rect{ .x = col_x, .y = swatch_y + swatch + 6, .w = col_w, .h = 16 };
 
-        ui.text_center(surface, &font, label_rect, 11, name, if (selected) ui.theme.text else ui.theme.text_faint);
+        const item = page.box(row, .{
+
+            .id = swatch_id_base + @as(u32, @intCast(index)),
+            .direction = .column,
+            .width = .{ .px = theme_col_w },
+            .height = .{ .px = swatch_size + 34 },
+            .padding = ui.Edge.symmetric(6, 6),
+            .align_cross = .center,
+            .gap = 6,
+            .hover_background = ui.theme.hover,
+            .radius = 6,
+
+        });
+
+        _ = page.box(item, .{
+
+            .width = .{ .px = swatch_size },
+            .height = .{ .px = swatch_size },
+            .background = swatch_color(theme_id),
+            .border = if (selected) ui.theme.accent else ui.theme.border,
+            .border_width = if (selected) 2 else 1,
+            .radius = 6,
+
+        });
+
+        _ = page.label(item, name, .{
+
+            .width = .{ .px = theme_col_w - 12 },
+            .height = .{ .px = 16 },
+            .size = 11,
+            .color = if (selected) ui.theme.text else ui.theme.text_faint,
+            .center_text = true,
+
+        });
 
     }
+
+    page.end();
+    page.paint(surface);
 
     window.present_all() catch {};
 
@@ -150,19 +198,17 @@ fn paint() void {
 
 fn update_cursor(x: i32, y: i32) void {
 
-    const theme_y = pad + 36;
-    const swatch_y = theme_y + 28;
-    const label_h = 18;
-    const theme_row_h = swatch_size + 6 + label_h;
+    if (page.pointer_move(x, y)) paint();
 
-    if (y >= swatch_y and y < swatch_y + theme_row_h) {
+    const hit = page.hit(x, y);
+
+    if (hit >= swatch_id_base and hit < swatch_id_base + lib.prefs.theme_count) {
 
         lib.cursor.set(&connection, .clicker);
         return;
 
     }
 
-    _ = x;
     lib.cursor.set(&connection, .pointer);
 
 }

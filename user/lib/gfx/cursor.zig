@@ -4,9 +4,9 @@
 const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
 
-const gfx = @import("gfx.zig");
+const gfx = @import("../draw/draw.zig");
 const icons = @import("icons.zig");
-const svg = @import("svg.zig");
+const svg = @import("../draw/vector.zig");
 
 const window = @import("window.zig");
 

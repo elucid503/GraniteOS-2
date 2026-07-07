@@ -30,7 +30,7 @@ const max_path = 512;
 
 const toolbar_height: i32 = 40;
 
-var font: lib.ttf.Face = undefined;
+var font: lib.draw.text.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
@@ -573,10 +573,33 @@ fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
 
     const save_rect = Rect{ .x = 8, .y = 6, .w = 72, .h = 28 };
 
-    ui.button(surface, &font, save_rect, "Save", 13, if (dirty) .accent else .normal);
+    ui.fill_round_rect(surface, save_rect, 5, if (dirty) ui.theme.accent_dim else ui.theme.surface_alt);
+    ui.stroke_round_rect(surface, save_rect, 5, 1, ui.theme.border);
+    text_center(surface, save_rect, 13, "Save", ui.theme.text);
 
     const title = ui.truncate(&font, file_path, 13, width - 120);
 
-    ui.text_in(surface, &font, .{ .x = 96, .y = 0, .w = width - 104, .h = bar_h }, 0, 13, title, ui.theme.text_dim);
+    text_in(surface, .{ .x = 96, .y = 0, .w = width - 104, .h = bar_h }, 0, 13, title, ui.theme.text_dim);
+
+}
+
+fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, value: []const u8, color: gfx.Color) void {
+
+    const inner = rect.inset(inset);
+    const clipped = surface.clipped(inner);
+    const visible = ui.truncate(&font, value, size, inner.w);
+    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
+
+    font.draw(&clipped, inner.x, y, size, visible, color);
+
+}
+
+fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, value: []const u8, color: gfx.Color) void {
+
+    const visible = ui.truncate(&font, value, size, rect.w);
+    const x = rect.x + @divTrunc(rect.w - font.text_width(visible, size), 2);
+    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
+
+    font.draw(surface, x, y, size, visible, color);
 
 }

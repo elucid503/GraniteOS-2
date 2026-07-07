@@ -4,7 +4,7 @@
 
 const std = @import("std");
 
-const gfx = @import("gfx.zig");
+const gfx = @import("draw.zig");
 
 pub const Error = error{
 

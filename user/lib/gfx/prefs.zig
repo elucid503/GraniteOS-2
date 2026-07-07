@@ -4,11 +4,11 @@
 const std = @import("std");
 
 const cap = @import("../cap/cap.zig");
-const gfx = @import("gfx.zig");
+const gfx = @import("../draw/draw.zig");
 const fs = @import("../fs/fs.zig");
 const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
-const ui = @import("ui.zig");
+const ui = @import("../ui/ui.zig");
 const window = @import("window.zig");
 
 const Color = gfx.Color;
@@ -209,6 +209,7 @@ pub fn apply_theme(id: ThemeId) void {
     ui.theme.text_faint = palette.text_faint;
     ui.theme.good = palette.good;
     ui.theme.warn = palette.warn;
+    ui.theme.wallpaper = palette.wallpaper;
 
 }
 

@@ -8,8 +8,8 @@ const cap = @import("../cap/cap.zig");
 const bundle_mod = @import("../boot/bundle.zig");
 const sys = @import("../syscall/sys.zig");
 
-const font_mod = @import("font.zig");
-const ttf = @import("ttf.zig");
+const font_mod = @import("../draw/bitmap.zig");
+const ttf = @import("../draw/text.zig");
 const window = @import("window.zig");
 
 const time = @import("../time.zig");

@@ -139,12 +139,12 @@ const History = struct {
 
 const GanttHistory = struct {
 
-    samples: [history_span]ui.GanttSample = [_]ui.GanttSample{.{ .pid = 0, .tid = 0 }} ** history_span,
+    samples: [history_span]ui.chart.GanttSample = [_]ui.chart.GanttSample{.{ .pid = 0, .tid = 0 }} ** history_span,
     len: usize = 0,
 
     fn push(self: *GanttHistory, pid: u32, tid: u32) void {
 
-        const span = ui.GanttSample{ .pid = pid, .tid = tid };
+        const span = ui.chart.GanttSample{ .pid = pid, .tid = tid };
 
         if (self.len < history_span) {
 
@@ -169,7 +169,7 @@ const GanttHistory = struct {
 
 };
 
-var font: lib.ttf.Face = undefined;
+var font: lib.draw.text.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
@@ -449,14 +449,15 @@ fn paint_tabs(surface: *const gfx.Surface) void {
 
         if (is_active) {
 
-            surface.fill_rect(.{ .x = x, .y = tab_height - 3, .w = each, .h = 3 }, ui.theme.accent);
+            ui.fill_round_rect(surface, .{ .x = x + 10, .y = 6, .w = each - 20, .h = tab_height - 12 }, 6, ui.theme.surface);
+            ui.fill_round_rect(surface, .{ .x = x + 18, .y = tab_height - 5, .w = each - 36, .h = 3 }, 2, ui.theme.accent);
 
         }
 
         const tint = if (is_active) ui.theme.text else ui.theme.text_dim;
 
-        ui.icon(surface, .{ .x = x + 18, .y = 11, .w = 20, .h = 20 }, tab.icon, tint);
-        ui.text_in(surface, &font, .{ .x = x + 44, .y = 0, .w = each - 48, .h = tab_height }, 0, 14, tab.label, tint);
+        lib.draw.vector.icon_in(surface, .{ .x = x + 18, .y = 11, .w = 20, .h = 20 }, tab.icon, tint);
+        text_in(surface, .{ .x = x + 44, .y = 0, .w = each - 48, .h = tab_height }, 0, 14, tab.label, tint);
 
     }
 
@@ -487,15 +488,15 @@ fn paint_scheduler(surface: *const gfx.Surface) void {
         snapshot.level_count,
     }) catch "";
 
-    ui.text(surface, &font, area.x, area.y, 13, "Runnable threads per level", ui.theme.text);
-    ui.text(surface, &font, area.x, area.y + 20, 12, line, ui.theme.text_dim);
+    draw_text(surface, area.x, area.y, 13, "Runnable threads per level", ui.theme.text);
+    draw_text(surface, area.x, area.y + 20, 12, line, ui.theme.text_dim);
 
     const chart_top = area.y + 44;
     const chart_h = area.h - 64;
     const level_count = @min(@as(usize, @intCast(snapshot.level_count)), sysinfo.scheduling_levels);
     const row_h = if (level_count == 0) chart_h else @divTrunc(chart_h, @as(i32, @intCast(level_count)));
 
-    var rows: [sysinfo.scheduling_levels][]const ui.GanttSample = undefined;
+    var rows: [sysinfo.scheduling_levels][]const ui.chart.GanttSample = undefined;
 
     for (0..level_count) |index| {
 
@@ -504,20 +505,20 @@ fn paint_scheduler(surface: *const gfx.Surface) void {
         var label: [24]u8 = undefined;
         const name = std.fmt.bufPrint(&label, "level-{d}", .{ index }) catch "";
 
-        ui.text(surface, &font, area.x, chart_top + @as(i32, @intCast(index)) * row_h + @divTrunc(row_h - 12, 2), 11, name, ui.theme.text_faint);
+        draw_text(surface, area.x, chart_top + @as(i32, @intCast(index)) * row_h + @divTrunc(row_h - 12, 2), 11, name, ui.theme.text_faint);
 
     }
 
     const chart = Rect{ .x = area.x + gantt_label_w, .y = chart_top, .w = area.w - gantt_label_w, .h = chart_h };
 
-    ui.gantt_chart(surface, chart, rows[0..level_count]);
+    ui.chart.gantt(surface, chart, rows[0..level_count]);
 
-    ui.text(surface, &font, chart.x, chart.y + chart.h + 6, 11, "older", ui.theme.text_faint);
+    draw_text(surface, chart.x, chart.y + chart.h + 6, 11, "older", ui.theme.text_faint);
 
     var now_label: [8]u8 = undefined;
     const now_text = std.fmt.bufPrint(&now_label, "now", .{}) catch "now";
 
-    ui.text(surface, &font, chart.x + chart.w - font.text_width(now_text, 11), chart.y + chart.h + 6, 11, now_text, ui.theme.text_faint);
+    draw_text(surface, chart.x + chart.w - font.text_width(now_text, 11), chart.y + chart.h + 6, 11, now_text, ui.theme.text_faint);
 
 }
 
@@ -536,18 +537,18 @@ fn paint_processes(surface: *const gfx.Surface) void {
         snapshot.total_handles,
     }) catch "";
 
-    ui.text(surface, &font, area.x, area.y, 13, "Total threads", ui.theme.text);
-    ui.text(surface, &font, area.x, area.y + 20, 12, line, ui.theme.text_dim);
+    draw_text(surface, area.x, area.y, 13, "Total threads", ui.theme.text);
+    draw_text(surface, area.x, area.y + 20, 12, line, ui.theme.text_dim);
 
     const chart = Rect{ .x = area.x, .y = area.y + 44, .w = area.w, .h = @divTrunc(area.h * 2, 5) };
 
-    ui.line_chart(surface, chart, thread_history.samples[0..thread_history.len], @max(4, thread_history.peak()), ui.theme.good);
+    ui.chart.line(surface, chart, thread_history.samples[0..thread_history.len], @max(4, thread_history.peak()), ui.theme.good);
 
     var y = chart.y + chart.h + 14;
 
-    ui.text(surface, &font, area.x, y, 12, "process", ui.theme.text_faint);
-    ui.text(surface, &font, area.x + 200, y, 12, "threads", ui.theme.text_faint);
-    ui.text(surface, &font, area.x + 300, y, 12, "handles", ui.theme.text_faint);
+    draw_text(surface, area.x, y, 12, "process", ui.theme.text_faint);
+    draw_text(surface, area.x + 200, y, 12, "threads", ui.theme.text_faint);
+    draw_text(surface, area.x + 300, y, 12, "handles", ui.theme.text_faint);
 
     y += 20;
 
@@ -559,14 +560,14 @@ fn paint_processes(surface: *const gfx.Surface) void {
 
         if (y + 16 > area.y + area.h) break;
 
-        ui.text(surface, &font, area.x, y, 12, process.name[0..@min(@as(usize, @intCast(process.name_len)), process.name.len)], ui.theme.text);
+        draw_text(surface, area.x, y, 12, process.name[0..@min(@as(usize, @intCast(process.name_len)), process.name.len)], ui.theme.text);
 
         var numbers: [32]u8 = undefined;
         const threads = std.fmt.bufPrint(numbers[0..16], "{d}", .{process.thread_count}) catch "";
         const handles = std.fmt.bufPrint(numbers[16..], "{d}", .{process.handle_count}) catch "";
 
-        ui.text(surface, &font, area.x + 200, y, 12, threads, ui.theme.text_dim);
-        ui.text(surface, &font, area.x + 300, y, 12, handles, ui.theme.text_dim);
+        draw_text(surface, area.x + 200, y, 12, threads, ui.theme.text_dim);
+        draw_text(surface, area.x + 300, y, 12, handles, ui.theme.text_dim);
 
         y += 18;
 
@@ -589,12 +590,12 @@ fn paint_cpu(surface: *const gfx.Surface) void {
         snapshot.current_core,
     }) catch "";
 
-    ui.text(surface, &font, area.x, area.y, 13, "Busy cores", ui.theme.text);
-    ui.text(surface, &font, area.x, area.y + 20, 12, line, ui.theme.text_dim);
+    draw_text(surface, area.x, area.y, 13, "Busy cores", ui.theme.text);
+    draw_text(surface, area.x, area.y + 20, 12, line, ui.theme.text_dim);
 
     const chart = Rect{ .x = area.x, .y = area.y + 44, .w = area.w, .h = @divTrunc(area.h * 3, 5) };
 
-    ui.line_chart(surface, chart, busy_history.samples[0..busy_history.len], @max(1, snapshot.core_count), ui.theme.warn);
+    ui.chart.line(surface, chart, busy_history.samples[0..busy_history.len], @max(1, snapshot.core_count), ui.theme.warn);
 
     var y = chart.y + chart.h + 16;
     const core_count = @min(@as(usize, @intCast(snapshot.core_count)), 8);
@@ -606,7 +607,7 @@ fn paint_cpu(surface: *const gfx.Surface) void {
         var row: [64]u8 = undefined;
         const text = format_core(&row, index, core.online != 0, core.current_pid, core.current_tid);
 
-        ui.text(surface, &font, area.x, y, 12, text, ui.theme.text_dim);
+        draw_text(surface, area.x, y, 12, text, ui.theme.text_dim);
 
         y += 18;
 
@@ -626,22 +627,22 @@ fn paint_disk(surface: *const gfx.Surface) void {
     const used_mib = info.used_blocks * info.block_size / (1024 * 1024);
     const free_mib = info.free_blocks * info.block_size / (1024 * 1024);
 
-    ui.text(surface, &font, area.x, area.y, 13, "Disk usage", ui.theme.text);
+    draw_text(surface, area.x, area.y, 13, "Disk usage", ui.theme.text);
 
     const meter_rect = Rect{ .x = area.x, .y = area.y + 28, .w = area.w, .h = 26 };
 
-    ui.meter(surface, meter_rect, info.used_blocks, info.block_count, ui.theme.accent);
+    meter(surface, meter_rect, info.used_blocks, info.block_count, ui.theme.accent);
 
     var line: [96]u8 = undefined;
     const summary = std.fmt.bufPrint(&line, "{d} MiB used of {d} MiB   ({d} MiB free)", .{ used_mib, total_mib, free_mib }) catch "";
 
-    ui.text(surface, &font, area.x, area.y + 64, 12, summary, ui.theme.text_dim);
+    draw_text(surface, area.x, area.y + 64, 12, summary, ui.theme.text_dim);
 
     const used_label_y = area.y + 64 + 12 + used_section_gap;
     const chart = Rect{ .x = area.x, .y = used_label_y + used_label_chart_gap, .w = area.w, .h = @divTrunc(area.h * 2, 5) };
 
-    ui.text(surface, &font, area.x, used_label_y, 12, "Used %", ui.theme.text_faint);
-    ui.line_chart(surface, chart, disk_history.samples[0..disk_history.len], 100, ui.theme.accent);
+    draw_text(surface, area.x, used_label_y, 12, "Used %", ui.theme.text_faint);
+    ui.chart.line(surface, chart, disk_history.samples[0..disk_history.len], 100, ui.theme.accent);
 
     var detail: [96]u8 = undefined;
     const blocks = std.fmt.bufPrint(&detail, "{d} blocks total   {d} used   {d} free   {d} inodes", .{
@@ -651,7 +652,7 @@ fn paint_disk(surface: *const gfx.Surface) void {
         info.inode_count,
     }) catch "";
 
-    ui.text(surface, &font, area.x, chart.y + chart.h + 16, 12, blocks, ui.theme.text_dim);
+    draw_text(surface, area.x, chart.y + chart.h + 16, 12, blocks, ui.theme.text_dim);
 
 }
 
@@ -668,16 +669,16 @@ fn paint_memory(surface: *const gfx.Surface) void {
     const used_mib = used_frames * bytes_per_page / (1024 * 1024);
     const free_mib = snapshot.free_frames * bytes_per_page / (1024 * 1024);
 
-    ui.text(surface, &font, area.x, area.y, 13, "Physical memory", ui.theme.text);
+    draw_text(surface, area.x, area.y, 13, "Physical memory", ui.theme.text);
 
     const meter_rect = Rect{ .x = area.x, .y = area.y + 28, .w = area.w, .h = 26 };
 
-    ui.meter(surface, meter_rect, used_frames, snapshot.total_frames, ui.theme.accent);
+    meter(surface, meter_rect, used_frames, snapshot.total_frames, ui.theme.accent);
 
     var line: [96]u8 = undefined;
     const summary = std.fmt.bufPrint(&line, "{d} MiB used of {d} MiB   ({d} MiB free)", .{ used_mib, total_mib, free_mib }) catch "";
 
-    ui.text(surface, &font, area.x, area.y + 64, 12, summary, ui.theme.text_dim);
+    draw_text(surface, area.x, area.y + 64, 12, summary, ui.theme.text_dim);
 
     const split_top = area.y + 88;
     const split_gap: i32 = 16;
@@ -686,7 +687,7 @@ fn paint_memory(surface: *const gfx.Surface) void {
     const right_x = area.x + half_w + split_gap;
     const split_h = area.y + area.h - split_top - 36;
 
-    ui.text(surface, &font, left_x, split_top, 12, "Used %", ui.theme.text_faint);
+    draw_text(surface, left_x, split_top, 12, "Used %", ui.theme.text_faint);
 
     const used_chart = Rect{
         .x = left_x,
@@ -695,7 +696,7 @@ fn paint_memory(surface: *const gfx.Surface) void {
         .h = split_h - used_label_chart_gap,
     };
 
-    ui.line_chart(surface, used_chart, memory_history.samples[0..memory_history.len], 100, ui.theme.good);
+    ui.chart.line(surface, used_chart, memory_history.samples[0..memory_history.len], 100, ui.theme.good);
 
     if (have_processes) {
 
@@ -706,7 +707,7 @@ fn paint_memory(surface: *const gfx.Surface) void {
 
         if (entry_count > 0) {
 
-            ui.text(surface, &font, right_x, split_top, 12, "By process", ui.theme.text_faint);
+            draw_text(surface, right_x, split_top, 12, "By process", ui.theme.text_faint);
 
             const legend_cols: i32 = 3;
             const legend_row_count: i32 = 2;
@@ -718,7 +719,7 @@ fn paint_memory(surface: *const gfx.Surface) void {
             const pie_cx = right_x + @divTrunc(half_w, 2);
             const pie_cy = split_top + used_label_chart_gap + pie_radius + 4;
 
-            var slices: [max_pie_entries + 1]ui.PieSlice = undefined;
+            var slices: [max_pie_entries + 1]ui.chart.PieSlice = undefined;
             var total: u64 = 0;
 
             for (entries[0..entry_count]) |entry| total += entry.value;
@@ -732,7 +733,7 @@ fn paint_memory(surface: *const gfx.Surface) void {
 
             }
 
-            ui.pie_chart(surface, pie_cx, pie_cy, pie_radius, slices[0..entry_count]);
+            ui.chart.pie(surface, pie_cx, pie_cy, pie_radius, slices[0..entry_count]);
 
             const legend_y = pie_cy + pie_radius + legend_gap;
             const legend_col_w = @divTrunc(half_w, legend_cols);
@@ -751,7 +752,7 @@ fn paint_memory(surface: *const gfx.Surface) void {
                 var legend: [48]u8 = undefined;
                 const text = std.fmt.bufPrint(&legend, "{s}  {d}%", .{ entry.label(), percent }) catch "";
 
-                ui.text_in(surface, &font, .{ .x = col_x + 12, .y = row_y, .w = legend_col_w - 12, .h = legend_row_h }, 0, 11, text, ui.theme.text_dim);
+                text_in(surface, .{ .x = col_x + 12, .y = row_y, .w = legend_col_w - 12, .h = legend_row_h }, 0, 11, text, ui.theme.text_dim);
 
             }
 
@@ -767,7 +768,7 @@ fn paint_memory(surface: *const gfx.Surface) void {
         bytes_per_page,
     }) catch "";
 
-    ui.text(surface, &font, area.x, area.y + area.h - 16, 12, frames, ui.theme.text_dim);
+    draw_text(surface, area.x, area.y + area.h - 16, 12, frames, ui.theme.text_dim);
 
 }
 
@@ -845,7 +846,7 @@ fn rank_memory_processes(snapshot: sysinfo.ProcessSnapshot, entries: *[max_pie_e
 
 fn paint_unavailable(surface: *const gfx.Surface, area: Rect) void {
 
-    ui.text(surface, &font, area.x, area.y + 8, 13, "Data unavailable", ui.theme.text_dim);
+    draw_text(surface, area.x, area.y + 8, 13, "Data unavailable", ui.theme.text_dim);
 
 }
 
@@ -856,6 +857,36 @@ fn format_core(buffer: []u8, index: usize, online: bool, pid: u32, tid: u32) []c
     if (tid == 0) return std.fmt.bufPrint(buffer, "core {d}   idle", .{index}) catch "";
 
     return std.fmt.bufPrint(buffer, "core {d}   running {d}/{d}", .{ index, pid, tid }) catch "";
+
+}
+
+fn draw_text(surface: *const gfx.Surface, x: i32, y: i32, size: u32, content: []const u8, color: gfx.Color) void {
+
+    font.draw(surface, x, y, size, content, color);
+
+}
+
+fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, content: []const u8, color: gfx.Color) void {
+
+    const inner = rect.inset(inset);
+    const clipped = surface.clipped(inner);
+    const visible = ui.truncate(&font, content, size, inner.w);
+    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
+
+    font.draw(&clipped, inner.x, y, size, visible, color);
+
+}
+
+fn meter(surface: *const gfx.Surface, rect: Rect, value: u64, total: u64, color: gfx.Color) void {
+
+    ui.fill_round_rect(surface, rect, 6, ui.theme.surface);
+    ui.stroke_round_rect(surface, rect, 6, 1, ui.theme.border);
+
+    if (total == 0) return;
+
+    const fill_w: i32 = @intCast(@divTrunc(value * @as(u64, @intCast(@max(0, rect.w))), total));
+
+    if (fill_w > 0) ui.fill_round_rect(surface, .{ .x = rect.x, .y = rect.y, .w = fill_w, .h = rect.h }, 6, color);
 
 }
 

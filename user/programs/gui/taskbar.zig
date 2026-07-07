@@ -74,7 +74,7 @@ fn search_height() i32 {
 
 const max_apps = 32;
 
-var font: lib.ttf.Face = undefined;
+var font: lib.draw.text.Face = undefined;
 var bundle: lib.bundle.Bundle = undefined;
 
 var connection: lib.window.Connection = undefined;
@@ -260,6 +260,27 @@ fn handle_bar(event: events.Event) void {
             }
 
             update_bar_cursor(event.x);
+
+        },
+
+        events.kind_window_resize => {
+
+            bar.resize(@intCast(event.x), @intCast(bar_height())) catch {};
+
+            if (menu_open) {
+
+                if (lib.wm.screen_info(&connection)) |screen| {
+
+                    if (menu) |menu_window| lib.wm.move_window(&connection, menu_window.id, 0, menu_y(screen.height)) catch {};
+
+                } else |_| {}
+
+            }
+
+            refresh_windows();
+            paint_bar();
+
+            if (menu_open) paint_menu();
 
         },
 
@@ -590,9 +611,9 @@ fn paint_bar() void {
 
     const launcher_rect = Rect{ .x = 0, .y = 0, .w = launcher_width(), .h = bar_height() };
 
-    if (menu_open) surface.fill_rect(launcher_rect, ui.theme.accent_dim);
+    if (menu_open) ui.fill_round_rect(surface, launcher_rect.inset(4), 6, ui.theme.accent_dim);
 
-    ui.icon(surface, .{ .x = 11, .y = 8, .w = 22, .h = 22 }, lib.icons.apps, ui.theme.text);
+    lib.draw.vector.icon_in(surface, .{ .x = 11, .y = 8, .w = 22, .h = 22 }, lib.icons.apps, ui.theme.text);
 
     // Window buttons.
 
@@ -611,13 +632,13 @@ fn paint_bar() void {
 
         const fill = if (minimized) ui.theme.surface else if (focused) ui.theme.accent_dim else if (hovered) ui.theme.hover else ui.theme.surface_alt;
 
-        surface.fill_rect(rect, fill);
+        ui.fill_round_rect(surface, rect, 5, fill);
 
-        if (focused) surface.fill_rect(.{ .x = rect.x, .y = rect.y + rect.h - 2, .w = rect.w, .h = 2 }, ui.theme.accent);
+        if (focused) ui.fill_round_rect(surface, .{ .x = rect.x + 6, .y = rect.y + rect.h - 3, .w = rect.w - 12, .h = 2 }, 1, ui.theme.accent);
 
         const title = info_entry.title[0..@min(@as(usize, @intCast(info_entry.title_len)), proto.window.max_title)];
 
-        ui.text_in(surface, &font, rect, 10, 13, title, ui.theme.text);
+        text_in(surface, rect, 10, 13, title, ui.theme.text);
 
     }
 
@@ -639,7 +660,7 @@ fn paint_clock(surface: *const gfx.Surface, width: i32) void {
 
     const rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
 
-    ui.text_center(surface, &font, rect, 14, text, ui.theme.text_dim);
+    text_center(surface, rect, 14, text, ui.theme.text_dim);
 
 }
 
@@ -649,20 +670,20 @@ fn paint_menu() void {
     const surface = &menu_window.surface;
     const width: i32 = @intCast(surface.width);
 
-    ui.panel(surface, surface.bounds(), ui.theme.window_bg);
+    panel(surface, surface.bounds(), ui.theme.window_bg);
 
     // Search box.
 
     const search_rect = Rect{ .x = 8, .y = 8, .w = width - 16, .h = search_height() - 12 };
 
-    surface.fill_rect(search_rect, ui.theme.surface);
-    surface.stroke_rect(search_rect, 1, ui.theme.accent);
+    ui.fill_round_rect(surface, search_rect, 5, ui.theme.surface);
+    ui.stroke_round_rect(surface, search_rect, 5, 1, ui.theme.accent);
 
     const icon_size: i32 = 20;
     const icon_x = search_rect.x + 8;
     const icon_y = search_rect.y + @divTrunc(search_rect.h - icon_size, 2);
 
-    ui.icon(surface, .{ .x = icon_x, .y = icon_y, .w = icon_size, .h = icon_size }, lib.icons.search, ui.theme.text_dim);
+    lib.draw.vector.icon_in(surface, .{ .x = icon_x, .y = icon_y, .w = icon_size, .h = icon_size }, lib.icons.search, ui.theme.text_dim);
 
     const text_x = icon_x + icon_size + 8;
     const text_w = width - text_x - 8;
@@ -670,11 +691,11 @@ fn paint_menu() void {
 
     if (query.len == 0) {
 
-        ui.text_in(surface, &font, .{ .x = text_x, .y = search_rect.y, .w = text_w, .h = search_rect.h }, 0, 13, "Search applications", ui.theme.text_faint);
+        text_in(surface, .{ .x = text_x, .y = search_rect.y, .w = text_w, .h = search_rect.h }, 0, 13, "Search applications", ui.theme.text_faint);
 
     } else {
 
-        ui.text_in(surface, &font, .{ .x = text_x, .y = search_rect.y, .w = text_w, .h = search_rect.h }, 0, 13, query, ui.theme.text);
+        text_in(surface, .{ .x = text_x, .y = search_rect.y, .w = text_w, .h = search_rect.h }, 0, 13, query, ui.theme.text);
 
     }
 
@@ -701,12 +722,12 @@ fn paint_menu() void {
         const rect = Rect{ .x = 4, .y = y, .w = width - 8, .h = row_height() - 4 };
         const hovered = menu_ptr_y >= rect.y and menu_ptr_y < rect.y + rect.h;
 
-        if (hovered) ui.row_hover(surface, rect);
+        if (hovered) row_hover(surface, rect);
 
-        ui.icon(surface, .{ .x = 14, .y = y + 14, .w = 26, .h = 26 }, app.icon, ui.theme.accent);
+        lib.draw.vector.icon_in(surface, .{ .x = 14, .y = y + 14, .w = 26, .h = 26 }, app.icon, ui.theme.accent);
 
-        ui.text(surface, &font, 52, y + 9, 15, app.title, ui.theme.text);
-        ui.text(surface, &font, 52, y + 30, 12, app.description, ui.theme.text_dim);
+        draw_text(surface, 52, y + 9, 15, app.title, ui.theme.text);
+        draw_text(surface, 52, y + 30, 12, app.description, ui.theme.text_dim);
 
         y += row_height();
 
@@ -714,7 +735,7 @@ fn paint_menu() void {
 
     if (!any) {
 
-        ui.text(surface, &font, 20, search_height() + 12, 13, "No matching applications", ui.theme.text_dim);
+        draw_text(surface, 20, search_height() + 12, 13, "No matching applications", ui.theme.text_dim);
 
     }
 
@@ -755,6 +776,46 @@ fn contains_ignore_case(haystack: []const u8, needle: []const u8) bool {
 fn lower(byte: u8) u8 {
 
     return if (byte >= 'A' and byte <= 'Z') byte + 32 else byte;
+
+}
+
+fn draw_text(surface: *const gfx.Surface, x: i32, y: i32, size: u32, content: []const u8, color: gfx.Color) void {
+
+    font.draw(surface, x, y, size, content, color);
+
+}
+
+fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, content: []const u8, color: gfx.Color) void {
+
+    const inner = rect.inset(inset);
+    const clipped = surface.clipped(inner);
+    const visible = ui.truncate(&font, content, size, inner.w);
+    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
+
+    font.draw(&clipped, inner.x, y, size, visible, color);
+
+}
+
+fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, content: []const u8, color: gfx.Color) void {
+
+    const visible = ui.truncate(&font, content, size, rect.w);
+    const x = rect.x + @divTrunc(rect.w - font.text_width(visible, size), 2);
+    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
+
+    font.draw(surface, x, y, size, visible, color);
+
+}
+
+fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
+
+    ui.fill_round_rect(surface, rect, 6, color);
+    ui.stroke_round_rect(surface, rect, 6, 1, ui.theme.border);
+
+}
+
+fn row_hover(surface: *const gfx.Surface, rect: Rect) void {
+
+    ui.fill_round_rect(surface, rect, 6, ui.theme.hover);
 
 }
 

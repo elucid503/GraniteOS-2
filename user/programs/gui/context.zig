@@ -22,7 +22,13 @@ comptime {
 
 const home_dir = "/root/user";
 
-const menu_items = [_]ui.MenuItem{
+const MenuItem = struct {
+
+    label: []const u8,
+
+};
+
+const menu_items = [_]MenuItem{
 
     .{ .label = "Create New File" },
     .{ .label = "Create New Folder" },
@@ -34,7 +40,7 @@ const prompt_height: i32 = 120;
 const blur_guard_ms: u64 = 100;
 const event_batch_max = 32;
 
-var font: lib.ttf.Face = undefined;
+var font: lib.draw.text.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
 var desktop: lib.window.Window = undefined;
@@ -168,7 +174,7 @@ fn handle_desktop(event: events.Event) void {
 
             if (!menu_open) return;
 
-            const hit = ui.menu_hit(event.x, event.y, menu_x, menu_y, menu_items.len);
+            const hit = menu_hit(event.x, event.y);
 
             if (hit == menu_hover) return;
 
@@ -235,7 +241,7 @@ fn update_cursor(x: i32, y: i32) void {
 
     if (menu_open) {
 
-        if (ui.menu_hit(x, y, menu_x, menu_y, menu_items.len) != null) lib.cursor.set(&connection, .clicker)
+        if (menu_hit(x, y) != null) lib.cursor.set(&connection, .clicker)
         else lib.cursor.set(&connection, .pointer);
 
         return;
@@ -260,7 +266,7 @@ fn button_down(event: events.Event) void {
 
     if (menu_open and event.code == events.button_left) {
 
-        if (ui.menu_hit(event.x, event.y, menu_x, menu_y, menu_items.len)) |hit| {
+        if (menu_hit(event.x, event.y)) |hit| {
 
             close_menu();
 
@@ -427,7 +433,7 @@ fn paint_desktop() void {
 
     if (menu_open) {
 
-        ui.context_menu(surface, &font, menu_x, menu_y, &menu_items, menu_hover);
+        paint_menu(surface);
 
     }
 
@@ -440,8 +446,14 @@ fn paint_desktop() void {
 fn paint_prompt(surface: *const gfx.Surface) void {
 
     const rect = prompt_rect();
+    var page = ui.Page{ .font = &font };
 
-    ui.panel(surface, rect, ui.theme.window_bg);
+    page.begin(@intCast(surface.width), @intCast(surface.height), .{
+
+        .width = .{ .px = @intCast(surface.width) },
+        .height = .{ .px = @intCast(surface.height) },
+
+    });
 
     const title = switch (prompt_kind) {
 
@@ -450,16 +462,130 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
     };
 
-    ui.text(surface, &font, rect.x + 16, rect.y + 14, 14, title, ui.theme.text);
+    const panel = page.box(ui.Page.root, .{
 
-    const field = Rect{ .x = rect.x + 16, .y = rect.y + 36, .w = rect.w - 32, .h = 28 };
+        .direction = .column,
+        .width = .{ .px = rect.w },
+        .height = .{ .px = rect.h },
+        .margin = .{ .left = rect.x, .top = rect.y },
+        .padding = ui.Edge.all(16),
+        .gap = 8,
+        .background = ui.theme.window_bg,
+        .border = ui.theme.border,
+        .radius = 8,
 
-    ui.text_field(surface, &font, field, 13, &name_field, "name", .{ .focused = true, .caret_on = true });
+    });
 
-    const create = Rect{ .x = rect.x + 16, .y = rect.y + 72, .w = 100, .h = 32 };
-    const cancel = Rect{ .x = rect.x + 124, .y = rect.y + 72, .w = 100, .h = 32 };
+    _ = page.label(panel, title, .{
 
-    ui.button(surface, &font, create, "Create", 13, .accent);
-    ui.button(surface, &font, cancel, "Cancel", 13, .normal);
+        .height = .{ .px = 14 },
+        .size = 14,
+        .color = ui.theme.text,
+
+    });
+
+    _ = page.field(panel, &name_field, "name", true, .{
+
+        .width = .{ .grow = 1 },
+        .height = .{ .px = 28 },
+        .size = 13,
+
+    });
+
+    const buttons = page.box(panel, .{
+
+        .direction = .row,
+        .height = .{ .px = 32 },
+        .gap = 8,
+
+    });
+
+    _ = page.button(buttons, 1, "Create", .{
+
+        .width = .{ .px = 100 },
+        .height = .{ .px = 32 },
+        .size = 13,
+        .background = ui.theme.accent_dim,
+
+    });
+
+    _ = page.button(buttons, 2, "Cancel", .{
+
+        .width = .{ .px = 100 },
+        .height = .{ .px = 32 },
+        .size = 13,
+
+    });
+
+    page.end();
+    page.paint(surface);
+
+}
+
+fn menu_hit(x: i32, y: i32) ?usize {
+
+    const menu_w: i32 = 190;
+    const row_h: i32 = 30;
+    const inset: i32 = 4;
+
+    if (x < menu_x or x >= menu_x + menu_w) return null;
+    if (y < menu_y + inset) return null;
+
+    const index = @divTrunc(y - menu_y - inset, row_h);
+
+    if (index < 0 or index >= @as(i32, @intCast(menu_items.len))) return null;
+
+    return @intCast(index);
+
+}
+
+fn paint_menu(surface: *const gfx.Surface) void {
+
+    const row_h: i32 = 30;
+    const menu_w: i32 = 190;
+    const inset: i32 = 4;
+
+    var page = ui.Page{ .font = &font };
+
+    page.begin(@intCast(surface.width), @intCast(surface.height), .{
+
+        .width = .{ .px = @intCast(surface.width) },
+        .height = .{ .px = @intCast(surface.height) },
+
+    });
+
+    const menu = page.box(ui.Page.root, .{
+
+        .direction = .column,
+        .width = .{ .px = menu_w },
+        .height = .{ .px = row_h * @as(i32, @intCast(menu_items.len)) + inset * 2 },
+        .margin = .{ .left = menu_x, .top = menu_y },
+        .padding = ui.Edge.all(inset),
+        .background = ui.theme.surface,
+        .border = ui.theme.border,
+        .radius = 6,
+
+    });
+
+    for (menu_items, 0..) |item, index| {
+
+        const hovered = menu_hover != null and menu_hover.? == index;
+
+        _ = page.label(menu, item.label, .{
+
+            .width = .{ .grow = 1 },
+            .height = .{ .px = row_h - 1 },
+            .padding = ui.Edge.symmetric(12, 0),
+            .size = 13,
+            .color = ui.theme.text,
+            .background = if (hovered) ui.theme.hover else null,
+            .radius = 4,
+
+        });
+
+    }
+
+    page.end();
+    page.paint(surface);
 
 }

@@ -281,7 +281,9 @@ const cursorq = 1;
 const cursor_resource: u32 = 1;
 
 const notification_bit: u64 = 1;
-const cursor_submit_poll_limit = 1_000_000;
+const submit_sleep_ns: u64 = 1_000_000;
+const control_submit_waits: usize = 250;
+const cursor_submit_waits: usize = 50;
 
 var regs: usize = 0;
 var version: u32 = 0;
@@ -964,7 +966,8 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
 
     const used: *volatile Used = @ptrFromInt(queue_base + used_offset);
 
-    var polls: usize = 0;
+    const wait_limit = if (queue == cursorq) cursor_submit_waits else control_submit_waits;
+    var waits: usize = 0;
 
     while (true) {
 
@@ -983,15 +986,11 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
 
         note_display_config_event();
 
-        sys.yield();
+        if (waits >= wait_limit) return error.Gone;
 
-        if (queue == cursorq) {
+        sys.sleep(submit_sleep_ns);
 
-            polls += 1;
-
-            if (polls >= cursor_submit_poll_limit) return error.Gone;
-
-        }
+        waits += 1;
 
     }
 

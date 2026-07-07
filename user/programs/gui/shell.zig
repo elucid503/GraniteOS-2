@@ -40,7 +40,7 @@ const worker_stack_pages = 16;
 const page_size = 4096;
 const shutdown_method: u64 = 0xffff_ffff_ffff_fffe;
 
-var console: lib.font.Font = undefined;
+var console: lib.draw.bitmap.Font = undefined;
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;

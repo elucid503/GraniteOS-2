@@ -37,7 +37,7 @@ const toolbar_height: i32 = 38;
 const row_height: i32 = 26;
 const list_start: i32 = toolbar_height + 6;
 
-var font: lib.ttf.Face = undefined;
+var font: lib.draw.text.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
@@ -417,7 +417,7 @@ fn paint() void {
 
     if (client == null) {
 
-        ui.text(surface, &font, 20, list_start + 12, 14, "Filesystem unavailable - no disk attached.", ui.theme.text_dim);
+        text(surface, 20, list_start + 12, 14, "Filesystem unavailable - no disk attached.", ui.theme.text_dim);
         window.present_all() catch {};
 
         return;
@@ -436,9 +436,9 @@ fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_height }, ui.theme.surface_alt);
     surface.fill_rect(.{ .x = 0, .y = toolbar_height, .w = width, .h = 1 }, ui.theme.border);
 
-    ui.icon(surface, .{ .x = 8, .y = 7, .w = 24, .h = 24 }, lib.icons.arrow_up, ui.theme.text);
+    lib.draw.vector.icon_in(surface, .{ .x = 8, .y = 7, .w = 24, .h = 24 }, lib.icons.arrow_up, ui.theme.text);
 
-    ui.text_in(surface, &font, .{ .x = 44, .y = 0, .w = width - 52, .h = toolbar_height }, 0, 13, cwd, ui.theme.text);
+    text_in(surface, .{ .x = 44, .y = 0, .w = width - 52, .h = toolbar_height }, 0, 13, cwd, ui.theme.text);
 
 }
 
@@ -472,7 +472,7 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
 
     if (entry_count == 0) {
 
-        ui.text(surface, &font, 16, list_start + 10, 13, "Empty directory", ui.theme.text_dim);
+        text(surface, 16, list_start + 10, 13, "Empty directory", ui.theme.text_dim);
 
         return;
 
@@ -493,11 +493,11 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
 
         if (is_selected) {
 
-            surface.fill_rect(rect, ui.theme.accent_dim);
+            ui.fill_round_rect(surface, rect.inset(3), 5, ui.theme.accent_dim);
 
         } else if (hovered) {
 
-            ui.row_hover(surface, rect);
+            ui.fill_round_rect(surface, rect.inset(3), 5, ui.theme.hover);
 
         }
 
@@ -505,16 +505,16 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
         const icon = if (is_dir) lib.icons.folder else lib.icons.file;
         const tint = if (is_dir) ui.theme.accent else ui.theme.text_dim;
 
-        ui.icon(surface, .{ .x = 10, .y = y + 5, .w = 16, .h = 16 }, icon, tint);
+        lib.draw.vector.icon_in(surface, .{ .x = 10, .y = y + 5, .w = 16, .h = 16 }, icon, tint);
 
-        ui.text_in(surface, &font, .{ .x = 34, .y = y, .w = content_w - 120, .h = row_height }, 0, 13, entry.name[0..entry.name_len], ui.theme.text);
+        text_in(surface, .{ .x = 34, .y = y, .w = content_w - 120, .h = row_height }, 0, 13, entry.name[0..entry.name_len], ui.theme.text);
 
         if (!is_dir) {
 
             var buffer: [24]u8 = undefined;
             const size = human_size(entry.length, &buffer);
 
-            ui.text_in(surface, &font, .{ .x = content_w - 86, .y = y, .w = 80, .h = row_height }, 0, 12, size, ui.theme.text_faint);
+            text_in(surface, .{ .x = content_w - 86, .y = y, .w = 80, .h = row_height }, 0, 12, size, ui.theme.text_faint);
 
         }
 
@@ -538,8 +538,8 @@ fn paint_details(surface: *const gfx.Surface, width: i32, height: i32) void {
         var count_buffer: [48]u8 = undefined;
         const summary = std.fmt.bufPrint(&count_buffer, "{d} items", .{entry_count}) catch "";
 
-        ui.text(surface, &font, pad, list_start + 16, 14, "No selection", ui.theme.text_dim);
-        ui.text(surface, &font, pad, list_start + 40, 13, summary, ui.theme.text_faint);
+        text(surface, pad, list_start + 16, 14, "No selection", ui.theme.text_dim);
+        text(surface, pad, list_start + 40, 13, summary, ui.theme.text_faint);
 
         return;
 
@@ -547,19 +547,19 @@ fn paint_details(surface: *const gfx.Surface, width: i32, height: i32) void {
 
     const entry = entries[index];
 
-    ui.text(surface, &font, pad, list_start + 14, 15, entry.name[0..entry.name_len], ui.theme.text);
+    text(surface, pad, list_start + 14, 15, entry.name[0..entry.name_len], ui.theme.text);
 
     var meta: [64]u8 = undefined;
     const size = human_size(entry.length, meta[0..24]);
     const line = std.fmt.bufPrint(meta[24..], "file  -  {s}", .{size}) catch "file";
 
-    ui.text(surface, &font, pad, list_start + 38, 12, line, ui.theme.text_dim);
+    text(surface, pad, list_start + 38, 12, line, ui.theme.text_dim);
 
     surface.fill_rect(.{ .x = pad, .y = list_start + 58, .w = width - pad - 16, .h = 1 }, ui.theme.border);
 
     if (preview_len == 0) {
 
-        ui.text(surface, &font, pad, list_start + 70, 12, "(empty file)", ui.theme.text_faint);
+        text(surface, pad, list_start + 70, 12, "(empty file)", ui.theme.text_faint);
 
         return;
 
@@ -567,7 +567,7 @@ fn paint_details(surface: *const gfx.Surface, width: i32, height: i32) void {
 
     if (!preview_is_text) {
 
-        ui.text(surface, &font, pad, list_start + 70, 12, "Binary file - no preview", ui.theme.text_faint);
+        text(surface, pad, list_start + 70, 12, "Binary file - no preview", ui.theme.text_faint);
 
         return;
 
@@ -606,6 +606,23 @@ fn draw_preview(surface: *const gfx.Surface, rect: Rect) void {
         }
 
     }
+
+}
+
+fn text(surface: *const gfx.Surface, x: i32, y: i32, size: u32, content: []const u8, color: gfx.Color) void {
+
+    font.draw(surface, x, y, size, content, color);
+
+}
+
+fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, content: []const u8, color: gfx.Color) void {
+
+    const inner = rect.inset(inset);
+    const clipped = surface.clipped(inner);
+    const visible = ui.truncate(&font, content, size, inner.w);
+    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
+
+    font.draw(&clipped, inner.x, y, size, visible, color);
 
 }
 
