@@ -163,6 +163,8 @@ fn start_gui() !void {
         try spawn_launcher();
         try lib.stream.register_with(naming_endpoint, "launch", launcher_endpoint);
 
+        // The desktop wallpaper layer sits beneath the welcome splash so the handoff never shows bare compositor fill.
+        try spawn_context();
         try spawn_welcome();
 
     }
@@ -751,12 +753,7 @@ fn restart(who: u64) !void {
 
         welcome_id => {
 
-            if (gpu_device != null) {
-
-                try spawn_taskbar();
-                try spawn_context();
-
-            }
+            if (gpu_device != null) try spawn_taskbar();
 
         },
 

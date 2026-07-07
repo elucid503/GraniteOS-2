@@ -225,6 +225,18 @@ pub fn draw_resize_grip(back: *const Surface, window: *const Window, color: Colo
 
 }
 
+/// A one-pixel rounded outline around a decorated window frame.
+pub fn draw_frame_border(back: *const Surface, window: *const Window, color: Color) void {
+
+    const frame = window.frame();
+
+    var path = Path{};
+
+    draw.stroke.round_rect_border(&path, fx(frame.x), fx(frame.y), fx(frame.w), fx(frame.h), fx(corner_radius), fx(1));
+    draw.raster.fill(back, &path, color);
+
+}
+
 /// The interactive-resize rubber band: a two-pixel antialiased rounded outline.
 pub fn draw_outline(back: *const Surface, rect: Rect, color: Color) void {
 

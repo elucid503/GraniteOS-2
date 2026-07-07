@@ -44,6 +44,7 @@ pub const Chrome = struct {
     title_focused: Color,
     title_blurred: Color,
     chrome: Color,
+    border: Color,
 
 };
 
@@ -185,6 +186,7 @@ pub fn chrome() Chrome {
         .title_focused = palette.surface_alt,
         .title_blurred = palette.surface,
         .chrome = palette.text,
+        .border = palette.border,
 
     };
 

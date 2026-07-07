@@ -176,6 +176,9 @@ var window: lib.window.Window = undefined;
 
 var active: Tab = .scheduler;
 
+var tab_ptr_x: i32 = -1;
+var last_tab_hover: i32 = -2;
+
 // Shared between the sampler thread and the paint loop.
 
 var lock: ipc.Lock = .{};
@@ -275,7 +278,31 @@ fn run() !void {
 
                 },
 
-                events.kind_pointer_move => update_cursor(event.x, event.y),
+                events.kind_pointer_move => {
+
+                    tab_ptr_x = event.x;
+
+                    if (event.y < tab_height) {
+
+                        const token = tab_hover_token(event.x);
+
+                        if (token != last_tab_hover) {
+
+                            last_tab_hover = token;
+                            dirty = true;
+
+                        }
+
+                    } else if (last_tab_hover != -2) {
+
+                        last_tab_hover = -2;
+                        dirty = true;
+
+                    }
+
+                    update_cursor(event.x, event.y);
+
+                },
 
                 else => {},
 
@@ -400,6 +427,17 @@ fn busy_cores(snapshot: sysinfo.CpuSnapshot) u32 {
 
 }
 
+fn tab_hover_token(x: i32) i32 {
+
+    const width: i32 = @intCast(window.surface.width);
+    const each = @divTrunc(width, @as(i32, @intCast(tabs.len)));
+
+    if (each <= 0) return -1;
+
+    return @intCast(@min(@divTrunc(x, each), @as(i32, @intCast(tabs.len - 1))));
+
+}
+
 fn update_cursor(_: i32, y: i32) void {
 
     if (y < tab_height) lib.cursor.set(&connection, .clicker)
@@ -438,19 +476,28 @@ fn paint_tabs(surface: *const gfx.Surface) void {
 
     const width: i32 = @intCast(surface.width);
     const each = @divTrunc(width, @as(i32, @intCast(tabs.len)));
+    const active_index: i32 = @intCast(@intFromEnum(active));
+    const active_x = active_index * each;
+    const border_y = tab_height - 1;
+    const active_pill_left = active_x + 10;
+    const active_pill_right = active_x + each - 10;
 
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = tab_height }, ui.theme.surface_alt);
-    surface.fill_rect(.{ .x = 0, .y = tab_height, .w = width, .h = 1 }, ui.theme.border);
 
     for (tabs, 0..) |tab, index| {
 
         const x = @as(i32, @intCast(index)) * each;
-        const is_active = @intFromEnum(active) == index;
+        const is_active = active_index == @as(i32, @intCast(index));
+        const is_hovered = last_tab_hover == @as(i32, @intCast(index));
+        const pill = Rect{ .x = x + 10, .y = 6, .w = each - 20, .h = tab_height - 12 };
 
         if (is_active) {
 
-            ui.fill_round_rect(surface, .{ .x = x + 10, .y = 6, .w = each - 20, .h = tab_height - 12 }, 6, ui.theme.surface);
-            ui.fill_round_rect(surface, .{ .x = x + 18, .y = tab_height - 5, .w = each - 36, .h = 3 }, 2, ui.theme.accent);
+            ui.fill_round_rect(surface, pill, 6, ui.theme.active);
+
+        } else if (is_hovered) {
+
+            ui.fill_round_rect(surface, pill, 6, ui.theme.hover);
 
         }
 
@@ -458,6 +505,18 @@ fn paint_tabs(surface: *const gfx.Surface) void {
 
         lib.draw.vector.icon_in(surface, .{ .x = x + 18, .y = 11, .w = 20, .h = 20 }, tab.icon, tint);
         text_in(surface, .{ .x = x + 44, .y = 0, .w = each - 48, .h = tab_height }, 0, 14, tab.label, tint);
+
+    }
+
+    if (active_pill_left > 0) {
+
+        surface.fill_rect(.{ .x = 0, .y = border_y, .w = active_pill_left, .h = 1 }, ui.theme.border);
+
+    }
+
+    if (active_pill_right < width) {
+
+        surface.fill_rect(.{ .x = active_pill_right, .y = border_y, .w = width - active_pill_right, .h = 1 }, ui.theme.border);
 
     }
 

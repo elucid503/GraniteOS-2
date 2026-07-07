@@ -34,7 +34,7 @@ const max_path = 512;
 const preview_bytes = 2048;
 
 const toolbar_height: i32 = 38;
-const row_height: i32 = 26;
+const row_height: i32 = 32;
 const list_start: i32 = toolbar_height + 6;
 
 var font: lib.draw.text.Face = undefined;
@@ -505,7 +505,7 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
         const icon = if (is_dir) lib.icons.folder else lib.icons.file;
         const tint = if (is_dir) ui.theme.accent else ui.theme.text_dim;
 
-        lib.draw.vector.icon_in(surface, .{ .x = 10, .y = y + 5, .w = 16, .h = 16 }, icon, tint);
+        lib.draw.vector.icon_in(surface, .{ .x = 10, .y = y + @divTrunc(row_height - 16, 2), .w = 16, .h = 16 }, icon, tint);
 
         text_in(surface, .{ .x = 34, .y = y, .w = content_w - 120, .h = row_height }, 0, 13, entry.name[0..entry.name_len], ui.theme.text);
 

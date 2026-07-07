@@ -400,7 +400,9 @@ fn click(x: i32, y: i32) void {
 
     if (y < toolbar_height) {
 
-        if (x >= 8 and x < 80) {
+        const save_x = @as(i32, @intCast(window.surface.width)) - 80;
+
+        if (x >= save_x and x < save_x + 72) {
 
             save_file();
             paint();
@@ -422,7 +424,9 @@ fn update_cursor(x: i32, y: i32) void {
 
     if (y < toolbar_height) {
 
-        if (x >= 8 and x < 80) lib.cursor.set(&connection, .clicker)
+        const save_x = @as(i32, @intCast(window.surface.width)) - 80;
+
+        if (x >= save_x and x < save_x + 72) lib.cursor.set(&connection, .clicker)
         else lib.cursor.set(&connection, .pointer);
 
         return;
@@ -571,15 +575,15 @@ fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = bar_h }, ui.theme.surface_alt);
     surface.fill_rect(.{ .x = 0, .y = bar_h, .w = width, .h = 1 }, ui.theme.border);
 
-    const save_rect = Rect{ .x = 8, .y = 6, .w = 72, .h = 28 };
+    const save_rect = Rect{ .x = width - 80, .y = 6, .w = 72, .h = 28 };
+    const save_fill = if (dirty) ui.theme.accent else ui.theme.active;
 
-    ui.fill_round_rect(surface, save_rect, 5, if (dirty) ui.theme.accent_dim else ui.theme.surface_alt);
-    ui.stroke_round_rect(surface, save_rect, 5, 1, ui.theme.border);
+    ui.fill_round_rect(surface, save_rect, 5, save_fill);
     text_center(surface, save_rect, 13, "Save", ui.theme.text);
 
-    const title = ui.truncate(&font, file_path, 13, width - 120);
+    const title = ui.truncate(&font, file_path, 13, width - 104);
 
-    text_in(surface, .{ .x = 96, .y = 0, .w = width - 104, .h = bar_h }, 0, 13, title, ui.theme.text_dim);
+    text_in(surface, .{ .x = 12, .y = 0, .w = width - 104, .h = bar_h }, 0, 13, title, ui.theme.text_dim);
 
 }
 

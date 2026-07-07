@@ -21,7 +21,7 @@ comptime {
 
 const pad: i32 = 24;
 const swatch_size: i32 = 36;
-const theme_col_w: i32 = 78;
+const theme_col_w: i32 = 88;
 const swatch_id_base: u32 = 100;
 
 var font: lib.draw.text.Face = undefined;

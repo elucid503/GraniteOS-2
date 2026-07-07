@@ -132,8 +132,6 @@ fn run() !void {
     app_count = lib.wm.load_apps(&bundle, apps[0..]);
     launch_endpoint = lib.stream.lookup_endpoint("launch") catch 0;
 
-    try init_menu();
-
     refresh_windows();
     paint_bar();
 
@@ -454,7 +452,9 @@ fn menu_y(screen_height: u32) i32 {
 
 }
 
-fn init_menu() !void {
+fn ensure_menu() !void {
+
+    if (menu != null) return;
 
     const height = menu_height();
 
@@ -462,10 +462,11 @@ fn init_menu() !void {
 
     menu_window.surface.fill(ui.theme.window_bg);
 
+    try lib.wm.minimize(&connection, menu_window.id);
+
     const screen = try lib.wm.screen_info(&connection);
 
     try lib.wm.move_window(&connection, menu_window.id, 0, menu_y(screen.height));
-    try lib.wm.minimize(&connection, menu_window.id);
 
     menu = menu_window;
 
@@ -473,13 +474,13 @@ fn init_menu() !void {
 
 fn open_menu() void {
 
+    ensure_menu() catch return;
+
     const menu_window = menu orelse return;
 
     search.clear();
     menu_ptr_y = -1;
     last_menu_hover = -3;
-
-    lib.wm.restore(&connection, menu_window.id) catch {};
 
     if (lib.wm.screen_info(&connection)) |screen| {
 
@@ -489,7 +490,10 @@ fn open_menu() void {
 
     menu_open = true;
 
-    paint_menu();
+    paint_menu_content();
+    gfx.fence();
+    lib.wm.restore(&connection, menu_window.id) catch {};
+    menu_window.present_all() catch {};
     paint_bar();
 
 }
@@ -609,11 +613,32 @@ fn paint_bar() void {
 
     // Launcher button.
 
-    const launcher_rect = Rect{ .x = 0, .y = 0, .w = launcher_width(), .h = bar_height() };
+    const icon_size: i32 = 22;
+    const hover_h: i32 = 32;
+    const launcher_hover = Rect{
 
-    if (menu_open) ui.fill_round_rect(surface, launcher_rect.inset(4), 6, ui.theme.accent_dim);
+        .x = 4,
+        .y = @divTrunc(bar_height() - hover_h, 2),
+        .w = launcher_width() - 8,
+        .h = hover_h,
 
-    lib.draw.vector.icon_in(surface, .{ .x = 11, .y = 8, .w = 22, .h = 22 }, lib.icons.apps, ui.theme.text);
+    };
+    const launcher_hovered = bar_ptr_x >= 0 and bar_ptr_x < launcher_width();
+
+    if (menu_open) {
+
+        ui.fill_round_rect(surface, launcher_hover, 5, ui.theme.accent_dim);
+
+    } else if (launcher_hovered) {
+
+        ui.fill_round_rect(surface, launcher_hover, 5, ui.theme.hover);
+
+    }
+
+    const icon_x = @divTrunc(launcher_width() - icon_size, 2);
+    const icon_y = @divTrunc(bar_height() - icon_size, 2);
+
+    lib.draw.vector.icon_in(surface, .{ .x = icon_x, .y = icon_y, .w = icon_size, .h = icon_size }, lib.icons.apps, ui.theme.text);
 
     // Window buttons.
 
@@ -666,6 +691,14 @@ fn paint_clock(surface: *const gfx.Surface, width: i32) void {
 
 fn paint_menu() void {
 
+    paint_menu_content();
+
+    if (menu) |menu_window| menu_window.present_all() catch {};
+
+}
+
+fn paint_menu_content() void {
+
     const menu_window = menu orelse return;
     const surface = &menu_window.surface;
     const width: i32 = @intCast(surface.width);
@@ -677,7 +710,6 @@ fn paint_menu() void {
     const search_rect = Rect{ .x = 8, .y = 8, .w = width - 16, .h = search_height() - 12 };
 
     ui.fill_round_rect(surface, search_rect, 5, ui.theme.surface);
-    ui.stroke_round_rect(surface, search_rect, 5, 1, ui.theme.accent);
 
     const icon_size: i32 = 20;
     const icon_x = search_rect.x + 8;
@@ -738,8 +770,6 @@ fn paint_menu() void {
         draw_text(surface, 20, search_height() + 12, 13, "No matching applications", ui.theme.text_dim);
 
     }
-
-    menu_window.present_all() catch {};
 
 }
 
@@ -808,8 +838,8 @@ fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, content: []co
 
 fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
 
-    ui.fill_round_rect(surface, rect, 6, color);
-    ui.stroke_round_rect(surface, rect, 6, 1, ui.theme.border);
+    ui.fill_round_rect(surface, rect, 8, color);
+    ui.stroke_round_rect(surface, rect, 8, 1, ui.theme.border);
 
 }
 

@@ -51,6 +51,7 @@ const CompositorTheme = struct {
     title_focused: draw.Color,
     title_blurred: draw.Color,
     chrome: draw.Color,
+    border: draw.Color,
 
 };
 
@@ -60,6 +61,7 @@ var theme = CompositorTheme{
     .title_focused = draw.rgb(72, 72, 72),
     .title_blurred = draw.rgb(56, 56, 56),
     .chrome = draw.rgb(220, 220, 220),
+    .border = draw.rgb(58, 58, 58),
 
 };
 
@@ -216,6 +218,7 @@ fn load_compositor_theme() void {
     theme.title_focused = chrome.title_focused;
     theme.title_blurred = chrome.title_blurred;
     theme.chrome = chrome.chrome;
+    theme.border = chrome.border;
 
 }
 
@@ -508,7 +511,12 @@ fn present(badge: u64, in: *const Message) i64 {
 
     add_damage(local.translated(content.x, content.y).intersect(content));
 
-    composite() catch return -7;
+    // Minimized windows update their backing store off-screen; defer compositing until restore.
+    if (window.flags & proto.window.flag_minimized == 0) {
+
+        composite() catch return -7;
+
+    }
 
     return 0;
 
@@ -1310,6 +1318,7 @@ fn draw_window(window: *Window, clip: Rect) void {
     if (window.decorated()) {
 
         render.draw_resize_grip(&view, window, theme.title_blurred);
+        render.draw_frame_border(&view, window, theme.border);
 
     }
 
