@@ -1,4 +1,4 @@
-// Desktop preferences: theme palettes, display scale, and a small config file on disk. GUI apps call refresh()
+// Desktop preferences: theme palettes and a small config file on disk. GUI apps call refresh()
 // after prefs_changed notifications (or once at startup) so each process picks up the user's choices.
 
 const std = @import("std");
@@ -15,9 +15,6 @@ const Color = gfx.Color;
 
 pub const config_path = "/root/user/settings.cfg";
 pub const open_path_file = "/root/user/.open-path";
-
-pub const max_scale = 200;
-pub const min_scale = 75;
 
 pub const ThemeId = enum(u8) {
 
@@ -51,7 +48,6 @@ pub const Chrome = struct {
 };
 
 pub var active_theme: ThemeId = .mono;
-pub var scale_percent: u32 = 100;
 
 var loaded_generation: u64 = 0;
 
@@ -216,24 +212,6 @@ pub fn apply_theme(id: ThemeId) void {
 
 }
 
-pub fn set_scale(percent: u32) void {
-
-    scale_percent = @max(min_scale, @min(max_scale, percent));
-
-}
-
-pub fn scale_px(px: i32) i32 {
-
-    return @divTrunc(px * @as(i32, @intCast(scale_percent)), 100);
-
-}
-
-pub fn scale_u(px: u32) u32 {
-
-    return @intCast(scale_px(@intCast(px)));
-
-}
-
 /// Reload settings from disk when the on-disk generation changes.
 pub fn refresh_if_changed() bool {
 
@@ -269,7 +247,7 @@ pub fn save() void {
 
     var buffer: [128]u8 = undefined;
     const stamp = loaded_generation +% 1;
-    const text = std.fmt.bufPrint(&buffer, "theme={d}\nscale={d}\nstamp={d}\n", .{ @intFromEnum(active_theme), scale_percent, stamp }) catch return;
+    const text = std.fmt.bufPrint(&buffer, "theme={d}\nstamp={d}\n", .{ @intFromEnum(active_theme), stamp }) catch return;
 
     if (client.open_path(config_path, 0)) |file| {
 
@@ -361,12 +339,6 @@ fn parse_config(text: []const u8) void {
             const value = std.fmt.parseInt(u8, line[6..], 10) catch continue;
 
             if (value < theme_count) apply_theme(@enumFromInt(value));
-
-        } else if (std.mem.startsWith(u8, line, "scale=")) {
-
-            const value = std.fmt.parseInt(u32, line[6..], 10) catch continue;
-
-            set_scale(value);
 
         }
 

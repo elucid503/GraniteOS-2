@@ -221,9 +221,9 @@ fn update_cursor(x: i32, y: i32) void {
     if (prompt_open) {
 
         const rect = prompt_rect();
-        const field = Rect{ .x = rect.x + lib.prefs.scale_px(16), .y = rect.y + lib.prefs.scale_px(36), .w = rect.w - lib.prefs.scale_px(32), .h = lib.prefs.scale_px(28) };
-        const create = Rect{ .x = rect.x + lib.prefs.scale_px(16), .y = rect.y + lib.prefs.scale_px(72), .w = lib.prefs.scale_px(100), .h = lib.prefs.scale_px(32) };
-        const cancel = Rect{ .x = rect.x + lib.prefs.scale_px(124), .y = rect.y + lib.prefs.scale_px(72), .w = lib.prefs.scale_px(100), .h = lib.prefs.scale_px(32) };
+        const field = Rect{ .x = rect.x + 16, .y = rect.y + 36, .w = rect.w - 32, .h = 28 };
+        const create = Rect{ .x = rect.x + 16, .y = rect.y + 72, .w = 100, .h = 32 };
+        const cancel = Rect{ .x = rect.x + 124, .y = rect.y + 72, .w = 100, .h = 32 };
 
         if (field.contains(x, y)) lib.cursor.set(&connection, .selector)
         else if (create.contains(x, y) or cancel.contains(x, y)) lib.cursor.set(&connection, .clicker)
@@ -370,8 +370,8 @@ fn prompt_click(x: i32, y: i32) void {
 
     const rect = prompt_rect();
 
-    const create = Rect{ .x = rect.x + lib.prefs.scale_px(16), .y = rect.y + lib.prefs.scale_px(72), .w = lib.prefs.scale_px(100), .h = lib.prefs.scale_px(32) };
-    const cancel = Rect{ .x = rect.x + lib.prefs.scale_px(124), .y = rect.y + lib.prefs.scale_px(72), .w = lib.prefs.scale_px(100), .h = lib.prefs.scale_px(32) };
+    const create = Rect{ .x = rect.x + 16, .y = rect.y + 72, .w = 100, .h = 32 };
+    const cancel = Rect{ .x = rect.x + 124, .y = rect.y + 72, .w = 100, .h = 32 };
 
     if (create.contains(x, y)) {
 
@@ -450,16 +450,16 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
     };
 
-    ui.text(surface, &font, rect.x + lib.prefs.scale_px(16), rect.y + lib.prefs.scale_px(14), lib.prefs.scale_u(14), title, ui.theme.text);
+    ui.text(surface, &font, rect.x + 16, rect.y + 14, 14, title, ui.theme.text);
 
-    const field = Rect{ .x = rect.x + lib.prefs.scale_px(16), .y = rect.y + lib.prefs.scale_px(36), .w = rect.w - lib.prefs.scale_px(32), .h = lib.prefs.scale_px(28) };
+    const field = Rect{ .x = rect.x + 16, .y = rect.y + 36, .w = rect.w - 32, .h = 28 };
 
-    ui.text_field(surface, &font, field, lib.prefs.scale_u(13), &name_field, "name", .{ .focused = true, .caret_on = true });
+    ui.text_field(surface, &font, field, 13, &name_field, "name", .{ .focused = true, .caret_on = true });
 
-    const create = Rect{ .x = rect.x + lib.prefs.scale_px(16), .y = rect.y + lib.prefs.scale_px(72), .w = lib.prefs.scale_px(100), .h = lib.prefs.scale_px(32) };
-    const cancel = Rect{ .x = rect.x + lib.prefs.scale_px(124), .y = rect.y + lib.prefs.scale_px(72), .w = lib.prefs.scale_px(100), .h = lib.prefs.scale_px(32) };
+    const create = Rect{ .x = rect.x + 16, .y = rect.y + 72, .w = 100, .h = 32 };
+    const cancel = Rect{ .x = rect.x + 124, .y = rect.y + 72, .w = 100, .h = 32 };
 
-    ui.button(surface, &font, create, "Create", lib.prefs.scale_u(13), .accent);
-    ui.button(surface, &font, cancel, "Cancel", lib.prefs.scale_u(13), .normal);
+    ui.button(surface, &font, create, "Create", 13, .accent);
+    ui.button(surface, &font, cancel, "Cancel", 13, .normal);
 
 }

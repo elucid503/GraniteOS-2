@@ -1,6 +1,4 @@
-// Settings: desktop preferences for color theme and display scale. Changes apply immediately and persist to disk.
-
-const std = @import("std");
+// Settings: desktop preferences for color theme. Changes apply immediately and persist to disk.
 
 const lib = @import("lib");
 
@@ -13,7 +11,7 @@ const Rect = gfx.Rect;
 
 pub const app_meta = .{
     .title = "Settings",
-    .description = "Theme and display scale",
+    .description = "Color theme",
     .icon = "settings",
 };
 
@@ -24,7 +22,6 @@ comptime {
 }
 
 const pad: i32 = 24;
-const section_gap: i32 = 32;
 const swatch_size: i32 = 36;
 const theme_col_w: i32 = 76;
 
@@ -32,9 +29,6 @@ var font: lib.ttf.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
-
-var pointer_x: i32 = -1;
-var pointer_y: i32 = -1;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -52,7 +46,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(520, 360, 0, "Settings");
+    window = try connection.create_window(520, 220, 0, "Settings");
 
     paint();
 
@@ -82,13 +76,7 @@ fn run() !void {
 
             },
 
-            events.kind_pointer_move => {
-
-                pointer_x = event.x;
-                pointer_y = event.y;
-                update_cursor(event.x, event.y);
-
-            },
+            events.kind_pointer_move => update_cursor(event.x, event.y),
 
             else => {},
 
@@ -100,54 +88,22 @@ fn run() !void {
 
 fn click(x: i32, y: i32) void {
 
-    const theme_y = pad + lib.prefs.scale_px(36);
-    const swatch_y = theme_y + lib.prefs.scale_px(28);
+    const theme_y = pad + 36;
+    const swatch_y = theme_y + 28;
 
-    const label_h = lib.prefs.scale_px(18);
-    const theme_row_h = lib.prefs.scale_px(swatch_size) + lib.prefs.scale_px(6) + label_h;
+    const label_h = 18;
+    const theme_row_h = swatch_size + 6 + label_h;
 
-    if (y >= swatch_y and y < swatch_y + theme_row_h) {
+    if (y < swatch_y or y >= swatch_y + theme_row_h) return;
 
-        const col = @divTrunc(x - pad, lib.prefs.scale_px(theme_col_w));
+    const col = @divTrunc(x - pad, theme_col_w);
 
-        if (col >= 0 and col < @as(i32, @intCast(lib.prefs.theme_count))) {
+    if (col < 0 or col >= @as(i32, @intCast(lib.prefs.theme_count))) return;
 
-            lib.prefs.apply_theme(@enumFromInt(@as(u8, @intCast(col))));
-            lib.prefs.save();
-            lib.prefs.broadcast_change(&connection);
-            paint();
-
-        }
-
-        return;
-
-    }
-
-    const scale_y = swatch_y + theme_row_h + section_gap;
-    const button_y = scale_y + lib.prefs.scale_px(56);
-
-    const minus = Rect{ .x = pad, .y = button_y, .w = lib.prefs.scale_px(48), .h = lib.prefs.scale_px(32) };
-    const plus = Rect{ .x = pad + lib.prefs.scale_px(56), .y = button_y, .w = lib.prefs.scale_px(48), .h = lib.prefs.scale_px(32) };
-
-    if (minus.contains(x, y)) {
-
-        lib.prefs.set_scale(lib.prefs.scale_percent - 25);
-        lib.prefs.save();
-        lib.prefs.broadcast_change(&connection);
-        paint();
-
-        return;
-
-    }
-
-    if (plus.contains(x, y)) {
-
-        lib.prefs.set_scale(lib.prefs.scale_percent + 25);
-        lib.prefs.save();
-        lib.prefs.broadcast_change(&connection);
-        paint();
-
-    }
+    lib.prefs.apply_theme(@enumFromInt(@as(u8, @intCast(col))));
+    lib.prefs.save();
+    lib.prefs.broadcast_change(&connection);
+    paint();
 
 }
 
@@ -157,16 +113,16 @@ fn paint() void {
 
     surface.fill(ui.theme.window_bg);
 
-    ui.text(surface, &font, pad, pad, lib.prefs.scale_u(18), "Settings", ui.theme.text);
+    ui.text(surface, &font, pad, pad, 18, "Settings", ui.theme.text);
 
-    const theme_y = pad + lib.prefs.scale_px(36);
+    const theme_y = pad + 36;
 
-    ui.label(surface, &font, pad, theme_y, lib.prefs.scale_u(14), "Color theme");
+    ui.label(surface, &font, pad, theme_y, 14, "Color theme");
 
-    const swatch_y = theme_y + lib.prefs.scale_px(28);
+    const swatch_y = theme_y + 28;
 
-    const col_w = lib.prefs.scale_px(theme_col_w);
-    const swatch = lib.prefs.scale_px(swatch_size);
+    const col_w = theme_col_w;
+    const swatch = swatch_size;
 
     for (0..lib.prefs.theme_count) |index| {
 
@@ -182,33 +138,11 @@ fn paint() void {
         if (selected) surface.stroke_rect(rect, 2, ui.theme.accent);
 
         const name = lib.prefs.theme_names[index];
-        const label_rect = Rect{ .x = col_x, .y = swatch_y + swatch + lib.prefs.scale_px(6), .w = col_w, .h = lib.prefs.scale_px(16) };
+        const label_rect = Rect{ .x = col_x, .y = swatch_y + swatch + 6, .w = col_w, .h = 16 };
 
-        ui.text_center(surface, &font, label_rect, lib.prefs.scale_u(11), name, if (selected) ui.theme.text else ui.theme.text_faint);
+        ui.text_center(surface, &font, label_rect, 11, name, if (selected) ui.theme.text else ui.theme.text_faint);
 
     }
-
-    const label_h = lib.prefs.scale_px(18);
-    const theme_row_h = swatch + lib.prefs.scale_px(6) + label_h;
-
-    const scale_y = swatch_y + theme_row_h + section_gap + lib.prefs.scale_px(20);
-
-    ui.label(surface, &font, pad, scale_y, lib.prefs.scale_u(14), "Display scale");
-
-    var buffer: [16]u8 = undefined;
-    const scale_text = std.fmt.bufPrint(&buffer, "{d}%", .{lib.prefs.scale_percent}) catch "";
-
-    ui.text(surface, &font, pad, scale_y + lib.prefs.scale_px(24), lib.prefs.scale_u(22), scale_text, ui.theme.accent);
-
-    const button_y = scale_y + lib.prefs.scale_px(56);
-    const minus = Rect{ .x = pad, .y = button_y, .w = lib.prefs.scale_px(48), .h = lib.prefs.scale_px(32) };
-    const plus = Rect{ .x = pad + lib.prefs.scale_px(56), .y = button_y, .w = lib.prefs.scale_px(48), .h = lib.prefs.scale_px(32) };
-
-    const minus_hover = minus.contains(pointer_x, pointer_y);
-    const plus_hover = plus.contains(pointer_x, pointer_y);
-
-    ui.button(surface, &font, minus, "-", lib.prefs.scale_u(16), if (minus_hover) .hover else .normal);
-    ui.button(surface, &font, plus, "+", lib.prefs.scale_u(16), if (plus_hover) .hover else .normal);
 
     window.present_all() catch {};
 
@@ -216,15 +150,10 @@ fn paint() void {
 
 fn update_cursor(x: i32, y: i32) void {
 
-    const theme_y = pad + lib.prefs.scale_px(36);
-    const swatch_y = theme_y + lib.prefs.scale_px(28);
-    const label_h = lib.prefs.scale_px(18);
-    const theme_row_h = lib.prefs.scale_px(swatch_size) + lib.prefs.scale_px(6) + label_h;
-    const scale_y = swatch_y + theme_row_h + section_gap + lib.prefs.scale_px(20);
-    const button_y = scale_y + lib.prefs.scale_px(56);
-
-    const minus = Rect{ .x = pad, .y = button_y, .w = lib.prefs.scale_px(48), .h = lib.prefs.scale_px(32) };
-    const plus = Rect{ .x = pad + lib.prefs.scale_px(56), .y = button_y, .w = lib.prefs.scale_px(48), .h = lib.prefs.scale_px(32) };
+    const theme_y = pad + 36;
+    const swatch_y = theme_y + 28;
+    const label_h = 18;
+    const theme_row_h = swatch_size + 6 + label_h;
 
     if (y >= swatch_y and y < swatch_y + theme_row_h) {
 
@@ -233,13 +162,7 @@ fn update_cursor(x: i32, y: i32) void {
 
     }
 
-    if (minus.contains(x, y) or plus.contains(x, y)) {
-
-        lib.cursor.set(&connection, .clicker);
-        return;
-
-    }
-
+    _ = x;
     lib.cursor.set(&connection, .pointer);
 
 }

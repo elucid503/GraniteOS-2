@@ -398,9 +398,9 @@ fn row_len(target: usize) usize {
 
 fn click(x: i32, y: i32) void {
 
-    if (y < lib.prefs.scale_px(toolbar_height)) {
+    if (y < toolbar_height) {
 
-        if (x >= lib.prefs.scale_px(8) and x < lib.prefs.scale_px(80)) {
+        if (x >= 8 and x < 80) {
 
             save_file();
             paint();
@@ -420,9 +420,9 @@ fn click(x: i32, y: i32) void {
 
 fn update_cursor(x: i32, y: i32) void {
 
-    if (y < lib.prefs.scale_px(toolbar_height)) {
+    if (y < toolbar_height) {
 
-        if (x >= lib.prefs.scale_px(8) and x < lib.prefs.scale_px(80)) lib.cursor.set(&connection, .clicker)
+        if (x >= 8 and x < 80) lib.cursor.set(&connection, .clicker)
         else lib.cursor.set(&connection, .pointer);
 
         return;
@@ -435,10 +435,10 @@ fn update_cursor(x: i32, y: i32) void {
 
 fn place_cursor_at(x: i32, y: i32) void {
 
-    const text_x = lib.prefs.scale_px(12);
-    const text_y = lib.prefs.scale_px(toolbar_height) + lib.prefs.scale_px(8);
-    const line_h = lib.prefs.scale_px(18);
-    const font_size = lib.prefs.scale_u(14);
+    const text_x = 12;
+    const text_y = toolbar_height + 8;
+    const line_h = 18;
+    const font_size = 14;
 
     if (y < text_y) return;
 
@@ -489,10 +489,10 @@ fn col_from_x(line: []const u8, x: i32, font_size: u32) usize {
 
 fn visible_rows() usize {
 
-    const start = lib.prefs.scale_px(toolbar_height) + lib.prefs.scale_px(8);
+    const start = toolbar_height + 8;
     const height = @as(i32, @intCast(window.surface.height)) - start;
 
-    return @intCast(@max(1, @divTrunc(height, lib.prefs.scale_px(18))));
+    return @intCast(@max(1, @divTrunc(height, 18)));
 
 }
 
@@ -515,10 +515,10 @@ fn paint() void {
 
     paint_toolbar(surface, width);
 
-    const text_x = lib.prefs.scale_px(12);
-    const text_y = lib.prefs.scale_px(toolbar_height) + lib.prefs.scale_px(8);
-    const line_h = lib.prefs.scale_px(18);
-    const font_size = lib.prefs.scale_u(14);
+    const text_x = 12;
+    const text_y = toolbar_height + 8;
+    const line_h = 18;
+    const font_size = 14;
     const max_w = width - text_x * 2;
 
     var row: usize = 0;
@@ -566,17 +566,17 @@ fn paint() void {
 
 fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
 
-    const bar_h = lib.prefs.scale_px(toolbar_height);
+    const bar_h = toolbar_height;
 
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = bar_h }, ui.theme.surface_alt);
     surface.fill_rect(.{ .x = 0, .y = bar_h, .w = width, .h = 1 }, ui.theme.border);
 
-    const save_rect = Rect{ .x = lib.prefs.scale_px(8), .y = lib.prefs.scale_px(6), .w = lib.prefs.scale_px(72), .h = lib.prefs.scale_px(28) };
+    const save_rect = Rect{ .x = 8, .y = 6, .w = 72, .h = 28 };
 
-    ui.button(surface, &font, save_rect, "Save", lib.prefs.scale_u(13), if (dirty) .accent else .normal);
+    ui.button(surface, &font, save_rect, "Save", 13, if (dirty) .accent else .normal);
 
-    const title = ui.truncate(&font, file_path, lib.prefs.scale_u(13), width - lib.prefs.scale_px(120));
+    const title = ui.truncate(&font, file_path, 13, width - 120);
 
-    ui.text_in(surface, &font, .{ .x = lib.prefs.scale_px(96), .y = 0, .w = width - lib.prefs.scale_px(104), .h = bar_h }, 0, lib.prefs.scale_u(13), title, ui.theme.text_dim);
+    ui.text_in(surface, &font, .{ .x = 96, .y = 0, .w = width - 104, .h = bar_h }, 0, 13, title, ui.theme.text_dim);
 
 }

@@ -26,49 +26,49 @@ comptime {
 
 fn bar_height() i32 {
 
-    return lib.prefs.scale_px(40);
+    return 40;
 
 }
 
 fn launcher_width() i32 {
 
-    return lib.prefs.scale_px(44);
+    return 44;
 
 }
 
 fn clock_width() i32 {
 
-    return lib.prefs.scale_px(92);
+    return 92;
 
 }
 
 fn window_button_max() i32 {
 
-    return lib.prefs.scale_px(184);
+    return 184;
 
 }
 
 fn button_gap() i32 {
 
-    return lib.prefs.scale_px(4);
+    return 4;
 
 }
 
 fn menu_width() u32 {
 
-    return @intCast(lib.prefs.scale_px(340));
+    return @intCast(340);
 
 }
 
 fn row_height() i32 {
 
-    return lib.prefs.scale_px(56);
+    return 56;
 
 }
 
 fn search_height() i32 {
 
-    return lib.prefs.scale_px(46);
+    return 46;
 
 }
 
@@ -423,7 +423,7 @@ fn toggle_menu() void {
 
 fn menu_height() u32 {
 
-    return @intCast(search_height() + @as(i32, @intCast(app_count)) * row_height() + lib.prefs.scale_px(8));
+    return @intCast(search_height() + @as(i32, @intCast(app_count)) * row_height() + 8);
 
 }
 
@@ -520,7 +520,7 @@ fn menu_hover_token(y: i32) i32 {
         if (!matches(app)) continue;
 
         const top = search_height() + row * row_height();
-        const rect = Rect{ .x = 4, .y = top, .w = @as(i32, @intCast(menu_width())) - lib.prefs.scale_px(8), .h = row_height() - lib.prefs.scale_px(4) };
+        const rect = Rect{ .x = 4, .y = top, .w = @as(i32, @intCast(menu_width())) - 8, .h = row_height() - 4 };
 
         if (y >= rect.y and y < rect.y + rect.h) return row;
 
@@ -543,7 +543,7 @@ fn menu_app_at_y(y: i32) ?lib.wm.App {
         if (!matches(app)) continue;
 
         const top = search_height() + row * row_height();
-        const rect = Rect{ .x = 4, .y = top, .w = @as(i32, @intCast(menu_width())) - lib.prefs.scale_px(8), .h = row_height() - lib.prefs.scale_px(4) };
+        const rect = Rect{ .x = 4, .y = top, .w = @as(i32, @intCast(menu_width())) - 8, .h = row_height() - 4 };
 
         if (y >= rect.y and y < rect.y + rect.h) return app;
 
@@ -602,7 +602,7 @@ fn paint_bar() void {
     while (index < window_count and layout.width > 0) : (index += 1) {
 
         const x = layout.start + @as(i32, @intCast(index)) * (layout.width + button_gap());
-        const rect = Rect{ .x = x, .y = lib.prefs.scale_px(5), .w = layout.width, .h = bar_height() - lib.prefs.scale_px(10) };
+        const rect = Rect{ .x = x, .y = 5, .w = layout.width, .h = bar_height() - 10 };
 
         const info_entry = windows[index];
         const focused = info_entry.focused != 0;
@@ -653,7 +653,7 @@ fn paint_menu() void {
 
     // Search box.
 
-    const search_rect = Rect{ .x = lib.prefs.scale_px(8), .y = lib.prefs.scale_px(8), .w = width - lib.prefs.scale_px(16), .h = search_height() - lib.prefs.scale_px(12) };
+    const search_rect = Rect{ .x = 8, .y = 8, .w = width - 16, .h = search_height() - 12 };
 
     surface.fill_rect(search_rect, ui.theme.surface);
     surface.stroke_rect(search_rect, 1, ui.theme.accent);
@@ -698,7 +698,7 @@ fn paint_menu() void {
 
         any = true;
 
-        const rect = Rect{ .x = lib.prefs.scale_px(4), .y = y, .w = width - lib.prefs.scale_px(8), .h = row_height() - lib.prefs.scale_px(4) };
+        const rect = Rect{ .x = 4, .y = y, .w = width - 8, .h = row_height() - 4 };
         const hovered = menu_ptr_y >= rect.y and menu_ptr_y < rect.y + rect.h;
 
         if (hovered) ui.row_hover(surface, rect);
@@ -714,7 +714,7 @@ fn paint_menu() void {
 
     if (!any) {
 
-        ui.text(surface, &font, lib.prefs.scale_px(20), search_height() + lib.prefs.scale_px(12), lib.prefs.scale_u(13), "No matching applications", ui.theme.text_dim);
+        ui.text(surface, &font, 20, search_height() + 12, 13, "No matching applications", ui.theme.text_dim);
 
     }
 

@@ -229,7 +229,7 @@ fn precedes(a: Entry, b: Entry) bool {
 
 fn update_cursor(x: i32, y: i32) void {
 
-    if (y < toolbar_height and x < lib.prefs.scale_px(40)) lib.cursor.set(&connection, .clicker)
+    if (y < toolbar_height and x < 40) lib.cursor.set(&connection, .clicker)
     else if (hover_token(x, y) >= 0) lib.cursor.set(&connection, .clicker)
     else lib.cursor.set(&connection, .pointer);
 
