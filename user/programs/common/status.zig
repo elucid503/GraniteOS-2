@@ -23,10 +23,7 @@ const process_id_width = 7;
 const process_threads_width = 7;
 const process_handles_width = 7;
 const process_memory_width = 7;
-const max_pie_entries = 5;
-const pie_width: usize = 23;
-const pie_height: usize = 11;
-const pie_marks = "+*#@&o";
+const top_memory_count = 5;
 const process_regions_width = 7;
 const process_endpoints_width = 9;
 const process_notifs_width = 6;
@@ -305,12 +302,12 @@ fn render_memory(out: *Stream) lib.io.Error!void {
 
     const processes = sysinfo.read(sysinfo.ProcessSnapshot, .processes) catch return;
 
-    var entries: [max_pie_entries + 1]MemoryRank = undefined;
+    var entries: [top_memory_count]MemoryRank = undefined;
     var entry_count: usize = 0;
 
     rank_memory_processes(processes, &entries, &entry_count);
 
-    try write_memory_pie(out, entries[0..entry_count]);
+    try write_top_memory_processes(out, entries[0..entry_count]);
 
 }
 
@@ -386,16 +383,44 @@ fn write_load_cell(out: *Stream, value: u32, width: usize) lib.io.Error!void {
 const MemoryRank = struct {
 
     value: u64,
-    name: []const u8,
+    name_buf: [sysinfo.process_name_bytes]u8 = [_]u8{0} ** sysinfo.process_name_bytes,
+    name_len: u8 = 0,
+
+    fn set_label(self: *MemoryRank, text: []const u8) void {
+
+        const length = @min(text.len, self.name_buf.len);
+
+        @memset(&self.name_buf, 0);
+        @memcpy(self.name_buf[0..length], text[0..length]);
+        self.name_len = @intCast(length);
+
+    }
+
+    fn label(self: *const MemoryRank) []const u8 {
+
+        return self.name_buf[0..self.name_len];
+
+    }
 
 };
 
-fn rank_memory_processes(snapshot: sysinfo.ProcessSnapshot, entries: *[max_pie_entries + 1]MemoryRank, count: *usize) void {
+fn process_label(process: sysinfo.ProcessInfo, buffer: *[sysinfo.process_name_bytes + 16]u8) []const u8 {
+
+    const name_len = @min(@as(usize, @intCast(process.name_len)), process.name.len);
+
+    if (name_len > 0) return process.name[0..name_len];
+
+    return std.fmt.bufPrint(buffer, "pid-{d}", .{process.pid}) catch "pid-?";
+
+}
+
+fn rank_memory_processes(snapshot: sysinfo.ProcessSnapshot, entries: *[top_memory_count]MemoryRank, count: *usize) void {
 
     const shown = @min(@as(usize, @intCast(@min(snapshot.count, snapshot.capacity))), sysinfo.max_processes);
 
     var ranked: [sysinfo.max_processes]MemoryRank = undefined;
     var ranked_len: usize = 0;
+    var label_buffer: [sysinfo.process_name_bytes + 16]u8 = undefined;
 
     for (0..shown) |index| {
 
@@ -403,10 +428,8 @@ fn rank_memory_processes(snapshot: sysinfo.ProcessSnapshot, entries: *[max_pie_e
 
         if (process.memory_bytes == 0) continue;
 
-        ranked[ranked_len] = .{
-            .value = process.memory_bytes,
-            .name = process.name[0..@min(@as(usize, @intCast(process.name_len)), process.name.len)],
-        };
+        ranked[ranked_len] = .{ .value = process.memory_bytes };
+        ranked[ranked_len].set_label(process_label(process, &label_buffer));
 
         ranked_len += 1;
 
@@ -432,135 +455,37 @@ fn rank_memory_processes(snapshot: sysinfo.ProcessSnapshot, entries: *[max_pie_e
 
     }
 
-    count.* = 0;
-    var other: u64 = 0;
+    count.* = @min(top_memory_count, ranked_len);
 
     index = 0;
 
-    while (index < ranked_len) : (index += 1) {
+    while (index < count.*) : (index += 1) {
 
-        if (index < max_pie_entries) {
-
-            entries[count.*] = ranked[index];
-            count.* += 1;
-
-        } else {
-
-            other += ranked[index].value;
-
-        }
-
-    }
-
-    if (other > 0) {
-
-        entries[count.*] = .{ .value = other, .name = "other" };
-        count.* += 1;
+        entries[index] = ranked[index];
 
     }
 
 }
 
-fn write_memory_pie(out: *Stream, entries: []const MemoryRank) lib.io.Error!void {
+fn write_top_memory_processes(out: *Stream, entries: []const MemoryRank) lib.io.Error!void {
 
     if (entries.len == 0) return;
 
-    var total: u64 = 0;
-
-    for (entries) |entry| total += entry.value;
-
-    if (total == 0) return;
-
     try lib.io.writeln(out, "");
-    try lib.io.writeln(out, "by process");
+    try lib.io.writeln(out, "top processes");
+    try write_cell(out, "name", process_name_width);
+    try write_gap(out);
+    try write_right_cell(out, "memory", process_memory_width);
+    try lib.io.writeln(out, "");
 
-    const center_x: i32 = @intCast(pie_width / 2);
-    const center_y: i32 = @intCast(pie_height / 2);
-    const radius: i32 = @intCast(@min(center_x, center_y));
-    const radius_sq = radius * radius;
+    for (entries) |entry| {
 
-    var start: u16 = 0;
-    var sweep_starts: [max_pie_entries + 1]u16 = undefined;
-    var sweep_ends: [max_pie_entries + 1]u16 = undefined;
-
-    for (entries, 0..) |entry, index| {
-
-        sweep_starts[index] = start;
-
-        const sweep: u16 = @intCast(@min(360, entry.value * 360 / total));
-
-        start +%= sweep;
-        sweep_ends[index] = start;
-
-    }
-
-    var row: usize = 0;
-
-    while (row < pie_height) : (row += 1) {
-
-        var col: usize = 0;
-
-        while (col < pie_width) : (col += 1) {
-
-            const dx = @as(i32, @intCast(col)) - center_x;
-            const dy = @as(i32, @intCast(row)) - center_y;
-
-            if (dx * dx + dy * dy > radius_sq) {
-
-                try lib.io.write(out, " ");
-                continue;
-
-            }
-
-            const angle = point_angle_cw(dx, dy);
-            var mark: u8 = '.';
-
-            for (entries, 0..) |_, index| {
-
-                if (angle_in_wedge(angle, sweep_starts[index], sweep_ends[index])) {
-
-                    mark = pie_marks[index % pie_marks.len];
-                    break;
-
-                }
-
-            }
-
-            try lib.io.write(out, &[_]u8{mark});
-
-        }
-
+        try write_name_cell(out, &entry.name_buf, entry.name_len, process_name_width);
+        try write_gap(out);
+        try write_memory_cell(out, entry.value, process_memory_width);
         try lib.io.writeln(out, "");
 
     }
-
-    for (entries, 0..) |entry, index| {
-
-        const percent = if (total == 0) 0 else entry.value * 100 / total;
-
-        try lib.io.print(out, "  {c} {s}  {d}%\n", .{ pie_marks[index % pie_marks.len], entry.name, percent });
-
-    }
-
-}
-
-fn point_angle_cw(dx: i32, dy: i32) u16 {
-
-    const rad = std.math.atan2(@as(f64, @floatFromInt(dx)), @as(f64, @floatFromInt(-dy)));
-
-    var deg = rad * 180.0 / std.math.pi;
-
-    if (deg < 0) deg += 360.0;
-
-    return @intFromFloat(deg);
-
-}
-
-fn angle_in_wedge(angle: u16, start: u16, end: u16) bool {
-
-    if (end <= 360) return angle >= start and angle < end;
-
-    return angle >= start or angle < (end - 360);
 
 }
 
