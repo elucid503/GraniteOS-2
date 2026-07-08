@@ -15,6 +15,10 @@ const Color = gfx.Color;
 
 pub const config_path = "/root/user/settings.cfg";
 pub const open_path_file = "/root/user/.open-path";
+pub const desktop_pins_path = "/root/user/desktop.pins";
+
+pub const max_desktop_pins = 24;
+pub const max_pin_path = 128;
 
 pub const ThemeId = enum(u8) {
 
@@ -306,6 +310,142 @@ pub fn take_open_path(out: []u8) ?[]const u8 {
     if (read == 0) return null;
 
     return out[0..read];
+
+}
+
+pub const DesktopPin = struct {
+
+    path: [max_pin_path]u8 = [_]u8{0} ** max_pin_path,
+    length: u8 = 0,
+
+    pub fn slice(self: *const DesktopPin) []const u8 {
+
+        return self.path[0..self.length];
+
+    }
+
+};
+
+/// Load desktop shortcut paths (one absolute path per line) into `out`; returns the count.
+pub fn load_desktop_pins(out: []DesktopPin) usize {
+
+    var client = fs.Client.connect(cap.memory) catch return 0;
+
+    const file = client.open_path(desktop_pins_path, 0) catch return 0;
+    defer client.close_file(file) catch {};
+
+    var buffer: [max_desktop_pins * (max_pin_path + 1)]u8 = undefined;
+    const read = client.read(file, 0, &buffer) catch return 0;
+
+    var written: usize = 0;
+    var start: usize = 0;
+    var index: usize = 0;
+
+    while (index <= read and written < out.len) : (index += 1) {
+
+        const at_end = index == read;
+        const sep = if (at_end) true else buffer[index] == '\n' or buffer[index] == '\r';
+
+        if (!sep) continue;
+
+        const line = buffer[start..index];
+        start = index + 1;
+
+        if (line.len == 0 or line[0] != '/') continue;
+
+        const length = @min(line.len, max_pin_path);
+
+        out[written] = .{};
+        @memcpy(out[written].path[0..length], line[0..length]);
+        out[written].length = @intCast(length);
+        written += 1;
+
+    }
+
+    return written;
+
+}
+
+/// Append `path` to the desktop pin list when it is not already present.
+pub fn add_desktop_pin(path: []const u8) bool {
+
+    if (path.len == 0 or path[0] != '/') return false;
+
+    var pins: [max_desktop_pins]DesktopPin = undefined;
+    const count = load_desktop_pins(pins[0..]);
+
+    for (pins[0..count]) |pin| {
+
+        if (std.mem.eql(u8, pin.slice(), path)) return true;
+
+    }
+
+    if (count >= max_desktop_pins) return false;
+
+    pins[count] = .{};
+    const length = @min(path.len, max_pin_path);
+    @memcpy(pins[count].path[0..length], path[0..length]);
+    pins[count].length = @intCast(length);
+
+    return save_desktop_pins(pins[0 .. count + 1]);
+
+}
+
+/// Remove `path` from the desktop pin list.
+pub fn remove_desktop_pin(path: []const u8) bool {
+
+    var pins: [max_desktop_pins]DesktopPin = undefined;
+    const count = load_desktop_pins(pins[0..]);
+    var written: usize = 0;
+    var changed = false;
+
+    for (pins[0..count]) |pin| {
+
+        if (std.mem.eql(u8, pin.slice(), path)) {
+
+            changed = true;
+            continue;
+
+        }
+
+        pins[written] = pin;
+        written += 1;
+
+    }
+
+    if (!changed) return false;
+
+    return save_desktop_pins(pins[0..written]);
+
+}
+
+fn save_desktop_pins(pins: []const DesktopPin) bool {
+
+    var client = fs.Client.connect(cap.memory) catch return false;
+
+    var buffer: [max_desktop_pins * (max_pin_path + 1)]u8 = undefined;
+    var length: usize = 0;
+
+    for (pins) |pin| {
+
+        const slice = pin.slice();
+
+        if (length + slice.len + 1 > buffer.len) break;
+
+        @memcpy(buffer[length .. length + slice.len], slice);
+        length += slice.len;
+        buffer[length] = '\n';
+        length += 1;
+
+    }
+
+    _ = client.delete(desktop_pins_path) catch {};
+    client.create(desktop_pins_path, proto.filesystem.kind_file) catch return false;
+
+    const file = client.open_path(desktop_pins_path, 0) catch return false;
+    defer client.close_file(file) catch {};
+
+    return (client.write(file, 0, buffer[0..length]) catch 0) == length;
 
 }
 

@@ -15,13 +15,16 @@ pub const max_windows = proto.window.max_windows;
 
 pub const title_height: i32 = 28;
 pub const chrome_size: i32 = 14;
-pub const chrome_margin: i32 = 10;
+pub const chrome_margin: i32 = 8;
+pub const chrome_gap: i32 = 6;
+pub const chrome_buttons: i32 = 3;
 pub const title_padding: i32 = 10;
 
 // The square, in the frame's bottom-right corner, that grabs an interactive resize.
 pub const resize_grip: i32 = 18;
 
 pub const min_content: u32 = 32;
+pub const default_panel_height: i32 = 40;
 
 pub const StackKind = enum {
 
@@ -51,9 +54,32 @@ pub const Window = struct {
     title: [proto.window.max_title]u8 = [_]u8{0} ** proto.window.max_title,
     title_length: usize = 0,
 
+    // Geometry to restore after un-maximize (content size + frame origin).
+    restore_x: i32 = 0,
+    restore_y: i32 = 0,
+    restore_width: u32 = 0,
+    restore_height: u32 = 0,
+
     pub fn decorated(self: *const Window) bool {
 
         return self.flags & (proto.window.flag_undecorated | proto.window.flag_fullscreen | proto.window.flag_panel | proto.window.flag_desktop) == 0;
+
+    }
+
+    pub fn is_maximized(self: *const Window) bool {
+
+        return self.flags & proto.window.flag_maximized != 0;
+
+    }
+
+    pub fn is_taskbar_listed(self: *const Window) bool {
+
+        if (!self.used) return false;
+        if (self.is_panel() or self.is_desktop()) return false;
+        if (self.flags & proto.window.flag_undecorated != 0) return false;
+        if (self.flags & proto.window.flag_fullscreen != 0) return false;
+
+        return true;
 
     }
 
@@ -136,18 +162,19 @@ pub const Window = struct {
 
     pub fn chrome_reserved_width() i32 {
 
-        return chrome_size + chrome_margin;
+        return chrome_buttons * chrome_size + (chrome_buttons - 1) * chrome_gap + chrome_margin * 2;
 
     }
 
-    pub fn close_button(self: *const Window) Rect {
+    fn chrome_button(self: *const Window, index_from_right: i32) Rect {
 
         const bar = self.title_bar();
         const inset = @divTrunc(title_height - chrome_size, 2);
+        const offset = chrome_margin + index_from_right * (chrome_size + chrome_gap);
 
         return .{
 
-            .x = bar.x + bar.w - chrome_size - chrome_margin,
+            .x = bar.x + bar.w - offset - chrome_size,
             .y = bar.y + inset,
 
             .w = chrome_size,
@@ -157,8 +184,28 @@ pub const Window = struct {
 
     }
 
-    /// The bottom-right resize grip, in screen coordinates. Only decorated windows carry one.
+    pub fn close_button(self: *const Window) Rect {
+
+        return self.chrome_button(0);
+
+    }
+
+    pub fn maximize_button(self: *const Window) Rect {
+
+        return self.chrome_button(1);
+
+    }
+
+    pub fn minimize_button(self: *const Window) Rect {
+
+        return self.chrome_button(2);
+
+    }
+
+    /// The bottom-right resize grip, in screen coordinates. Only decorated, non-maximized windows carry one.
     pub fn resize_grip_rect(self: *const Window) Rect {
+
+        if (self.is_maximized()) return Rect.empty;
 
         const f = self.frame();
         const grip = @min(resize_grip, @min(f.w, f.h - title_height));
@@ -191,6 +238,8 @@ pub const Region = enum {
 
     title,
     close,
+    maximize,
+    minimize,
     resize,
     content,
 
@@ -302,6 +351,9 @@ pub const Manager = struct {
 
         } else {
 
+            // Do not clear flag_maximized here: clients reallocate their surface via resize after
+            // maximize/unmaximize, and clearing the flag would strand the window full-size.
+
             window.width = self.clamp_content_width(width);
             window.height = self.clamp_content_height(height);
 
@@ -366,7 +418,7 @@ pub const Manager = struct {
 
     }
 
-    /// Fill `out` with a record per ordinary (non-panel) window, bottom to top, for the taskbar; returns the count.
+    /// Fill `out` with a record per taskbar-listed window, bottom to top; returns the count.
     pub fn list_info(self: *Manager, out: []proto.window.WindowInfo) usize {
 
         var written: usize = 0;
@@ -376,7 +428,7 @@ pub const Manager = struct {
 
             const window = &self.windows[self.order[index]];
 
-            if (window.is_panel() or window.is_desktop()) continue;
+            if (!window.is_taskbar_listed()) continue;
 
             const frame = window.frame();
 
@@ -438,6 +490,108 @@ pub const Manager = struct {
         self.raise(id);
 
         return window.frame();
+
+    }
+
+    fn panel_height(self: *const Manager) i32 {
+
+        var index: usize = 0;
+
+        while (index < self.count) : (index += 1) {
+
+            const window = &self.windows[self.order[index]];
+
+            if (window.is_panel()) return @intCast(window.height);
+
+        }
+
+        return default_panel_height;
+
+    }
+
+    pub const GeometryChange = struct {
+
+        damage: Rect,
+        resized: bool,
+
+    };
+
+    /// Maximize a decorated window into the free area above the panel. Returns damage and whether content size changed.
+    pub fn maximize(self: *Manager, id: u32) ?GeometryChange {
+
+        const window = self.by_id(id) orelse return null;
+
+        if (!window.decorated()) return null;
+        if (window.flags & proto.window.flag_minimized != 0) return null;
+        if (window.is_maximized()) return null;
+
+        const before = window.frame();
+
+        window.restore_x = window.x;
+        window.restore_y = window.y;
+        window.restore_width = window.width;
+        window.restore_height = window.height;
+
+        const work_h = @max(0, @as(i32, @intCast(self.screen_height)) - self.panel_height());
+        const content_h = @max(@as(i32, @intCast(min_content)), work_h - title_height);
+
+        window.x = 0;
+        window.y = 0;
+        window.width = self.screen_width;
+        window.height = @intCast(content_h);
+        window.flags |= proto.window.flag_maximized;
+
+        self.focus = id;
+        self.raise(id);
+
+        const after = window.frame();
+        const resized = before.w != after.w or before.h != after.h;
+
+        return .{ .damage = before.cover(after), .resized = resized };
+
+    }
+
+    /// Restore a maximized window to its pre-maximize geometry.
+    pub fn unmaximize(self: *Manager, id: u32) ?GeometryChange {
+
+        const window = self.by_id(id) orelse return null;
+
+        if (!window.is_maximized()) return null;
+
+        const before = window.frame();
+
+        window.flags &= ~proto.window.flag_maximized;
+        window.x = window.restore_x;
+        window.y = window.restore_y;
+        window.width = if (window.restore_width != 0) window.restore_width else window.width;
+        window.height = if (window.restore_height != 0) window.restore_height else window.height;
+
+        self.clamp(window);
+
+        const after = window.frame();
+        const resized = before.w != after.w or before.h != after.h;
+
+        return .{ .damage = before.cover(after), .resized = resized };
+
+    }
+
+    /// Toggle maximize / restore for a decorated window.
+    pub fn toggle_maximize(self: *Manager, id: u32) ?GeometryChange {
+
+        const window = self.by_id(id) orelse return null;
+
+        if (window.is_maximized()) return self.unmaximize(id);
+
+        return self.maximize(id);
+
+    }
+
+    /// Clear maximized state after an interactive move or resize without changing geometry further.
+    pub fn clear_maximized(self: *Manager, id: u32) void {
+
+        const window = self.by_id(id) orelse return;
+
+        window.flags &= ~proto.window.flag_maximized;
 
     }
 
@@ -561,8 +715,13 @@ pub const Manager = struct {
             if (window.decorated()) {
 
                 if (window.close_button().contains(x, y)) return .{ .id = window.id, .region = .close };
+                if (window.maximize_button().contains(x, y)) return .{ .id = window.id, .region = .maximize };
+                if (window.minimize_button().contains(x, y)) return .{ .id = window.id, .region = .minimize };
                 if (window.title_bar().contains(x, y)) return .{ .id = window.id, .region = .title };
-                if (window.resize_grip_rect().contains(x, y)) return .{ .id = window.id, .region = .resize };
+
+                const grip = window.resize_grip_rect();
+
+                if (!grip.is_empty() and grip.contains(x, y)) return .{ .id = window.id, .region = .resize };
 
             }
 
@@ -580,6 +739,8 @@ pub const Manager = struct {
 
         const window = self.by_id(id) orelse return null;
         const before = window.frame();
+
+        if (window.is_maximized()) window.flags &= ~proto.window.flag_maximized;
 
         window.x = x;
         window.y = y;
@@ -609,6 +770,16 @@ pub const Manager = struct {
 
                 window.width = width;
                 window.height = height;
+
+            } else if (window.is_maximized()) {
+
+                const work_h = @max(0, @as(i32, @intCast(self.screen_height)) - self.panel_height());
+                const content_h = @max(@as(i32, @intCast(min_content)), work_h - title_height);
+
+                window.x = 0;
+                window.y = 0;
+                window.width = self.screen_width;
+                window.height = @intCast(content_h);
 
             } else {
 
@@ -959,6 +1130,54 @@ test "minimize hides a window and restore brings it back" {
 
     try testing.expect(window.flags & proto.window.flag_minimized == 0);
     try testing.expectEqual(window.id, manager.focus);
+
+}
+
+test "maximize fills work area and unmaximize restores geometry" {
+
+    var manager = test_manager();
+
+    _ = manager.create(1, 0, 40, proto.window.flag_panel, "taskbar").?;
+    const window = manager.create(1, 200, 180, 0, "app").?;
+
+    const saved_x = window.x;
+    const saved_y = window.y;
+    const saved_w = window.width;
+    const saved_h = window.height;
+
+    const maxed = manager.maximize(window.id).?;
+
+    try testing.expect(maxed.resized);
+    try testing.expect(window.is_maximized());
+    try testing.expectEqual(@as(i32, 0), window.x);
+    try testing.expectEqual(@as(i32, 0), window.y);
+    try testing.expectEqual(@as(u32, 640), window.width);
+    try testing.expectEqual(@as(u32, 480 - 40 - title_height), window.height);
+
+    const restored = manager.unmaximize(window.id).?;
+
+    try testing.expect(restored.resized);
+    try testing.expect(!window.is_maximized());
+    try testing.expectEqual(saved_x, window.x);
+    try testing.expectEqual(saved_y, window.y);
+    try testing.expectEqual(saved_w, window.width);
+    try testing.expectEqual(saved_h, window.height);
+
+}
+
+test "list_info skips undecorated chrome windows" {
+
+    var manager = test_manager();
+
+    _ = manager.create(1, 0, 44, proto.window.flag_panel, "taskbar").?;
+    _ = manager.create(1, 200, 200, proto.window.flag_undecorated, "menu").?;
+    const app = manager.create(1, 100, 100, 0, "app").?;
+
+    var records: [max_windows]proto.window.WindowInfo = undefined;
+    const count = manager.list_info(&records);
+
+    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectEqual(app.id, records[0].id);
 
 }
 

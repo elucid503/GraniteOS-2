@@ -403,7 +403,7 @@ fn update_chrome_cursor() void {
 
     switch (hit.region) {
 
-        .close => apply_cursor(.clicker),
+        .close, .maximize, .minimize => apply_cursor(.clicker),
         .title, .resize => apply_cursor(.pointer),
         .content => {},
 
@@ -673,9 +673,14 @@ fn list_windows(badge: u64, in: *const Message, out: *Message) i64 {
 
     }
 
-    if (session.extra.info_base == 0) return -7;
+    // Prefer the session mapping; fall back to the subscribe publish mapping for the same client.
+    var base = session.extra.info_base;
 
-    const records: [*]proto.window.WindowInfo = @ptrFromInt(session.extra.info_base);
+    if (base == 0 and list_watch.badge == badge) base = list_watch.info_base;
+
+    if (base == 0) return -7;
+
+    const records: [*]proto.window.WindowInfo = @ptrFromInt(base);
 
     out.data[1] = manager.list_info(records[0..manager_module.max_windows]);
 
@@ -928,8 +933,6 @@ fn drain_input() void {
 
 fn handle_pointer_move() void {
 
-    update_chrome_cursor();
-
     if (resize_id != 0) {
 
         const window = manager.by_id(resize_id) orelse {
@@ -958,6 +961,9 @@ fn handle_pointer_move() void {
 
     }
 
+    // Skip chrome hit-testing while dragging/resizing - it only matters for idle cursor shape.
+    update_chrome_cursor();
+
     if (window_under_pointer()) |window| {
 
         forward(window, window_event(events.kind_pointer_move, window.id, pointer_x, pointer_y));
@@ -977,7 +983,38 @@ fn handle_button_down(event: events.Event) void {
 
         .close => send_to_owner(window, window_event(events.kind_window_close, window.id, 0, 0)),
 
+        .minimize => {
+
+            _ = minimize_window(window.id);
+
+        },
+
+        .maximize => {
+
+            apply_toggle_maximize(window);
+
+        },
+
         .title => {
+
+            if (window.is_maximized()) {
+
+                // Dragging a maximized title bar restores it first so the frame can move under the pointer.
+                if (manager.unmaximize(window.id)) |result| {
+
+                    add_damage(result.damage);
+
+                    if (result.resized) {
+
+                        send_to_owner(window, window_event(events.kind_window_resize, window.id, @intCast(window.width), @intCast(window.height)));
+
+                    }
+
+                    publish_list();
+
+                }
+
+            }
 
             drag_id = window.id;
             drag_dx = pointer_x - window.x;
@@ -999,6 +1036,25 @@ fn handle_button_down(event: events.Event) void {
         },
 
         .content => forward(window, event),
+
+    }
+
+}
+
+fn apply_toggle_maximize(window: *Window) void {
+
+    if (manager.toggle_maximize(window.id)) |result| {
+
+        add_damage(result.damage);
+
+        if (result.resized) {
+
+            send_to_owner(window, window_event(events.kind_window_resize, window.id, @intCast(window.width), @intCast(window.height)));
+
+        }
+
+        publish_list();
+        composite() catch {};
 
     }
 
@@ -1073,6 +1129,9 @@ fn commit_resize() void {
     const target = resize_target(window);
 
     if (target.width == window.width and target.height == window.height) return;
+
+    // Interactive grip resize leaves maximized state.
+    if (window.is_maximized()) manager.clear_maximized(window.id);
 
     add_damage(manager.resize_window(window, target.width, target.height));
     add_damage(window.frame());

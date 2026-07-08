@@ -1,6 +1,7 @@
 // System cursor shapes: clients pick a kind for the element under the pointer and the compositor uploads it to
 // the hardware cursor plane.
 
+const cap = @import("../cap/cap.zig");
 const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
 
@@ -58,8 +59,25 @@ pub fn paint(side: usize, kind: Kind, pixels: [*]u32) void {
 
 }
 
+// Skip the IPC when the kind is unchanged; pointer moves fire this on every pixel.
+var cached_endpoint: cap.Handle = 0;
+var cached_kind: ?Kind = null;
+
 /// Tell the compositor which cursor belongs over this client's surface.
 pub fn set(connection: *const window.Connection, kind: Kind) void {
+
+    if (cached_endpoint == connection.endpoint) {
+
+        if (cached_kind) |previous| {
+
+            if (previous == kind) return;
+
+        }
+
+    }
+
+    cached_endpoint = connection.endpoint;
+    cached_kind = kind;
 
     _ = ipc.request(connection.endpoint, proto.window.set_cursor, &.{@intFromEnum(kind)}, &.{}) catch {};
 

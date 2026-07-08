@@ -1,4 +1,4 @@
-// Context: the desktop right-click manager.
+// Context: the desktop right-click manager, wallpaper layer, and pinned file/folder icons.
 
 const std = @import("std");
 
@@ -11,6 +11,7 @@ const proto = lib.proto;
 const ui = lib.ui;
 
 const Rect = gfx.Rect;
+const DesktopPin = lib.prefs.DesktopPin;
 
 comptime {
 
@@ -25,6 +26,7 @@ const MenuAction = enum {
     create_file,
     create_folder,
     open_marble,
+    remove_pin,
 
 };
 
@@ -35,12 +37,18 @@ const MenuRow = union(enum) {
 
 };
 
-const menu_rows = [_]MenuRow{
+const desktop_menu_rows = [_]MenuRow{
 
     .{ .action = .create_file },
     .{ .action = .create_folder },
     .{ .separator = {} },
     .{ .action = .open_marble },
+
+};
+
+const pin_menu_rows = [_]MenuRow{
+
+    .{ .action = .remove_pin },
 
 };
 
@@ -54,6 +62,12 @@ const prompt_height: i32 = 120;
 const blur_guard_ms: u64 = 100;
 const event_batch_max = 32;
 
+const pin_cell_w: i32 = 96;
+const pin_cell_h: i32 = 88;
+const pin_icon: i32 = 36;
+const pin_margin: i32 = 24;
+const pin_gap: i32 = 12;
+
 var font: lib.draw.text.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
@@ -64,6 +78,7 @@ var menu_x: i32 = 0;
 var menu_y: i32 = 0;
 var menu_hover: ?usize = null;
 var menu_opened_ms: u64 = 0;
+var menu_on_pin: ?usize = null;
 
 var prompt_open = false;
 var prompt_kind: PromptKind = .file;
@@ -74,12 +89,24 @@ var keyboard = lib.keymap.Keyboard{};
 var name_storage: [64]u8 = undefined;
 var name_field = ui.EditBuffer{ .bytes = &name_storage };
 
+var pins: [lib.prefs.max_desktop_pins]DesktopPin = undefined;
+var pin_count: usize = 0;
+var pin_is_dir: [lib.prefs.max_desktop_pins]bool = [_]bool{false} ** lib.prefs.max_desktop_pins;
+var pin_hover: ?usize = null;
+var pins_loaded_ms: u64 = 0;
+
 const PromptKind = enum {
 
     file,
     folder,
 
 };
+
+fn active_menu_rows() []const MenuRow {
+
+    return if (menu_on_pin != null) pin_menu_rows[0..] else desktop_menu_rows[0..];
+
+}
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -110,6 +137,7 @@ fn run() !void {
 
     } else |_| {}
 
+    reload_pins();
     paint_desktop();
 
     while (true) {
@@ -186,14 +214,29 @@ fn handle_desktop(event: events.Event) void {
 
             update_cursor(event.x, event.y);
 
-            if (!menu_open) return;
+            if (menu_open) {
 
-            const hit = menu_hit(event.x, event.y);
+                const hit = menu_hit(event.x, event.y);
 
-            if (hit == menu_hover) return;
+                if (hit != menu_hover) {
 
-            menu_hover = hit;
-            paint_menu_region();
+                    menu_hover = hit;
+                    paint_menu_region();
+
+                }
+
+                return;
+
+            }
+
+            const pin = pin_at(event.x, event.y);
+
+            if (pin != pin_hover) {
+
+                pin_hover = pin;
+                paint_desktop();
+
+            }
 
         },
 
@@ -226,6 +269,7 @@ fn handle_desktop(event: events.Event) void {
         events.kind_prefs_changed => {
 
             lib.prefs.refresh();
+            reload_pins();
             paint_desktop();
 
         },
@@ -233,6 +277,38 @@ fn handle_desktop(event: events.Event) void {
         else => {},
 
     }
+
+}
+
+fn reload_pins() void {
+
+    pin_count = lib.prefs.load_desktop_pins(pins[0..]);
+    pins_loaded_ms = lib.time.now_ms();
+
+    for (pins[0..pin_count], 0..) |pin, index| {
+
+        pin_is_dir[index] = false;
+
+        if (client) |*handle| {
+
+            if (handle.stat(pin.slice())) |stat| {
+
+                pin_is_dir[index] = stat.kind == proto.filesystem.kind_directory;
+
+            } else |_| {}
+
+        }
+
+    }
+
+}
+
+fn reload_pins_if_stale() void {
+
+    // Files broadcasts prefs_changed on pin add; still re-check on click as a backstop.
+    if (lib.time.now_ms() -% pins_loaded_ms < 250) return;
+
+    reload_pins();
 
 }
 
@@ -262,13 +338,20 @@ fn update_cursor(x: i32, y: i32) void {
 
     }
 
-    lib.cursor.set(&connection, .pointer);
+    if (pin_at(x, y) != null) lib.cursor.set(&connection, .clicker)
+    else lib.cursor.set(&connection, .pointer);
 
 }
 
 fn button_down(event: events.Event) void {
 
     if (event.code != events.button_left and event.code != events.button_right) return;
+
+    // Pick up pins added by the file manager without a busy poll.
+    const previous_pins = pin_count;
+    reload_pins_if_stale();
+
+    if (previous_pins != pin_count and !menu_open and !prompt_open) paint_desktop();
 
     if (prompt_open) {
 
@@ -282,15 +365,23 @@ fn button_down(event: events.Event) void {
 
         if (menu_hit(event.x, event.y)) |hit| {
 
+            const action = menu_action(hit);
+            const pin_index = menu_on_pin;
+
             close_menu();
 
-            const action = menu_action(hit) orelse return;
+            const chosen = action orelse return;
 
-            switch (action) {
+            switch (chosen) {
 
                 .create_file => open_prompt(.file),
                 .create_folder => open_prompt(.folder),
                 .open_marble => open_marble_here(),
+                .remove_pin => {
+
+                    if (pin_index) |index| remove_pin_at(index);
+
+                },
 
             }
 
@@ -306,24 +397,49 @@ fn button_down(event: events.Event) void {
 
     if (event.code == events.button_right) {
 
-        open_menu(event.x, event.y);
+        if (pin_at(event.x, event.y)) |index| {
+
+            open_menu(event.x, event.y, index);
+
+        } else {
+
+            open_menu(event.x, event.y, null);
+
+        }
+
         return;
 
     }
 
-    if (menu_open) close_menu();
+    if (menu_open) {
+
+        close_menu();
+        return;
+
+    }
+
+    if (pin_at(event.x, event.y)) |index| open_pin(index);
 
 }
 
-fn open_menu(x: i32, y: i32) void {
+fn open_menu(x: i32, y: i32, pin_index: ?usize) void {
 
     close_prompt();
 
     menu_x = x;
     menu_y = y;
     menu_hover = null;
+    menu_on_pin = pin_index;
     menu_open = true;
     menu_opened_ms = lib.time.now_ms();
+
+    // Clamp to the desktop surface.
+    const width: i32 = @intCast(desktop.surface.width);
+    const height: i32 = @intCast(desktop.surface.height);
+    const menu_h = menu_content_height() + menu_inset * 2;
+
+    if (menu_x + menu_w > width) menu_x = @max(0, width - menu_w);
+    if (menu_y + menu_h > height) menu_y = @max(0, height - menu_h);
 
     paint_desktop();
 
@@ -333,13 +449,98 @@ fn close_menu() void {
 
     if (!menu_open) return;
 
-    const region = menu_bounds();
-
     menu_open = false;
     menu_hover = null;
+    menu_on_pin = null;
 
-    desktop.surface.fill_rect(region, lib.prefs.wallpaper());
-    desktop.present(region) catch {};
+    paint_desktop();
+
+}
+
+fn remove_pin_at(index: usize) void {
+
+    if (index >= pin_count) return;
+
+    _ = lib.prefs.remove_desktop_pin(pins[index].slice());
+    reload_pins();
+    paint_desktop();
+
+}
+
+fn open_pin(index: usize) void {
+
+    if (index >= pin_count) return;
+
+    const path = pins[index].slice();
+
+    // Re-stat on open so a cold pin_is_dir cache never opens a folder in Notepad (empty black window).
+    var is_dir = pin_is_dir[index];
+
+    if (client) |*handle| {
+
+        if (handle.stat(path)) |stat| {
+
+            is_dir = stat.kind == proto.filesystem.kind_directory;
+            pin_is_dir[index] = is_dir;
+
+        } else |_| {}
+
+    }
+
+    if (is_dir) {
+
+        lib.wm.launch_with_path("files", path);
+
+    } else {
+
+        lib.wm.launch_with_path("notepad", path);
+
+    }
+
+}
+
+fn pin_cell(index: usize) Rect {
+
+    const cols = @max(1, @divTrunc(@as(i32, @intCast(desktop.surface.width)) - pin_margin * 2 + pin_gap, pin_cell_w + pin_gap));
+    const col: i32 = @intCast(@as(usize, @intCast(index)) % @as(usize, @intCast(cols)));
+    const row: i32 = @intCast(@as(usize, @intCast(index)) / @as(usize, @intCast(cols)));
+
+    return .{
+
+        .x = pin_margin + col * (pin_cell_w + pin_gap),
+        .y = pin_margin + row * (pin_cell_h + pin_gap),
+        .w = pin_cell_w,
+        .h = pin_cell_h,
+
+    };
+
+}
+
+fn pin_at(x: i32, y: i32) ?usize {
+
+    var index: usize = 0;
+
+    while (index < pin_count) : (index += 1) {
+
+        if (pin_cell(index).contains(x, y)) return index;
+
+    }
+
+    return null;
+
+}
+
+fn pin_label(path: []const u8) []const u8 {
+
+    if (path.len <= 1) return path;
+
+    if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
+
+        if (slash + 1 < path.len) return path[slash + 1 ..];
+
+    }
+
+    return path;
 
 }
 
@@ -421,6 +622,7 @@ fn menu_label(action: MenuAction) []const u8 {
         .create_file => "Create New File",
         .create_folder => "Create New Folder",
         .open_marble => "Open MARBLE Here",
+        .remove_pin => "Remove from Desktop",
 
     };
 
@@ -428,9 +630,11 @@ fn menu_label(action: MenuAction) []const u8 {
 
 fn menu_action(index: usize) ?MenuAction {
 
-    if (index >= menu_rows.len) return null;
+    const rows = active_menu_rows();
 
-    return switch (menu_rows[index]) {
+    if (index >= rows.len) return null;
+
+    return switch (rows[index]) {
 
         .action => |action| action,
         .separator => null,
@@ -443,7 +647,7 @@ fn menu_content_height() i32 {
 
     var height: i32 = 0;
 
-    for (menu_rows) |row| {
+    for (active_menu_rows()) |row| {
 
         height += switch (row) {
 
@@ -508,13 +712,8 @@ fn menu_bounds() Rect {
 
 fn paint_menu_region() void {
 
-    const surface = &desktop.surface;
-    const region = menu_bounds();
-
-    surface.fill_rect(region, lib.prefs.wallpaper());
-    paint_menu(surface);
-
-    desktop.present(region) catch {};
+    // Menu hover redraws the whole desktop so pin icons under the menu stay correct.
+    paint_desktop();
 
 }
 
@@ -523,12 +722,43 @@ fn paint_desktop() void {
     const surface = &desktop.surface;
 
     surface.fill(lib.prefs.wallpaper());
+    paint_pins(surface);
 
     if (menu_open) paint_menu(surface);
 
     if (prompt_open) paint_prompt(surface);
 
     desktop.present_all() catch {};
+
+}
+
+fn paint_pins(surface: *const gfx.Surface) void {
+
+    var index: usize = 0;
+
+    while (index < pin_count) : (index += 1) {
+
+        const cell = pin_cell(index);
+        const hovered = pin_hover != null and pin_hover.? == index;
+
+        if (hovered) ui.fill_round_rect(surface, cell, 8, ui.theme.hover);
+
+        const icon = if (pin_is_dir[index]) lib.icons.folder else lib.icons.file;
+        const tint = if (pin_is_dir[index]) ui.theme.accent else ui.theme.text_dim;
+        const icon_x = cell.x + @divTrunc(cell.w - pin_icon, 2);
+        const icon_y = cell.y + 10;
+
+        lib.draw.vector.icon_in(surface, .{ .x = icon_x, .y = icon_y, .w = pin_icon, .h = pin_icon }, icon, tint);
+
+        const label = pin_label(pins[index].slice());
+        const visible = ui.truncate(&font, label, 12, cell.w - 8);
+        const text_w = font.text_width(visible, 12);
+        const text_x = cell.x + @divTrunc(cell.w - text_w, 2);
+        const text_y = icon_y + pin_icon + 8;
+
+        font.draw(surface, text_x, text_y, 12, visible, ui.theme.text);
+
+    }
 
 }
 
@@ -619,7 +849,9 @@ fn menu_hit(x: i32, y: i32) ?usize {
 
     if (y < cursor_y) return null;
 
-    for (menu_rows, 0..) |row, index| {
+    const rows = active_menu_rows();
+
+    for (rows, 0..) |row, index| {
 
         const span = switch (row) {
 
@@ -671,7 +903,9 @@ fn paint_menu(surface: *const gfx.Surface) void {
 
     });
 
-    for (menu_rows, 0..) |row, index| {
+    const rows = active_menu_rows();
+
+    for (rows, 0..) |row, index| {
 
         switch (row) {
 
@@ -714,7 +948,7 @@ fn paint_menu(surface: *const gfx.Surface) void {
 
     var cursor_y = menu_y + menu_inset;
 
-    for (menu_rows) |row| {
+    for (rows) |row| {
 
         switch (row) {
 

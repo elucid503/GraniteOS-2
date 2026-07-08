@@ -48,6 +48,8 @@ pub fn draw_title_bar(back: *const Surface, window: *const Window, focused: bool
 
     }
 
+    draw_minimize_button(back, window.minimize_button(), chrome);
+    draw_maximize_button(back, window.maximize_button(), chrome, window.is_maximized());
     draw_close_button(back, window.close_button(), chrome);
 
 }
@@ -70,6 +72,46 @@ fn draw_title_text(back: *const Surface, window: *const Window, bar: Rect, chrom
 
 }
 
+fn draw_minimize_button(back: *const Surface, box: Rect, chrome: Chrome) void {
+
+    const cx = box.x + @divTrunc(box.w, 2);
+    const cy = box.y + @divTrunc(box.h, 2);
+    const arm = @max(2, @divTrunc(box.w, 4));
+
+    stroke_line(back, cx - arm, cy + arm, cx + arm, cy + arm, chrome.text);
+
+}
+
+fn draw_maximize_button(back: *const Surface, box: Rect, chrome: Chrome, maximized: bool) void {
+
+    const inset = @max(2, @divTrunc(box.w, 5));
+    const outer = Rect{
+
+        .x = box.x + inset,
+        .y = box.y + inset,
+        .w = box.w - 2 * inset,
+        .h = box.h - 2 * inset,
+
+    };
+
+    if (maximized) {
+
+        // Restored glyph: overlapping squares.
+        const shift = @max(1, @divTrunc(inset, 2));
+        const back_box = Rect{ .x = outer.x + shift, .y = outer.y, .w = outer.w - shift, .h = outer.h - shift };
+        const front = Rect{ .x = outer.x, .y = outer.y + shift, .w = outer.w - shift, .h = outer.h - shift };
+
+        stroke_rect(back, back_box, chrome.text);
+        stroke_rect(back, front, chrome.text);
+
+    } else {
+
+        stroke_rect(back, outer, chrome.text);
+
+    }
+
+}
+
 fn draw_close_button(back: *const Surface, box: Rect, chrome: Chrome) void {
 
     const cx = box.x + @divTrunc(box.w, 2);
@@ -78,6 +120,17 @@ fn draw_close_button(back: *const Surface, box: Rect, chrome: Chrome) void {
 
     stroke_line(back, cx - arm, cy - arm, cx + arm, cy + arm, chrome.text);
     stroke_line(back, cx + arm, cy - arm, cx - arm, cy + arm, chrome.text);
+
+}
+
+fn stroke_rect(back: *const Surface, box: Rect, color: Color) void {
+
+    if (box.w <= 0 or box.h <= 0) return;
+
+    stroke_line(back, box.x, box.y, box.x + box.w - 1, box.y, color);
+    stroke_line(back, box.x, box.y + box.h - 1, box.x + box.w - 1, box.y + box.h - 1, color);
+    stroke_line(back, box.x, box.y, box.x, box.y + box.h - 1, color);
+    stroke_line(back, box.x + box.w - 1, box.y, box.x + box.w - 1, box.y + box.h - 1, color);
 
 }
 

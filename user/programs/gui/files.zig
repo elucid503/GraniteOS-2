@@ -60,6 +60,59 @@ var preview: [preview_bytes]u8 = undefined;
 var preview_len: usize = 0;
 var preview_is_text = false;
 
+const MenuAction = enum {
+
+    edit_notepad,
+    view_details,
+    add_desktop,
+    delete_item,
+
+};
+
+const MenuRow = union(enum) {
+
+    action: MenuAction,
+    separator,
+
+};
+
+const menu_rows = [_]MenuRow{
+
+    .{ .action = .edit_notepad },
+    .{ .action = .view_details },
+    .{ .action = .add_desktop },
+    .{ .separator = {} },
+    .{ .action = .delete_item },
+
+};
+
+const menu_row_h: i32 = 30;
+const menu_separator_h: i32 = 9;
+const menu_w: i32 = 200;
+const menu_inset: i32 = 4;
+const menu_label_pad: i32 = 12;
+
+const details_w: i32 = 340;
+const details_h: i32 = 240;
+
+var menu_open = false;
+var menu_x: i32 = 0;
+var menu_y: i32 = 0;
+var menu_hover: ?usize = null;
+var menu_target: ?usize = null;
+
+var details_open = false;
+var details_writable = true;
+var details_path: [max_path]u8 = undefined;
+var details_path_len: usize = 0;
+var details_name: [48]u8 = undefined;
+var details_name_len: usize = 0;
+var details_kind: u8 = 0;
+var details_length: u64 = 0;
+var details_status: []const u8 = "";
+
+var pointer_x: i32 = -1;
+
 pub fn main(_: []const []const u8) u8 {
 
     run() catch return 1;
@@ -81,7 +134,9 @@ fn run() !void {
     if (lib.fs.Client.connect(cap.memory)) |opened| {
 
         client = opened;
-        set_cwd(start_directory());
+
+        if (client) |*handle| set_cwd(start_directory(handle));
+
         reload();
 
     } else |_| {}
@@ -109,11 +164,7 @@ fn run() !void {
 
             },
 
-            events.kind_button_down => {
-
-                if (event.code == events.button_left) click(event.x, event.y);
-
-            },
+            events.kind_button_down => button_down(event),
 
             events.kind_prefs_changed => {
 
@@ -122,18 +173,38 @@ fn run() !void {
 
             },
 
-            events.kind_scroll => wheel(event.value),
+            events.kind_scroll => {
+
+                if (!menu_open and !details_open) wheel(event.value);
+
+            },
 
             events.kind_pointer_move => {
 
+                pointer_x = event.x;
                 pointer_y = event.y;
 
-                const token = hover_token(event.x, event.y);
+                if (menu_open) {
 
-                if (token != last_hover) {
+                    const hit = menu_hit(event.x, event.y);
 
-                    last_hover = token;
-                    paint();
+                    if (hit != menu_hover) {
+
+                        menu_hover = hit;
+                        paint();
+
+                    }
+
+                } else {
+
+                    const token = hover_token(event.x, event.y);
+
+                    if (token != last_hover) {
+
+                        last_hover = token;
+                        paint();
+
+                    }
 
                 }
 
@@ -149,7 +220,108 @@ fn run() !void {
 
 }
 
-fn start_directory() []const u8 {
+fn button_down(event: events.Event) void {
+
+    if (event.code != events.button_left and event.code != events.button_right) return;
+
+    if (details_open) {
+
+        if (event.code == events.button_left) details_click(event.x, event.y);
+
+        return;
+
+    }
+
+    if (menu_open) {
+
+        if (event.code == events.button_left) {
+
+            if (menu_hit(event.x, event.y)) |hit| {
+
+                const action = menu_action(hit) orelse {
+
+                    close_menu();
+                    return;
+
+                };
+
+                const target = menu_target;
+                close_menu();
+
+                if (target) |index| run_menu_action(action, index);
+
+                return;
+
+            }
+
+            close_menu();
+            return;
+
+        }
+
+        if (event.code == events.button_right) {
+
+            close_menu();
+            open_context(event.x, event.y);
+            return;
+
+        }
+
+    }
+
+    if (event.code == events.button_right) {
+
+        open_context(event.x, event.y);
+        return;
+
+    }
+
+    click(event.x, event.y);
+
+}
+
+fn start_directory(handle: *lib.fs.Client) []const u8 {
+
+    // Desktop pins and other launchers can stage a path for the next Files window.
+    var staged: [max_path]u8 = undefined;
+
+    if (lib.prefs.take_open_path(&staged)) |path| {
+
+        // Copy out of the staging buffer first - take_open_path returns a slice of `staged`.
+        const length = @min(path.len, cwd_storage.len);
+        @memcpy(cwd_storage[0..length], path[0..length]);
+        const saved = cwd_storage[0..length];
+
+        if (handle.stat(saved)) |stat| {
+
+            if (stat.kind == proto.filesystem.kind_directory) return saved;
+
+            // A staged file falls back to its parent directory.
+            if (std.mem.lastIndexOfScalar(u8, saved, '/')) |slash| {
+
+                const parent = if (slash == 0) "/" else saved[0..slash];
+                const parent_len = @min(parent.len, cwd_storage.len);
+
+                // parent may alias cwd_storage; use a tiny scratch when needed.
+                if (parent.ptr == cwd_storage[0..].ptr) {
+
+                    return cwd_storage[0..parent_len];
+
+                }
+
+                @memcpy(cwd_storage[0..parent_len], parent[0..parent_len]);
+                return cwd_storage[0..parent_len];
+
+            }
+
+        } else |_| {
+
+            // Stat failed: still open the staged absolute path if it looks valid.
+            if (saved.len > 0 and saved[0] == '/') return saved;
+
+        }
+
+    }
 
     const home = lib.start.cwd();
 
@@ -229,6 +401,24 @@ fn precedes(a: Entry, b: Entry) bool {
 
 fn update_cursor(x: i32, y: i32) void {
 
+    if (details_open) {
+
+        if (details_hit(x, y) != null) lib.cursor.set(&connection, .clicker)
+        else lib.cursor.set(&connection, .pointer);
+
+        return;
+
+    }
+
+    if (menu_open) {
+
+        if (menu_hit(x, y) != null) lib.cursor.set(&connection, .clicker)
+        else lib.cursor.set(&connection, .pointer);
+
+        return;
+
+    }
+
     if (y < toolbar_height and x < 40) lib.cursor.set(&connection, .clicker)
     else if (hover_token(x, y) >= 0) lib.cursor.set(&connection, .clicker)
     else lib.cursor.set(&connection, .pointer);
@@ -243,7 +433,303 @@ fn hover_token(x: i32, y: i32) i32 {
 
 }
 
+fn entry_index_at(x: i32, y: i32) ?usize {
+
+    if (y < list_start or x >= list_width()) return null;
+
+    const row: usize = @intCast(@divTrunc(y - list_start, row_height));
+    const index = scroll + row;
+
+    if (index >= entry_count) return null;
+
+    return index;
+
+}
+
+fn open_context(x: i32, y: i32) void {
+
+    const index = entry_index_at(x, y) orelse return;
+
+    selected = index;
+    menu_target = index;
+    menu_x = x;
+    menu_y = y;
+    menu_hover = null;
+    menu_open = true;
+
+    // Keep the menu on-screen.
+    const width: i32 = @intCast(window.surface.width);
+    const height: i32 = @intCast(window.surface.height);
+    const menu_h = menu_content_height() + menu_inset * 2;
+
+    if (menu_x + menu_w > width) menu_x = @max(0, width - menu_w);
+    if (menu_y + menu_h > height) menu_y = @max(0, height - menu_h);
+
+    paint();
+
+}
+
+fn close_menu() void {
+
+    if (!menu_open) return;
+
+    menu_open = false;
+    menu_hover = null;
+    menu_target = null;
+    paint();
+
+}
+
+fn menu_label(action: MenuAction) []const u8 {
+
+    return switch (action) {
+
+        .edit_notepad => "Edit via Notepad",
+        .view_details => "View Details",
+        .add_desktop => "Add To Desktop",
+        .delete_item => "Delete Item",
+
+    };
+
+}
+
+fn menu_action(index: usize) ?MenuAction {
+
+    if (index >= menu_rows.len) return null;
+
+    return switch (menu_rows[index]) {
+
+        .action => |action| action,
+        .separator => null,
+
+    };
+
+}
+
+fn menu_content_height() i32 {
+
+    var height: i32 = 0;
+
+    for (menu_rows) |row| {
+
+        height += switch (row) {
+
+            .action => menu_row_h,
+            .separator => menu_separator_h,
+
+        };
+
+    }
+
+    return height;
+
+}
+
+fn menu_hit(x: i32, y: i32) ?usize {
+
+    if (x < menu_x or x >= menu_x + menu_w) return null;
+
+    var cursor_y = menu_y + menu_inset;
+
+    if (y < cursor_y) return null;
+
+    for (menu_rows, 0..) |row, index| {
+
+        const span = switch (row) {
+
+            .action => menu_row_h,
+            .separator => menu_separator_h,
+
+        };
+
+        if (y >= cursor_y and y < cursor_y + span) {
+
+            return switch (row) {
+
+                .action => index,
+                .separator => null,
+
+            };
+
+        }
+
+        cursor_y += span;
+
+    }
+
+    return null;
+
+}
+
+fn run_menu_action(action: MenuAction, index: usize) void {
+
+    if (index >= entry_count) return;
+
+    const entry = entries[index];
+    var path_buffer: [max_path]u8 = undefined;
+    const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch return;
+
+    switch (action) {
+
+        .edit_notepad => {
+
+            lib.wm.launch_with_path("notepad", path);
+
+        },
+
+        .view_details => open_details(entry, path),
+
+        .add_desktop => {
+
+            if (lib.prefs.add_desktop_pin(path)) {
+
+                // Wake the desktop layer so pins appear without a reboot.
+                lib.prefs.broadcast_change(&connection);
+
+            }
+
+        },
+
+        .delete_item => {
+
+            const handle = if (client) |*c| c else return;
+
+            handle.delete(path) catch return;
+            reload();
+            paint();
+
+        },
+
+    }
+
+}
+
+fn open_details(entry: Entry, path: []const u8) void {
+
+    details_name_len = @min(entry.name_len, details_name.len);
+    @memcpy(details_name[0..details_name_len], entry.name[0..details_name_len]);
+
+    details_path_len = @min(path.len, details_path.len);
+    @memcpy(details_path[0..details_path_len], path[0..details_path_len]);
+
+    details_kind = entry.kind;
+    details_length = entry.length;
+    details_status = "";
+    details_writable = true;
+
+    if (client) |*handle| {
+
+        if (handle.stat(path)) |stat| {
+
+            details_kind = @truncate(stat.kind);
+            details_length = stat.length;
+            details_writable = (stat.permissions & proto.filesystem.permission_write) != 0;
+
+        } else |_| {}
+
+    }
+
+    details_open = true;
+    paint();
+
+}
+
+fn close_details() void {
+
+    if (!details_open) return;
+
+    details_open = false;
+    paint();
+
+}
+
+fn details_rect() Rect {
+
+    const width: i32 = @intCast(window.surface.width);
+    const height: i32 = @intCast(window.surface.height);
+
+    return .{
+
+        .x = @divTrunc(width - details_w, 2),
+        .y = @divTrunc(height - details_h, 2),
+        .w = details_w,
+        .h = details_h,
+
+    };
+
+}
+
+fn details_writable_toggle() Rect {
+
+    const rect = details_rect();
+
+    return .{ .x = rect.x + 16, .y = rect.y + 140, .w = 148, .h = 30 };
+
+}
+
+fn details_close_btn() Rect {
+
+    const rect = details_rect();
+
+    return .{ .x = rect.x + rect.w - 100, .y = rect.y + rect.h - 46, .w = 84, .h = 30 };
+
+}
+
+fn details_hit(x: i32, y: i32) ?enum { toggle, close } {
+
+    if (details_writable_toggle().contains(x, y)) return .toggle;
+    if (details_close_btn().contains(x, y)) return .close;
+
+    return null;
+
+}
+
+fn details_click(x: i32, y: i32) void {
+
+    const hit = details_hit(x, y) orelse {
+
+        // Click outside the modal dismisses it.
+        if (!details_rect().contains(x, y)) close_details();
+
+        return;
+
+    };
+
+    switch (hit) {
+
+        .toggle => toggle_details_writable(),
+        .close => close_details(),
+
+    }
+
+}
+
+fn toggle_details_writable() void {
+
+    const handle = if (client) |*c| c else return;
+    const path = details_path[0..details_path_len];
+
+    details_writable = !details_writable;
+
+    const mask: u64 = if (details_writable) proto.filesystem.permission_write else 0;
+
+    handle.set_permissions(path, mask) catch {
+
+        details_writable = !details_writable;
+        details_status = "Permission change failed";
+        paint();
+        return;
+
+    };
+
+    details_status = if (details_writable) "Writable" else "Read-only";
+    paint();
+
+}
+
 fn click(x: i32, y: i32) void {
+
+    if (menu_open) close_menu();
 
     if (y < toolbar_height) {
 
@@ -253,16 +739,7 @@ fn click(x: i32, y: i32) void {
 
     }
 
-    const list_w = list_width();
-
-    if (x >= list_w) return;
-
-    if (y < list_start) return;
-
-    const row: usize = @intCast(@divTrunc(y - list_start, row_height));
-    const index = scroll + row;
-
-    if (index >= entry_count) return;
+    const index = entry_index_at(x, y) orelse return;
 
     open_entry(index);
 
@@ -425,7 +902,10 @@ fn paint() void {
     }
 
     paint_list(surface, height);
-    paint_details(surface, width, height);
+    paint_side_panel(surface, width, height);
+
+    if (menu_open) paint_menu(surface);
+    if (details_open) paint_details_modal(surface);
 
     window.present_all() catch {};
 
@@ -524,7 +1004,7 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
 
 }
 
-fn paint_details(surface: *const gfx.Surface, width: i32, height: i32) void {
+fn paint_side_panel(surface: *const gfx.Surface, width: i32, height: i32) void {
 
     const x = list_width();
 
@@ -551,11 +1031,20 @@ fn paint_details(surface: *const gfx.Surface, width: i32, height: i32) void {
 
     var meta: [64]u8 = undefined;
     const size = human_size(entry.length, meta[0..24]);
-    const line = std.fmt.bufPrint(meta[24..], "file  -  {s}", .{size}) catch "file";
+    const kind_label: []const u8 = if (entry.kind == proto.filesystem.kind_directory) "directory" else "file";
+    const line = std.fmt.bufPrint(meta[24..], "{s}  -  {s}", .{ kind_label, size }) catch kind_label;
 
     text(surface, pad, list_start + 38, 12, line, ui.theme.text_dim);
 
     surface.fill_rect(.{ .x = pad, .y = list_start + 58, .w = width - pad - 16, .h = 1 }, ui.theme.border);
+
+    if (entry.kind == proto.filesystem.kind_directory) {
+
+        text(surface, pad, list_start + 70, 12, "Folder - open to browse", ui.theme.text_faint);
+
+        return;
+
+    }
 
     if (preview_len == 0) {
 
@@ -576,6 +1065,115 @@ fn paint_details(surface: *const gfx.Surface, width: i32, height: i32) void {
     const preview_rect = Rect{ .x = pad, .y = list_start + 68, .w = width - pad - 16, .h = height - list_start - 78 };
 
     draw_preview(surface, preview_rect);
+
+}
+
+fn paint_menu(surface: *const gfx.Surface) void {
+
+    const bounds = Rect{
+
+        .x = menu_x,
+        .y = menu_y,
+        .w = menu_w,
+        .h = menu_content_height() + menu_inset * 2,
+
+    };
+
+    ui.fill_round_rect(surface, bounds, 6, ui.theme.surface);
+    ui.stroke_round_rect(surface, bounds, 6, 1, ui.theme.border);
+
+    var cursor_y = menu_y + menu_inset;
+
+    for (menu_rows, 0..) |row, index| {
+
+        switch (row) {
+
+            .action => |action| {
+
+                const rect = Rect{ .x = menu_x + menu_inset, .y = cursor_y, .w = menu_w - 2 * menu_inset, .h = menu_row_h - 1 };
+                const hovered = menu_hover != null and menu_hover.? == index;
+                const danger = action == .delete_item;
+
+                if (hovered) ui.fill_round_rect(surface, rect, 4, ui.theme.hover);
+
+                const color = if (danger) ui.theme.warn else ui.theme.text;
+                const label = menu_label(action);
+                const text_y = rect.y + @divTrunc(rect.h - font.line_height(13), 2);
+
+                // Draw without truncate-to-fit clipping so labels are never cut mid-word.
+                font.draw(surface, rect.x + menu_label_pad, text_y, 13, label, color);
+
+                cursor_y += menu_row_h;
+
+            },
+
+            .separator => {
+
+                const line_y = cursor_y + @divTrunc(menu_separator_h, 2);
+
+                surface.fill_rect(.{
+
+                    .x = menu_x + menu_inset + 8,
+                    .y = line_y,
+                    .w = menu_w - 2 * menu_inset - 16,
+                    .h = 1,
+
+                }, ui.theme.border);
+
+                cursor_y += menu_separator_h;
+
+            },
+
+        }
+
+    }
+
+}
+
+fn paint_details_modal(surface: *const gfx.Surface) void {
+
+    const rect = details_rect();
+
+    ui.fill_round_rect(surface, rect, 8, ui.theme.surface);
+    ui.stroke_round_rect(surface, rect, 8, 1, ui.theme.border);
+
+    const pad: i32 = 18;
+    const content_w = rect.w - pad * 2;
+
+    text(surface, rect.x + pad, rect.y + 16, 15, "Item details", ui.theme.text_dim);
+
+    const name = details_name[0..details_name_len];
+    const name_visible = ui.truncate(&font, name, 16, content_w);
+
+    text(surface, rect.x + pad, rect.y + 42, 16, name_visible, ui.theme.text);
+
+    surface.fill_rect(.{ .x = rect.x + pad, .y = rect.y + 68, .w = content_w, .h = 1 }, ui.theme.border);
+
+    const kind_label: []const u8 = if (details_kind == proto.filesystem.kind_directory) "Directory" else "File";
+    text(surface, rect.x + pad, rect.y + 82, 13, kind_label, ui.theme.text_dim);
+
+    var size_buf: [32]u8 = undefined;
+    const size = human_size(details_length, &size_buf);
+    text(surface, rect.x + pad, rect.y + 104, 13, size, ui.theme.text_dim);
+
+    const path_visible = ui.truncate(&font, details_path[0..details_path_len], 12, content_w);
+    text(surface, rect.x + pad, rect.y + 126, 12, path_visible, ui.theme.text_faint);
+
+    const toggle = details_writable_toggle();
+    const hovered_toggle = pointer_x >= toggle.x and pointer_x < toggle.x + toggle.w and pointer_y >= toggle.y and pointer_y < toggle.y + toggle.h;
+
+    ui.fill_round_rect(surface, toggle, 6, if (hovered_toggle) ui.theme.hover else ui.theme.surface_alt);
+
+    const toggle_label = if (details_writable) "Writable: yes" else "Writable: no";
+    text_centered(surface, toggle, 12, toggle_label, ui.theme.text);
+
+    if (details_status.len > 0) text(surface, rect.x + pad, rect.y + 178, 11, details_status, ui.theme.text_dim);
+
+    const close = details_close_btn();
+    const hovered_close = pointer_x >= close.x and pointer_x < close.x + close.w and pointer_y >= close.y and pointer_y < close.y + close.h;
+
+    ui.fill_round_rect(surface, close, 6, if (hovered_close) ui.theme.hover else ui.theme.accent_dim);
+    text_centered(surface, close, 13, "Close", ui.theme.text);
 
 }
 
@@ -623,6 +1221,17 @@ fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, conte
     const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
 
     font.draw(&clipped, inner.x, y, size, visible, color);
+
+}
+
+fn text_centered(surface: *const gfx.Surface, rect: Rect, size: u32, content: []const u8, color: gfx.Color) void {
+
+    const visible = ui.truncate(&font, content, size, rect.w - 8);
+    const text_w = font.text_width(visible, size);
+    const x = rect.x + @divTrunc(rect.w - text_w, 2);
+    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
+
+    font.draw(surface, x, y, size, visible, color);
 
 }
 

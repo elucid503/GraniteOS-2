@@ -48,6 +48,12 @@ fn window_button_max() i32 {
 
 }
 
+fn window_button_min() i32 {
+
+    return 36;
+
+}
+
 fn button_gap() i32 {
 
     return 4;
@@ -104,7 +110,9 @@ var last_bar_hover: i32 = -3;
 var last_menu_hover: i32 = -3;
 
 var ready: cap.Handle = 0;
-var tick: u32 = 0;
+// Separate wake bits so the clock tick does not re-list every window over IPC.
+var clock_tick: u32 = 0;
+var list_tick: u32 = 0;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -148,12 +156,12 @@ fn run() !void {
 
         }
 
-        if (@atomicRmw(u32, &tick, .Xchg, 0, .acquire) != 0) {
+        const list_due = @atomicRmw(u32, &list_tick, .Xchg, 0, .acquire) != 0;
+        const clock_due = @atomicRmw(u32, &clock_tick, .Xchg, 0, .acquire) != 0;
 
-            refresh_windows();
-            paint_bar();
+        if (list_due) refresh_windows();
 
-        }
+        if (list_due or clock_due) paint_bar();
 
     }
 
@@ -298,13 +306,15 @@ fn bar_hover_token(x: i32) i32 {
 
     var index: usize = 0;
 
-    while (index < window_count) : (index += 1) {
+    while (index < layout.visible) : (index += 1) {
 
         const left = layout.start + @as(i32, @intCast(index)) * (layout.width + button_gap());
 
         if (x >= left and x < left + layout.width) return @intCast(index);
 
     }
+
+    if (layout.overflow and x >= layout.overflow_x and x < layout.overflow_x + layout.width) return -4;
 
     return -1;
 
@@ -357,17 +367,29 @@ fn activate_at(x: i32) void {
 
     if (x < layout.start) return;
 
-    const index: usize = @intCast(@divTrunc(x - layout.start, layout.width + button_gap()));
+    const stride = layout.width + button_gap();
+    const index: usize = @intCast(@divTrunc(x - layout.start, stride));
 
-    if (index >= window_count) return;
+    if (index >= layout.visible) return;
 
-    if (windows[index].minimized != 0) {
+    const left = layout.start + @as(i32, @intCast(index)) * stride;
 
-        lib.wm.restore(&connection, windows[index].id) catch {};
+    if (x >= left + layout.width) return;
+
+    const entry = windows[index];
+
+    if (entry.minimized != 0) {
+
+        lib.wm.restore(&connection, entry.id) catch {};
+
+    } else if (entry.focused != 0) {
+
+        // Clicking the focused window's taskbar button minimizes it (classic toggle).
+        lib.wm.minimize(&connection, entry.id) catch {};
 
     } else {
 
-        lib.wm.activate(&connection, windows[index].id) catch {};
+        lib.wm.activate(&connection, entry.id) catch {};
 
     }
 
@@ -586,6 +608,9 @@ const ButtonLayout = struct {
 
     start: i32,
     width: i32,
+    visible: usize,
+    overflow: bool,
+    overflow_x: i32,
 
 };
 
@@ -595,11 +620,47 @@ fn button_layout() ButtonLayout {
     const end = @as(i32, @intCast(bar.surface.width)) - clock_width() - button_gap();
     const available = end - start;
 
-    if (window_count == 0 or available <= 0) return .{ .start = start, .width = 0 };
+    if (window_count == 0 or available <= 0) {
 
-    const each = @divTrunc(available, @as(i32, @intCast(window_count))) - button_gap();
+        return .{ .start = start, .width = 0, .visible = 0, .overflow = false, .overflow_x = start };
 
-    return .{ .start = start, .width = @min(window_button_max(), @max(0, each)) };
+    }
+
+    // Fit as many buttons as possible at a usable width; shrink first, then overflow.
+    var count = window_count;
+    var width = @divTrunc(available - button_gap() * @as(i32, @intCast(count)), @as(i32, @intCast(count)));
+
+    if (width > window_button_max()) width = window_button_max();
+
+    if (width < window_button_min()) {
+
+        const slot = window_button_min() + button_gap();
+        const fit: usize = @intCast(@max(0, @divTrunc(available, slot)));
+
+        count = @min(window_count, @max(@as(usize, 1), fit));
+        width = window_button_min();
+
+        if (count < window_count and count > 0) {
+
+            // Reserve one slot for the overflow indicator.
+            count = @max(@as(usize, 1), count - 1);
+
+        }
+
+    }
+
+    const overflow = count < window_count;
+    const overflow_x = start + @as(i32, @intCast(count)) * (width + button_gap());
+
+    return .{
+
+        .start = start,
+        .width = @max(0, width),
+        .visible = count,
+        .overflow = overflow,
+        .overflow_x = overflow_x,
+
+    };
 
 }
 
@@ -645,7 +706,7 @@ fn paint_bar() void {
     const layout = button_layout();
     var index: usize = 0;
 
-    while (index < window_count and layout.width > 0) : (index += 1) {
+    while (index < layout.visible and layout.width > 0) : (index += 1) {
 
         const x = layout.start + @as(i32, @intCast(index)) * (layout.width + button_gap());
         const rect = Rect{ .x = x, .y = 5, .w = layout.width, .h = bar_height() - 10 };
@@ -659,11 +720,33 @@ fn paint_bar() void {
 
         ui.fill_round_rect(surface, rect, 5, fill);
 
-        if (focused) ui.fill_round_rect(surface, .{ .x = rect.x + 6, .y = rect.y + rect.h - 3, .w = rect.w - 12, .h = 2 }, 1, ui.theme.accent);
-
         const title = info_entry.title[0..@min(@as(usize, @intCast(info_entry.title_len)), proto.window.max_title)];
+        const label_color = if (minimized) ui.theme.text_dim else ui.theme.text;
 
-        text_in(surface, rect, 10, 13, title, ui.theme.text);
+        if (layout.width >= 72) {
+
+            text_in(surface, rect, 10, 13, title, label_color);
+
+        } else {
+
+            // Narrow buttons: first letter (or glyph) only.
+            const monogram = if (title.len > 0) title[0..1] else "?";
+
+            text_center(surface, rect, 13, monogram, label_color);
+
+        }
+
+    }
+
+    if (layout.overflow and layout.width > 0) {
+
+        const rect = Rect{ .x = layout.overflow_x, .y = 5, .w = layout.width, .h = bar_height() - 10 };
+        const remaining = window_count - layout.visible;
+        var buffer: [8]u8 = undefined;
+        const label = std.fmt.bufPrint(&buffer, "+{d}", .{remaining}) catch "+";
+
+        ui.fill_round_rect(surface, rect, 5, ui.theme.surface);
+        text_center(surface, rect, 12, label, ui.theme.text_dim);
 
     }
 
@@ -884,7 +967,7 @@ fn ticker() callconv(.c) noreturn {
 
         lib.time.sleep_ms(500);
 
-        @atomicStore(u32, &tick, 1, .release);
+        @atomicStore(u32, &clock_tick, 1, .release);
 
         sys.notify(ready, proto.window.ring_bit) catch {};
 
@@ -898,7 +981,7 @@ fn list_watcher() callconv(.c) noreturn {
 
         _ = sys.wait(window_list.list_ready) catch continue;
 
-        @atomicStore(u32, &tick, 1, .release);
+        @atomicStore(u32, &list_tick, 1, .release);
 
         sys.notify(ready, proto.window.ring_bit) catch {};
 

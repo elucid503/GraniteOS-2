@@ -60,27 +60,6 @@ pub const List = struct {
 
     }
 
-    pub fn refresh(self: *List, out: []WindowInfo) usize {
-
-        const handles = [_]ipc.HandleSlot{.{ .handle = self.info_region, .move = false }};
-        const attach: []const ipc.HandleSlot = if (self.attached) &.{} else &handles;
-
-        const reply = ipc.request(self.connection.endpoint, proto.window.list, &.{}, attach) catch return 0;
-
-        self.attached = true;
-
-        const count = @min(@as(usize, @intCast(reply.data[1])), out.len, proto.window.max_windows);
-
-        for (0..count) |index| {
-
-            out[index] = self.info[index];
-
-        }
-
-        return count;
-
-    }
-
     pub fn subscribe(self: *List) Error!void {
 
         if (self.subscribed) return;
@@ -96,7 +75,48 @@ pub const List = struct {
 
         self.list_ready = notify;
         self.subscribed = true;
+        // Leave `attached` false so the next `list` call maps the session-side buffer; subscribe only
+        // installs the compositor's publish mapping and does not satisfy list_windows' session attach.
+
+    }
+
+    pub fn refresh(self: *List, out: []WindowInfo) usize {
+
+        const handles = [_]ipc.HandleSlot{.{ .handle = self.info_region, .move = false }};
+        const attach: []const ipc.HandleSlot = if (self.attached) &.{} else &handles;
+
+        const reply = ipc.request(self.connection.endpoint, proto.window.list, &.{}, attach) catch {
+
+            // Session mapping can be missing after subscribe-only setup; retry once with the handle.
+            if (!self.attached) return 0;
+
+            self.attached = false;
+
+            const retry = ipc.request(self.connection.endpoint, proto.window.list, &.{}, &handles) catch return 0;
+
+            self.attached = true;
+
+            return copy_info(self, out, retry.data[1]);
+
+        };
+
         self.attached = true;
+
+        return copy_info(self, out, reply.data[1]);
+
+    }
+
+    fn copy_info(self: *const List, out: []WindowInfo, raw_count: u64) usize {
+
+        const count = @min(@as(usize, @intCast(raw_count)), out.len, proto.window.max_windows);
+
+        for (0..count) |index| {
+
+            out[index] = self.info[index];
+
+        }
+
+        return count;
 
     }
 
@@ -194,6 +214,8 @@ pub fn icon_by_name(name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "disk")) return icons.disk;
     if (std.mem.eql(u8, name, "memory")) return icons.memory;
     if (std.mem.eql(u8, name, "settings")) return icons.apps;
+    if (std.mem.eql(u8, name, "calculator")) return icons.calculator;
+    if (std.mem.eql(u8, name, "timer")) return icons.timer;
 
     return icons.apps;
 

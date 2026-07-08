@@ -94,6 +94,23 @@ pub const memory =
     \\</svg>
 ;
 
+pub const calculator =
+    \\<svg viewBox="0 0 24 24">
+    \\<line x1="6" y1="6" x2="18" y2="18"/>
+    \\<circle cx="8" cy="16" r="1.5"/>
+    \\<circle cx="16" cy="8" r="1.5"/>
+    \\</svg>
+;
+
+pub const timer =
+    \\<svg viewBox="0 0 24 24">
+    \\<circle cx="12" cy="13" r="7"/>
+    \\<polyline points="12 13 12 10"/>
+    \\<line x1="9" y1="4" x2="15" y2="4"/>
+    \\<line x1="12" y1="4" x2="12" y2="6"/>
+    \\</svg>
+;
+
 // Lucide mouse-pointer-2 — default arrow cursor.
 pub const pointer =
     \\<svg viewBox="0 0 24 24">

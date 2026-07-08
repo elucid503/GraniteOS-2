@@ -203,6 +203,7 @@ pub const window = struct {
     pub const flag_panel: u64 = 4; // an undecorated dock pinned to the screen bottom, always above ordinary windows
     pub const flag_minimized: u64 = 8; // hidden from the desktop but still tracked by the compositor
     pub const flag_desktop: u64 = 16; // fullscreen undecorated layer pinned beneath ordinary windows, for desktop chrome
+    pub const flag_maximized: u64 = 32; // fills the free area above the panel; restore geometry kept in the manager
 
     // Titles ride inline in message words 3-5, NUL-padded.
     pub const max_title: usize = 24;
