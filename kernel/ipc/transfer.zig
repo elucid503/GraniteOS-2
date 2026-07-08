@@ -292,9 +292,8 @@ fn deliver(source: *Thread, dest: *Thread, is_call: bool) Error!void {
 
 fn transfer_slot(source: *Thread, dest: *Thread, slot: @import("message.zig").HandleSlot) Error!@import("message.zig").HandleSlot {
 
-    const target = try source.process.handles.resolve(slot.handle);
-    const badge = try source.process.handles.badge_of(slot.handle);
-    const copied = try dest.process.handles.insert_badged(target, badge);
+    const resolved = try source.process.handles.resolve_with_badge(slot.handle);
+    const copied = try dest.process.handles.insert_badged(resolved.target, resolved.badge);
 
     if (slot.move) source.process.handles.close(slot.handle) catch {};
 

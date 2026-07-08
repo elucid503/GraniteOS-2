@@ -105,6 +105,19 @@ pub const HandleTable = struct {
 
     }
 
+    /// Resolve the object and read its badge under a single lock: the IPC transfer path needs both, so
+    /// this spares it a second acquire per handle slot moved across a message.
+    pub fn resolve_with_badge(self: *HandleTable, handle: Handle) Error!struct { target: *object.Object, badge: u64 } {
+
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
+
+        const entry = try self.entry_of(handle);
+
+        return .{ .target = entry.target.?, .badge = entry.badge };
+
+    }
+
     /// Duplicate a handle; a non-zero badge mints a badged endpoint copy (03-syscall-abi.md Handles).
     pub fn copy(self: *HandleTable, handle: Handle, badge: u64) Error!Handle {
 

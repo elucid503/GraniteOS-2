@@ -325,9 +325,12 @@ pub const Surface = struct {
         }
 
         const start_x = x + @as(i32, @intCast(first));
-        const room: usize = @intCast(limit.x + limit.w - start_x);
 
-        if (room == 0) return;
+        // The coverage row can also fall entirely to the right of the clip; guard before the cast so a
+        // right-of-clip run yields no pixels instead of a negative `room` wrapping to a huge count.
+        if (start_x >= limit.x + limit.w) return;
+
+        const room: usize = @intCast(limit.x + limit.w - start_x);
 
         count = @min(count, room);
 
@@ -613,6 +616,24 @@ test "blend_row clips both edges and honors full coverage" {
     surface.blend_row(-2, 2, &[_]u8{ 255, 255 }, 0x123456);
 
     try testing.expectEqual(@as(u32, 0), buffer[2 * 4]);
+
+}
+
+test "blend_row drops a run that starts past the right edge" {
+
+    var buffer: [16]u32 = [_]u32{0} ** 16;
+    const surface = test_surface(&buffer, 4, 4);
+
+    // A coverage run whose start is well right of the clip must paint nothing - not compute a negative
+    // `room` that wraps to a huge count and runs the blend loop off the end of the surface.
+
+    surface.blend_row(10, 1, &[_]u8{ 255, 255, 255 }, 0xabcdef);
+
+    for (buffer) |pixel| {
+
+        try testing.expectEqual(@as(u32, 0), pixel);
+
+    }
 
 }
 
