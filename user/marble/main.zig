@@ -114,7 +114,7 @@ fn run() !void {
         ensure_layout();
         install_programs(out);
 
-        set_cwd(home_dir);
+        set_cwd(lib.start.cwd());
 
     } else |_| {}
 

@@ -1,8 +1,4 @@
-// The HTML-like UI toolkit (M10 GUI rewrite): apps rebuild a small node tree each frame - boxes with
-// padding/gap/radius/background laid out as rows and columns, plus labels, icons, and text fields - then one
-// layout pass sizes it (flexbox-lite: fixed, auto, and grow sizes) and one paint pass renders it through the
-// analytic-AA renderer. Hit testing and hover tracking come with the tree, so an app's event handler is a
-// switch on node ids. Rebuilding is cheap: the tree is a fixed pool, strings are borrowed, layout is integer.
+// The HTML-like UI toolkit (M10 GUI rewrite)
 
 const std = @import("std");
 
@@ -104,6 +100,12 @@ pub const Edge = struct {
     pub fn symmetric(horizontal: i32, vertical: i32) Edge {
 
         return .{ .top = vertical, .right = horizontal, .bottom = vertical, .left = horizontal };
+
+    }
+
+    pub fn only(top: i32, right: i32, bottom: i32, left: i32) Edge {
+
+        return .{ .top = top, .right = right, .bottom = bottom, .left = left };
 
     }
 
@@ -630,10 +632,7 @@ pub const Page = struct {
 
             if (node.style.radius > 0) {
 
-                var shape = path_mod.Path{};
-
-                shape.add_round_rect(path_mod.from_px(rect.x), path_mod.from_px(rect.y), path_mod.from_px(rect.w), path_mod.from_px(rect.h), path_mod.from_px(node.style.radius));
-                raster.fill(surface, &shape, color);
+                draw.round.fill_round_rect(surface, rect, node.style.radius, color);
 
             } else {
 
@@ -645,10 +644,7 @@ pub const Page = struct {
 
         if (node.style.border) |color| {
 
-            var shape = path_mod.Path{};
-
-            stroke.round_rect_border(&shape, path_mod.from_px(rect.x), path_mod.from_px(rect.y), path_mod.from_px(rect.w), path_mod.from_px(rect.h), path_mod.from_px(node.style.radius), path_mod.from_px(node.style.border_width));
-            raster.fill(surface, &shape, color);
+            draw.round.stroke_round_rect(surface, rect, node.style.radius, node.style.border_width, color);
 
         }
 
@@ -709,23 +705,17 @@ pub const Page = struct {
         const size = node.style.size;
         const buffer = node.field orelse return;
 
-        // Box: surface fill with accent border when focused (unless the style set its own).
-
-        var shape = path_mod.Path{};
         const radius = if (node.style.radius > 0) node.style.radius else 6;
 
         if (node.style.background == null) {
 
-            shape.add_round_rect(path_mod.from_px(rect.x), path_mod.from_px(rect.y), path_mod.from_px(rect.w), path_mod.from_px(rect.h), path_mod.from_px(radius));
-            raster.fill(surface, &shape, theme.surface);
+            draw.round.fill_round_rect(surface, rect, radius, theme.surface);
 
         }
 
         if (node.style.border == null) {
 
-            shape.reset();
-            stroke.round_rect_border(&shape, path_mod.from_px(rect.x), path_mod.from_px(rect.y), path_mod.from_px(rect.w), path_mod.from_px(rect.h), path_mod.from_px(radius), path_mod.from_px(1));
-            raster.fill(surface, &shape, if (node.field_focused) theme.accent else theme.border);
+            draw.round.stroke_round_rect(surface, rect, radius, 1, if (node.field_focused) theme.accent else theme.border);
 
         }
 
@@ -832,23 +822,13 @@ pub fn truncate(font: *const Face, s: []const u8, size: u32, max_w: i32) []const
 
 pub fn fill_round_rect(surface: *const Surface, rect: Rect, radius: i32, color: Color) void {
 
-    if (rect.w <= 0 or rect.h <= 0) return;
-
-    var shape = path_mod.Path{};
-
-    shape.add_round_rect(path_mod.from_px(rect.x), path_mod.from_px(rect.y), path_mod.from_px(rect.w), path_mod.from_px(rect.h), path_mod.from_px(radius));
-    raster.fill(surface, &shape, color);
+    draw.round.fill_round_rect(surface, rect, radius, color);
 
 }
 
 pub fn stroke_round_rect(surface: *const Surface, rect: Rect, radius: i32, width: i32, color: Color) void {
 
-    if (rect.w <= 0 or rect.h <= 0 or width <= 0) return;
-
-    var shape = path_mod.Path{};
-
-    stroke.round_rect_border(&shape, path_mod.from_px(rect.x), path_mod.from_px(rect.y), path_mod.from_px(rect.w), path_mod.from_px(rect.h), path_mod.from_px(radius), path_mod.from_px(width));
-    raster.fill(surface, &shape, color);
+    draw.round.stroke_round_rect(surface, rect, radius, width, color);
 
 }
 

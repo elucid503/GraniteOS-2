@@ -1,6 +1,4 @@
-// Context: the desktop right-click manager. A fullscreen chrome layer beneath ordinary windows catches right-clicks
-// on blank desktop space and offers Create New File / Create New Folder. Menus and prompts paint on this layer so
-// no popup window ever flashes at the wrong position.
+// Context: the desktop right-click manager.
 
 const std = @import("std");
 
@@ -22,18 +20,34 @@ comptime {
 
 const home_dir = "/root/user";
 
-const MenuItem = struct {
+const MenuAction = enum {
 
-    label: []const u8,
+    create_file,
+    create_folder,
+    open_marble,
+
+};
+
+const MenuRow = union(enum) {
+
+    action: MenuAction,
+    separator,
 
 };
 
-const menu_items = [_]MenuItem{
+const menu_rows = [_]MenuRow{
 
-    .{ .label = "Create New File" },
-    .{ .label = "Create New Folder" },
+    .{ .action = .create_file },
+    .{ .action = .create_folder },
+    .{ .separator = {} },
+    .{ .action = .open_marble },
 
 };
+
+const menu_row_h: i32 = 30;
+const menu_separator_h: i32 = 9;
+const menu_w: i32 = 190;
+const menu_inset: i32 = 4;
 
 const prompt_width: i32 = 300;
 const prompt_height: i32 = 120;
@@ -179,7 +193,7 @@ fn handle_desktop(event: events.Event) void {
             if (hit == menu_hover) return;
 
             menu_hover = hit;
-            paint_desktop();
+            paint_menu_region();
 
         },
 
@@ -270,12 +284,13 @@ fn button_down(event: events.Event) void {
 
             close_menu();
 
-            switch (hit) {
+            const action = menu_action(hit) orelse return;
 
-                0 => open_prompt(.file),
-                1 => open_prompt(.folder),
+            switch (action) {
 
-                else => {},
+                .create_file => open_prompt(.file),
+                .create_folder => open_prompt(.folder),
+                .open_marble => open_marble_here(),
 
             }
 
@@ -318,10 +333,13 @@ fn close_menu() void {
 
     if (!menu_open) return;
 
+    const region = menu_bounds();
+
     menu_open = false;
     menu_hover = null;
 
-    paint_desktop();
+    desktop.surface.fill_rect(region, lib.prefs.wallpaper());
+    desktop.present(region) catch {};
 
 }
 
@@ -390,6 +408,56 @@ fn prompt_click(x: i32, y: i32) void {
 
 }
 
+fn open_marble_here() void {
+
+    lib.wm.launch_with_path("shell", home_dir);
+
+}
+
+fn menu_label(action: MenuAction) []const u8 {
+
+    return switch (action) {
+
+        .create_file => "Create New File",
+        .create_folder => "Create New Folder",
+        .open_marble => "Open MARBLE Here",
+
+    };
+
+}
+
+fn menu_action(index: usize) ?MenuAction {
+
+    if (index >= menu_rows.len) return null;
+
+    return switch (menu_rows[index]) {
+
+        .action => |action| action,
+        .separator => null,
+
+    };
+
+}
+
+fn menu_content_height() i32 {
+
+    var height: i32 = 0;
+
+    for (menu_rows) |row| {
+
+        height += switch (row) {
+
+            .action => menu_row_h,
+            .separator => menu_separator_h,
+
+        };
+
+    }
+
+    return height;
+
+}
+
 fn confirm_prompt() void {
 
     const name = name_field.slice();
@@ -425,17 +493,38 @@ fn prompt_rect() Rect {
 
 }
 
+fn menu_bounds() Rect {
+
+    return .{
+
+        .x = menu_x,
+        .y = menu_y,
+        .w = menu_w,
+        .h = menu_content_height() + menu_inset * 2,
+
+    };
+
+}
+
+fn paint_menu_region() void {
+
+    const surface = &desktop.surface;
+    const region = menu_bounds();
+
+    surface.fill_rect(region, lib.prefs.wallpaper());
+    paint_menu(surface);
+
+    desktop.present(region) catch {};
+
+}
+
 fn paint_desktop() void {
 
     const surface = &desktop.surface;
 
     surface.fill(lib.prefs.wallpaper());
 
-    if (menu_open) {
-
-        paint_menu(surface);
-
-    }
+    if (menu_open) paint_menu(surface);
 
     if (prompt_open) paint_prompt(surface);
 
@@ -524,26 +613,41 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
 fn menu_hit(x: i32, y: i32) ?usize {
 
-    const menu_w: i32 = 190;
-    const row_h: i32 = 30;
-    const inset: i32 = 4;
-
     if (x < menu_x or x >= menu_x + menu_w) return null;
-    if (y < menu_y + inset) return null;
 
-    const index = @divTrunc(y - menu_y - inset, row_h);
+    var cursor_y = menu_y + menu_inset;
 
-    if (index < 0 or index >= @as(i32, @intCast(menu_items.len))) return null;
+    if (y < cursor_y) return null;
 
-    return @intCast(index);
+    for (menu_rows, 0..) |row, index| {
+
+        const span = switch (row) {
+
+            .action => menu_row_h,
+            .separator => menu_separator_h,
+
+        };
+
+        if (y >= cursor_y and y < cursor_y + span) {
+
+            return switch (row) {
+
+                .action => index,
+                .separator => null,
+
+            };
+
+        }
+
+        cursor_y += span;
+
+    }
+
+    return null;
 
 }
 
 fn paint_menu(surface: *const gfx.Surface) void {
-
-    const row_h: i32 = 30;
-    const menu_w: i32 = 190;
-    const inset: i32 = 4;
 
     var page = ui.Page{ .font = &font };
 
@@ -558,34 +662,83 @@ fn paint_menu(surface: *const gfx.Surface) void {
 
         .direction = .column,
         .width = .{ .px = menu_w },
-        .height = .{ .px = row_h * @as(i32, @intCast(menu_items.len)) + inset * 2 },
+        .height = .{ .px = menu_content_height() + menu_inset * 2 },
         .margin = .{ .left = menu_x, .top = menu_y },
-        .padding = ui.Edge.all(inset),
+        .padding = ui.Edge.all(menu_inset),
         .background = ui.theme.surface,
         .border = ui.theme.border,
         .radius = 6,
 
     });
 
-    for (menu_items, 0..) |item, index| {
+    for (menu_rows, 0..) |row, index| {
 
-        const hovered = menu_hover != null and menu_hover.? == index;
+        switch (row) {
 
-        _ = page.label(menu, item.label, .{
+            .action => |action| {
 
-            .width = .{ .grow = 1 },
-            .height = .{ .px = row_h - 1 },
-            .padding = ui.Edge.symmetric(12, 0),
-            .size = 13,
-            .color = ui.theme.text,
-            .background = if (hovered) ui.theme.hover else null,
-            .radius = 4,
+                const hovered = menu_hover != null and menu_hover.? == index;
 
-        });
+                _ = page.label(menu, menu_label(action), .{
+
+                    .width = .{ .grow = 1 },
+                    .height = .{ .px = menu_row_h - 1 },
+                    .padding = ui.Edge.symmetric(12, 0),
+                    .size = 13,
+                    .color = ui.theme.text,
+                    .background = if (hovered) ui.theme.hover else null,
+                    .radius = 4,
+
+                });
+
+            },
+
+            .separator => {
+
+                _ = page.box(menu, .{
+
+                    .width = .{ .grow = 1 },
+                    .height = .{ .px = menu_separator_h },
+                    .margin = ui.Edge.only(0, 0, 2, 0),
+
+                });
+
+            },
+
+        }
 
     }
 
     page.end();
     page.paint(surface);
+
+    var cursor_y = menu_y + menu_inset;
+
+    for (menu_rows) |row| {
+
+        switch (row) {
+
+            .action => cursor_y += menu_row_h,
+
+            .separator => {
+
+                const line_y = cursor_y + @divTrunc(menu_separator_h, 2);
+
+                surface.fill_rect(.{
+
+                    .x = menu_x + menu_inset + 8,
+                    .y = line_y,
+                    .w = menu_w - 2 * menu_inset - 16,
+                    .h = 1,
+
+                }, ui.theme.border);
+
+                cursor_y += menu_separator_h;
+
+            },
+
+        }
+
+    }
 
 }

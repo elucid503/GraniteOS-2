@@ -1,5 +1,4 @@
-// Notepad: a simple text editor for files on disk. Opens from the launcher or when a file is selected in the file
-// manager (the path is staged in .open-path before spawn). Supports multi-line editing with save to disk.
+// Notepad: a simple text editor for files on disk.
 
 const std = @import("std");
 
@@ -576,7 +575,7 @@ fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
     surface.fill_rect(.{ .x = 0, .y = bar_h, .w = width, .h = 1 }, ui.theme.border);
 
     const save_rect = Rect{ .x = width - 80, .y = 6, .w = 72, .h = 28 };
-    const save_fill = if (dirty) ui.theme.accent else ui.theme.active;
+    const save_fill = if (dirty) ui.theme.accent_dim else ui.theme.active;
 
     ui.fill_round_rect(surface, save_rect, 5, save_fill);
     text_center(surface, save_rect, 13, "Save", ui.theme.text);

@@ -226,6 +226,8 @@ fn run() !void {
 
     window = try connection.create_window(720, 460, 0, "Status");
 
+    _ = lib.draw.round.masks_for(6);
+
     if (lib.fs.Client.connect(cap.memory)) |opened| {
 
         client = opened;
@@ -289,14 +291,14 @@ fn run() !void {
                         if (token != last_tab_hover) {
 
                             last_tab_hover = token;
-                            dirty = true;
+                            paint_tabs_only();
 
                         }
 
                     } else if (last_tab_hover != -2) {
 
                         last_tab_hover = -2;
-                        dirty = true;
+                        paint_tabs_only();
 
                     }
 
@@ -446,6 +448,24 @@ fn update_cursor(_: i32, y: i32) void {
 }
 
 // Rendering
+
+fn tab_bar_rect() Rect {
+
+    return .{ .x = 0, .y = 0, .w = @intCast(window.surface.width), .h = tab_height };
+
+}
+
+fn paint_tabs_only() void {
+
+    const surface = &window.surface;
+    const region = tab_bar_rect();
+
+    surface.fill_rect(region, ui.theme.window_bg);
+    paint_tabs(surface);
+
+    window.present(region) catch {};
+
+}
 
 fn paint() void {
 

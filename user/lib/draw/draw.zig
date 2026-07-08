@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 pub const bitmap = @import("bitmap.zig");
 pub const path = @import("path.zig");
 pub const raster = @import("raster.zig");
+pub const round = @import("round.zig");
 pub const stroke = @import("stroke.zig");
 pub const text = @import("text.zig");
 pub const vector = @import("vector.zig");
@@ -423,29 +424,51 @@ pub const Surface = struct {
 
         var row: u32 = 0;
 
+        const row_w: u32 = @intCast(to.w);
+
         while (row < to.h) : (row += 1) {
 
             const src_start = (@as(u32, @intCast(from.y)) + row) * src.stride + @as(u32, @intCast(from.x));
             const dst_start = (@as(u32, @intCast(to.y)) + row) * self.stride + @as(u32, @intCast(to.x));
             const mask_start = (mask_dy + row) * mask_w + mask_dx;
+            const mask_end = @min(mask_start + row_w, @as(u32, @intCast(mask.len)));
+            const row_mask = mask[mask_start..mask_end];
+            const active_w = row_mask.len;
 
-            var col: u32 = 0;
+            var solid_row = active_w == row_w;
+            var index: u32 = 0;
 
-            while (col < to.w) : (col += 1) {
+            while (solid_row and index < active_w) : (index += 1) {
 
-                const alpha = mask[mask_start + col];
+                if (row_mask[index] != 255) solid_row = false;
+
+            }
+
+            if (solid_row and active_w == row_w) {
+
+                @memcpy(self.pixels[dst_start .. dst_start + row_w], src.pixels[src_start .. src_start + row_w]);
+
+                continue;
+
+            }
+
+            index = 0;
+
+            while (index < active_w) : (index += 1) {
+
+                const alpha = row_mask[index];
 
                 if (alpha == 0) continue;
 
-                const at = dst_start + col;
+                const at = dst_start + index;
 
                 if (alpha == 255) {
 
-                    self.pixels[at] = src.pixels[src_start + col];
+                    self.pixels[at] = src.pixels[src_start + index];
 
                 } else {
 
-                    self.pixels[at] = mix(self.pixels[at], src.pixels[src_start + col], alpha);
+                    self.pixels[at] = mix(self.pixels[at], src.pixels[src_start + index], alpha);
 
                 }
 

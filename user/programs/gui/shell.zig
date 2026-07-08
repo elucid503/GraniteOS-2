@@ -56,6 +56,9 @@ var child_deaths: Handle = 0;
 var shutting_down: u32 = 0;
 var marble_running: u32 = 0;
 
+var marble_cwd_storage: [256]u8 = undefined;
+var marble_cwd_len: usize = 0;
+
 // The character grid, its cursor, and the escape-sequence parser. Guarded by screen_lock: the tty workers mutate it
 // on write/echo, the GUI thread snapshots it to paint.
 
@@ -136,6 +139,8 @@ fn run() !void {
     tty = try sys.create(.endpoint, 0, 0);
     child_deaths = try sys.create(.endpoint, 0, 0);
     input_ready = try sys.create(.notification, 0, 0);
+
+    init_marble_cwd();
 
     try spawn_marble();
 
@@ -795,6 +800,29 @@ fn paint() void {
 
 }
 
+fn init_marble_cwd() void {
+
+    const default = "/root/user";
+
+    if (lib.prefs.take_open_path(&marble_cwd_storage)) |path| {
+
+        marble_cwd_len = path.len;
+
+        return;
+
+    }
+
+    @memcpy(marble_cwd_storage[0..default.len], default);
+    marble_cwd_len = default.len;
+
+}
+
+fn marble_cwd() []const u8 {
+
+    return marble_cwd_storage[0..marble_cwd_len];
+
+}
+
 // MARBLE runs as a child with its stdio wired to this terminal's tty, exactly as Flint launches it against the
 // console - so it is the real shell, not a reimplementation. When it exits (the `exit` builtin), the reaper starts a
 // fresh session so the window stays alive.
@@ -837,7 +865,7 @@ fn spawn_marble() !void {
         .data3 = bundle_length,
         .data4 = bundle_offset,
         .data5 = core_count,
-        .cwd = "/root/user",
+        .cwd = marble_cwd(),
 
     });
 

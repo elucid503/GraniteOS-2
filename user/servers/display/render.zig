@@ -1,8 +1,8 @@
-// Compositor chrome rendering (M10 GUI rewrite): decorated windows get an antialiased frame - a rounded-top
-// title bar with Inter text and a stroked close cross, client content blitted with the bottom corners cut by
-// quarter-circle coverage masks - all through the analytic renderer. Because windows composite bottom-up into
-// the back buffer, the masked corners naturally reveal whatever lies beneath, so rounding costs two small
-// masked blits per window and nothing else.
+// Compositor chrome rendering (M10 GUI rewrite): decorated windows get a frame - a title bar with Inter text
+// and a close cross, client content blitted with the bottom corners cut by quarter-circle coverage masks - all
+// through fast masked fills and blits. Because windows composite bottom-up into the back buffer, the masked
+// corners naturally reveal whatever lies beneath, so rounding costs two small masked blits per window and
+// nothing else.
 
 const std = @import("std");
 
@@ -14,12 +14,9 @@ const manager_module = @import("manager.zig");
 
 const Color = draw.Color;
 const Face = draw.text.Face;
-const Path = draw.path.Path;
 const Rect = draw.Rect;
 const Surface = draw.Surface;
 const Window = manager_module.Window;
-
-const fx = draw.path.from_px;
 
 pub const corner_radius: i32 = 8;
 pub const title_font_size: u32 = 13;
@@ -32,62 +29,9 @@ pub const Chrome = struct {
 
 };
 
-// Quarter-circle corner masks for the content's bottom corners, rebuilt only when the radius constant moves.
+fn content_corner_masks() ?draw.round.Masks {
 
-var masks_ready = false;
-var mask_left: [corner_radius * corner_radius]u8 = undefined;
-var mask_right: [corner_radius * corner_radius]u8 = undefined;
-
-fn build_masks() void {
-
-    const r = corner_radius;
-    const side: u32 = @intCast(2 * r);
-
-    var coverage: [4 * corner_radius * corner_radius]u8 = [_]u8{0} ** (4 * corner_radius * corner_radius);
-
-    var path = Path{};
-
-    path.add_round_rect(0, 0, fx(2 * r), fx(2 * r), fx(r));
-    draw.raster.fill_coverage(&path, &coverage, side, side, 0, 0);
-
-    // The bottom-left and bottom-right quadrants of the disc-cornered square.
-
-    var row: usize = 0;
-
-    while (row < r) : (row += 1) {
-
-        const src = (row + @as(usize, @intCast(r))) * side;
-
-        for (0..@intCast(r)) |col| {
-
-            mask_left[row * @as(usize, @intCast(r)) + col] = coverage[src + col];
-            mask_right[row * @as(usize, @intCast(r)) + col] = coverage[src + @as(usize, @intCast(r)) + col];
-
-        }
-
-    }
-
-    masks_ready = true;
-
-}
-
-/// A rectangle with only its top corners rounded (the title bar shape).
-fn add_round_top_rect(path: *Path, x: i32, y: i32, w: i32, h: i32, radius: i32) void {
-
-    const r = @max(0, @min(radius, @min(@divTrunc(w, 2), h)));
-
-    if (r == 0) return path.add_rect(x, y, w, h);
-
-    const k = @divTrunc(@as(i32, @intCast(@as(i64, r) * 36195)), 65536);
-
-    path.move_to(x + r, y);
-    path.line_to(x + w - r, y);
-    path.cubic_to(x + w - r + k, y, x + w, y + r - k, x + w, y + r);
-    path.line_to(x + w, y + h);
-    path.line_to(x, y + h);
-    path.line_to(x, y + r);
-    path.cubic_to(x, y + r - k, x + r - k, y, x + r, y);
-    path.close();
+    return draw.round.masks_for(corner_radius);
 
 }
 
@@ -96,10 +40,7 @@ pub fn draw_title_bar(back: *const Surface, window: *const Window, focused: bool
     const bar = window.title_bar();
     const color = if (focused) chrome.title_focused else chrome.title_blurred;
 
-    var path = Path{};
-
-    add_round_top_rect(&path, fx(bar.x), fx(bar.y), fx(bar.w), fx(bar.h), fx(corner_radius));
-    draw.raster.fill(back, &path, color);
+    draw.round.fill_round_top_rect(back, bar, corner_radius, color);
 
     if (font) |face| {
 
@@ -135,17 +76,52 @@ fn draw_close_button(back: *const Surface, box: Rect, chrome: Chrome) void {
     const cy = box.y + @divTrunc(box.h, 2);
     const arm = @max(2, @divTrunc(box.w, 4));
 
-    var path = Path{};
+    stroke_line(back, cx - arm, cy - arm, cx + arm, cy + arm, chrome.text);
+    stroke_line(back, cx + arm, cy - arm, cx - arm, cy + arm, chrome.text);
 
-    draw.stroke.segment(&path, fx(cx - arm), fx(cy - arm), fx(cx + arm), fx(cy + arm), fx(1) + 32);
-    draw.stroke.segment(&path, fx(cx + arm), fx(cy - arm), fx(cx - arm), fx(cy + arm), fx(1) + 32);
-    draw.raster.fill(back, &path, chrome.text);
+}
+
+fn stroke_line(back: *const Surface, x0: i32, y0: i32, x1: i32, y1: i32, color: Color) void {
+
+    var x = x0;
+    var y = y0;
+
+    const dx: i32 = @intCast(@abs(x1 - x0));
+    const dy: i32 = @intCast(@abs(y1 - y0));
+    const sx: i32 = if (x0 < x1) 1 else -1;
+    const sy: i32 = if (y0 < y1) 1 else -1;
+
+    var err = dx - dy;
+
+    while (true) {
+
+        back.put_pixel(x, y, color);
+
+        if (x == x1 and y == y1) break;
+
+        const e2 = 2 * err;
+
+        if (e2 > -dy) {
+
+            err -= dy;
+            x += sx;
+
+        }
+
+        if (e2 < dx) {
+
+            err += dx;
+            y += sy;
+
+        }
+
+    }
 
 }
 
 /// Blit the client's content into the back buffer, cutting decorated windows' bottom corners with the
 /// quarter-circle masks so what was already composited beneath shows through.
-pub fn blit_content(back: *const Surface, window: *const Window, surface: *const Surface, clip: Rect) void {
+pub fn blit_content(back: *const Surface, window: *const Window, surface: *const Surface, clip: Rect, matte: Color) void {
 
     const content = window.content();
     const visible = content.intersect(clip);
@@ -160,7 +136,13 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
 
     }
 
-    if (!masks_ready) build_masks();
+    const masks = content_corner_masks() orelse {
+
+        back.blit(visible.x, visible.y, surface, visible.translated(-content.x, -content.y));
+
+        return;
+
+    };
 
     const r = corner_radius;
     const body = Rect{ .x = content.x, .y = content.y, .w = content.w, .h = content.h - r };
@@ -186,11 +168,14 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
     const left = Rect{ .x = content.x, .y = corner_y, .w = r, .h = r };
     const right = Rect{ .x = content.x + content.w - r, .y = corner_y, .w = r, .h = r };
 
+    const side: u32 = @intCast(r);
+
     if (!left.intersect(clip).is_empty()) {
 
         const view = back.clipped(clip);
 
-        view.blit_masked(left.x, left.y, surface, left.translated(-content.x, -content.y), &mask_left, @intCast(r));
+        draw.round.matte_corner_edges(&view, left.x, left.y, masks.bl, side, matte);
+        view.blit_masked(left.x, left.y, surface, left.translated(-content.x, -content.y), masks.bl, side);
 
     }
 
@@ -198,82 +183,54 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
 
         const view = back.clipped(clip);
 
-        view.blit_masked(right.x, right.y, surface, right.translated(-content.x, -content.y), &mask_right, @intCast(r));
+        draw.round.matte_corner_edges(&view, right.x, right.y, masks.br, side, matte);
+        view.blit_masked(right.x, right.y, surface, right.translated(-content.x, -content.y), masks.br, side);
 
     }
 
 }
 
-/// A trio of short antialiased ticks in the bottom-right corner: the resize affordance.
+/// A trio of short ticks in the bottom-right corner: the resize affordance.
 pub fn draw_resize_grip(back: *const Surface, window: *const Window, color: Color) void {
 
     const grip = window.resize_grip_rect();
     const corner_x = grip.x + grip.w - 4;
     const corner_y = grip.y + grip.h - 4;
 
-    var path = Path{};
-
     var step: i32 = 4;
 
     while (step <= 12) : (step += 4) {
 
-        draw.stroke.segment(&path, fx(corner_x - step), fx(corner_y), fx(corner_x), fx(corner_y - step), 80);
+        stroke_line(back, corner_x - step, corner_y, corner_x, corner_y - step, color);
 
     }
 
-    draw.raster.fill(back, &path, color);
-
 }
 
-/// A one-pixel rounded outline around a decorated window frame.
+/// A one-pixel outline on the straight frame edges (corners come from the title bar and content shape).
 pub fn draw_frame_border(back: *const Surface, window: *const Window, color: Color) void {
 
-    const frame = window.frame();
-
-    var path = Path{};
-
-    draw.stroke.round_rect_border(&path, fx(frame.x), fx(frame.y), fx(frame.w), fx(frame.h), fx(corner_radius), fx(1));
-    draw.raster.fill(back, &path, color);
+    draw.round.stroke_round_rect_fast(back, window.frame(), corner_radius, 1, color);
 
 }
 
-/// The interactive-resize rubber band: a two-pixel antialiased rounded outline.
+/// The interactive-resize rubber band.
 pub fn draw_outline(back: *const Surface, rect: Rect, color: Color) void {
 
-    var path = Path{};
-
-    draw.stroke.round_rect_border(&path, fx(rect.x), fx(rect.y), fx(rect.w), fx(rect.h), fx(corner_radius), fx(2));
-    draw.raster.fill(back, &path, color);
+    draw.round.stroke_round_rect_fast(back, rect, corner_radius, 2, color);
 
 }
 
 const testing = std.testing;
 
-test "corner masks are opaque at the inner corner and clear at the outer tip" {
+test "content corner masks are opaque inside and clear outside the arc" {
 
-    build_masks();
-
+    const masks = content_corner_masks() orelse return error.TestExpectedEqual;
     const r: usize = @intCast(corner_radius);
 
-    // Bottom-left mask: top-right cell is deep inside the shape; bottom-left cell is outside the arc.
-
-    try testing.expectEqual(@as(u8, 255), mask_left[r - 1]);
-    try testing.expect(mask_left[(r - 1) * r] < 64);
-
-    // Bottom-right mask mirrors it.
-
-    try testing.expectEqual(@as(u8, 255), mask_right[0]);
-    try testing.expect(mask_right[r * r - 1] < 64);
-
-}
-
-test "round-top rect path stays within bounds" {
-
-    var path = Path{};
-
-    add_round_top_rect(&path, 0, 0, fx(100), fx(28), fx(8));
-
-    try testing.expect(!path.overflowed);
-    try testing.expect(path.verb_count > 4);
+    try testing.expectEqual(@as(u8, 255), masks.bl[r - 1]);
+    try testing.expect(masks.bl[(r - 1) * r] < 64);
+    try testing.expectEqual(@as(u8, 255), masks.br[0]);
+    try testing.expect(masks.br[r * r - 1] < 64);
 
 }

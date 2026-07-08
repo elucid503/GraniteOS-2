@@ -164,6 +164,7 @@ fn run() !void {
     try acquire_display();
     try load_font();
     load_compositor_theme();
+    _ = draw.round.masks_for(render.corner_radius);
     upload_cursor(.pointer) catch {};
 
     // Flint already registered "window" against this endpoint; clients queue here until the loop starts.
@@ -1254,6 +1255,9 @@ fn composite() !void {
 
     back.fill_rect(region, theme.wallpaper);
 
+    // Client pixels may have been written in other processes; publish once before reading any surface.
+    draw.fence();
+
     var index: usize = 0;
 
     while (index < manager.count) : (index += 1) {
@@ -1309,11 +1313,7 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     const surface = surfaces.surface_of(slot, window.width, window.height) orelse return;
 
-    // Client pixels were written in another process; publish before the compositor reads the shared Region.
-
-    draw.fence();
-
-    render.blit_content(&back, window, &surface, clip);
+    render.blit_content(&back, window, &surface, clip, theme.border);
 
     if (window.decorated()) {
 

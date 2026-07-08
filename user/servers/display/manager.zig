@@ -574,7 +574,8 @@ pub const Manager = struct {
 
     }
 
-    /// Move a window's frame origin; returns the combined damage of the old and new footprint.
+    /// Move a window's frame origin; returns the combined damage of the old and new footprint, or null when
+    /// clamping leaves the frame unchanged (so drags against a screen edge do not spam full repaints).
     pub fn move(self: *Manager, id: u32, x: i32, y: i32) ?Rect {
 
         const window = self.by_id(id) orelse return null;
@@ -584,7 +585,11 @@ pub const Manager = struct {
         window.y = y;
         self.clamp(window);
 
-        return before.cover(window.frame());
+        const after = window.frame();
+
+        if (before.x == after.x and before.y == after.y and before.w == after.w and before.h == after.h) return null;
+
+        return before.cover(after);
 
     }
 
@@ -626,9 +631,6 @@ pub const Manager = struct {
 
     }
 
-    // Keep at least the title bar reachable: the frame may hang off the right/bottom, but its top-left
-    // stays on screen.
-
     fn clamp(self: *Manager, window: *Window) void {
 
         if (window.flags & proto.window.flag_fullscreen != 0) {
@@ -652,11 +654,14 @@ pub const Manager = struct {
 
         }
 
-        const limit_x: i32 = @max(0, @as(i32, @intCast(self.screen_width)) - 32);
-        const limit_y: i32 = @max(0, @as(i32, @intCast(self.screen_height)) - title_height);
+        const frame_w = @as(i32, @intCast(window.width));
+        const frame_h = if (window.decorated()) title_height + @as(i32, @intCast(window.height)) else @as(i32, @intCast(window.height));
 
-        window.x = @max(0, @min(window.x, limit_x));
-        window.y = @max(0, @min(window.y, limit_y));
+        const max_x = @max(0, @as(i32, @intCast(self.screen_width)) - frame_w);
+        const max_y = @max(0, @as(i32, @intCast(self.screen_height)) - frame_h);
+
+        window.x = @max(0, @min(window.x, max_x));
+        window.y = @max(0, @min(window.y, max_y));
 
     }
 
@@ -829,10 +834,29 @@ test "move clamps to the screen and reports covering damage" {
     try testing.expectEqual(@as(i32, 0), window.y);
     try testing.expect(damage.w >= window.frame().w);
 
-    _ = manager.move(window.id, 10_000, 10_000);
+    _ = manager.move(window.id, 10_000, 10_000).?;
 
-    try testing.expect(window.x < 640);
-    try testing.expect(window.y < 480);
+    const frame = window.frame();
+
+    try testing.expectEqual(@max(0, 640 - frame.w), window.x);
+    try testing.expectEqual(@max(0, 480 - frame.h), window.y);
+
+    try testing.expectEqual(@as(?Rect, null), manager.move(window.id, 10_000, 10_000));
+
+}
+
+test "move against a clamped edge returns null" {
+
+    var manager = test_manager();
+
+    const window = manager.create(1, 100, 100, 200, "w").?;
+
+    _ = manager.move(window.id, 0, 0).?;
+
+    try testing.expectEqual(@as(i32, 0), window.x);
+    try testing.expectEqual(@as(i32, 0), window.y);
+    try testing.expectEqual(@as(?Rect, null), manager.move(window.id, -40, -20));
+    try testing.expectEqual(@as(?Rect, null), manager.move(window.id, -1, 0));
 
 }
 

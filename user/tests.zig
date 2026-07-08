@@ -8,6 +8,7 @@ test {
     _ = @import("lib").draw.bitmap;
     _ = @import("lib").draw.path;
     _ = @import("lib").draw.raster;
+    _ = @import("lib").draw.round;
     _ = @import("lib").draw.stroke;
     _ = @import("lib").draw.text;
     _ = @import("lib").draw.vector;
