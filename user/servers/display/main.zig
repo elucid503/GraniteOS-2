@@ -4,11 +4,6 @@
 // interactive resize (manager.zig). Input arrives over the input server's event ring; the hardware cursor
 // plane means pointer motion costs one IPC, not a recomposite.
 //
-// Robustness rules: every client-supplied size and id is validated before use; all surface memory is released
-// through one idempotent path (create, resize, destroy, and session eviction included); a screen resize
-// notifies every window whose content size tracks the screen - panels and desktop layers included - so the
-// taskbar and desktop chrome survive host window resizes.
-
 const std = @import("std");
 
 const lib = @import("lib");

@@ -30,6 +30,7 @@ const MenuAction = enum {
     create_file,
     create_folder,
     open_marble,
+    open_about,
     remove_pin,
 
 };
@@ -42,10 +43,12 @@ const desktop_menu_rows = [_]ui.Menu.Row{
     .{ .item = "Create New Folder" },
     .separator,
     .{ .item = "Open MARBLE Here" },
+    .separator,
+    .{ .item = "About GraniteOS 2" },
 
 };
 
-const desktop_menu_actions = [_]?MenuAction{ .create_file, .create_folder, null, .open_marble };
+const desktop_menu_actions = [_]?MenuAction{ .create_file, .create_folder, null, .open_marble, null, .open_about };
 
 const pin_menu_rows = [_]ui.Menu.Row{
 
@@ -373,6 +376,7 @@ fn button_down(event: events.Event) void {
                 .create_file => open_prompt(.file),
                 .create_folder => open_prompt(.folder),
                 .open_marble => open_marble_here(),
+                .open_about => open_about(),
                 .remove_pin => {
 
                     if (pin_index) |index| remove_pin_at(index);
@@ -599,6 +603,12 @@ fn prompt_click(x: i32, y: i32) void {
 fn open_marble_here() void {
 
     lib.wm.launch_with_path("shell", home_dir);
+
+}
+
+fn open_about() void {
+
+    lib.wm.launch("about-gui");
 
 }
 
