@@ -1,5 +1,4 @@
-// Thread synchronization for user programs: a notification-parked mutex. Uncontended acquire is one atomic;
-// under contention a thread spins briefly, then parks in `wait` so it consumes no CPU until the holder releases.
+// Thread synchronization for user programs: a notification-parked mutex. Uncontended acquire is one atomic; under contention a thread spins briefly, then parks in `wait` so it consumes no CPU until the holder releases.
 
 const cap = @import("cap/cap.zig");
 const sys = @import("syscall/sys.zig");
@@ -56,8 +55,7 @@ pub const Mutex = struct {
 
     }
 
-    // If the notification cannot be created the mutex degrades to a yield lock (wait on handle 0 fails into the
-    // catch above), so acquire never gets stuck on an allocation failure.
+    // If the notification cannot be created the mutex degrades to a yield lock (wait on handle 0 fails into the catch above), so acquire never gets stuck on an allocation failure.
 
     fn ensure_parking(self: *Mutex) void {
 

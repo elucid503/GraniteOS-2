@@ -145,8 +145,7 @@ fn serve_loop(endpoint: Handle, dispatch: Dispatch) noreturn {
 
 }
 
-/// Mutual exclusion for a pooled server's own data structures (05-server-protocol.md): the shared
-/// notification-parked mutex, so contended workers park instead of yield-spinning.
+/// Mutual exclusion for a pooled server's own data structures (05-server-protocol.md): the shared notification-parked mutex, so contended workers park instead of yield-spinning.
 pub const Lock = @import("../sync.zig").Mutex;
 
 fn decoded(message: Message) Error!Message {

@@ -317,8 +317,7 @@ var event_bits: u64 = proto.display.mode_bit;
 // virtio completion and config events share one bound notification; submit() blocks on it instead of spinning.
 var device_wake: Handle = 0;
 
-// A watchdog thread ticks device_wake while a submission is in flight, so a dead host (headless boot, closed
-// SDL window) still bounds the wait and lets submit() return error.Gone instead of hanging forever.
+// A watchdog thread ticks device_wake while a submission is in flight, so a dead host (headless boot, closed SDL window) still bounds the wait and lets submit() return error.Gone instead of hanging forever.
 var watchdog_arm: Handle = 0;
 var submit_in_flight: bool = false;
 
@@ -924,8 +923,7 @@ fn apply_display_resize() bool {
 
 }
 
-// Synchronous command submission: one out descriptor (the command), one in descriptor (the response), then block
-// on the bound completion interrupt. Config events raised while waiting are handled on the next endpoint wake.
+// Synchronous command submission: one out descriptor (the command), one in descriptor (the response), then block on the bound completion interrupt. Config events raised while waiting are handled on the next endpoint wake.
 
 fn command(comptime T: type, payload: T) !u32 {
 
@@ -985,8 +983,7 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
 
     sys.notify(watchdog_arm, tick_bit) catch {};
 
-    // The device is only quieted after the kernel has masked the (level-triggered) line and signaled the
-    // notification; acknowledging earlier could drop the wakeup and hang the wait.
+    // The device is only quieted after the kernel has masked the (level-triggered) line and signaled the notification; acknowledging earlier could drop the wakeup and hang the wait.
 
     while (true) {
 
@@ -1018,8 +1015,7 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
 
 }
 
-// Ticks device_wake while a submission is in flight so submit()'s deadline is checked even if the host
-// never completes the command (and therefore never raises the interrupt).
+// Ticks device_wake while a submission is in flight so submit()'s deadline is checked even if the host never completes the command (and therefore never raises the interrupt).
 
 const watchdog_stack_pages = 4;
 

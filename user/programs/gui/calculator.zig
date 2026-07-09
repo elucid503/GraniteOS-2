@@ -43,9 +43,7 @@ var font: lib.draw.text.Face = undefined;
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
 
-// Deliberate exception to the no-float rule: the kernel does not preserve FP/SIMD registers across context
-// switches, so this arithmetic is only safe as long as no preemption lands between dependent FP instructions.
-// Every other program stays integer/fixed-point; convert this to fixed-point decimal before relying on it.
+// Deliberate exception to the no-float rule: the kernel does not preserve FP/SIMD registers across context switches, so this arithmetic is only safe as long as no preemption lands between dependent FP instructions.
 
 var display_value: f64 = 0;
 var stored: f64 = 0;

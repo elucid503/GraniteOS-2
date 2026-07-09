@@ -389,8 +389,7 @@ fn transfer(kind: u32, sector: u64) i64 {
 
     const used: *volatile Used = @ptrFromInt(dma_base + used_offset);
 
-    // Clearing the device's interrupt status before the line fires would drop the (level-triggered) wakeup,
-    // so the device is only quieted after the kernel has masked the line and signaled the notification.
+    // Clearing the device's interrupt status before the line fires would drop the (level-triggered) wakeup, so the device is only quieted after the kernel has masked the line and signaled the notification.
 
     while (true) {
 
