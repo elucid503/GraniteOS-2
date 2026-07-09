@@ -39,7 +39,8 @@ pub const SpinLock = struct {
 
     pub fn unlock(self: *SpinLock) void {
 
-        @atomicStore(u32, &self.locked, 0, .release);
+        // Avoid XRELEASE-prefixed stores: Zig may emit them for `.release` on some x86 targets, and QEMU #UDs.
+        @atomicStore(u32, &self.locked, 0, .seq_cst);
 
     }
 

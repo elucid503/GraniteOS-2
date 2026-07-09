@@ -39,10 +39,15 @@ pub const AddressSpace = struct {
 
     pub fn create() Error!*AddressSpace {
 
+        const debug = @import("../debug/console.zig");
+        debug.debug_print("AS: new_table\n");
+
         const root = try arch.new_table();
         errdefer arch.free_table(root);
 
+        debug.debug_print("AS: cache.alloc\n");
         const space = try cache.alloc();
+        debug.debug_print("AS: ok\n");
         space.* = .{
 
             .header = .{ .kind = .address_space },

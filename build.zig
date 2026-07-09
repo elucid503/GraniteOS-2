@@ -1,4 +1,4 @@
-// Build the aarch64 freestanding kernel, M7 user module bundle, the persistent disk image, and QEMU `virt` run steps.
+// Build the freestanding kernel (aarch64 or x86_64), user module bundle, persistent disk, and QEMU run steps.
 
 const std = @import("std");
 
@@ -7,6 +7,13 @@ const discover = @import("build/discover.zig");
 const bytes_per_mib = 1024 * 1024;
 const default_disk_mib = 64;
 
+const ArchChoice = enum {
+
+    aarch64,
+    x86_64,
+
+};
+
 pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
@@ -14,13 +21,23 @@ pub fn build(b: *std.Build) void {
     const smp = b.option(u64, "smp", "Core count for the QEMU run steps") orelse 4;
     const memory = b.option(u64, "memory", "RAM in MiB for the QEMU run steps") orelse 512;
     const disk = b.option(u64, "disk", "Disk size in MiB for the persistent QEMU disk") orelse default_disk_mib;
+    const arch_choice = b.option(ArchChoice, "arch", "Target architecture") orelse .aarch64;
 
     if (disk == 0) @panic("-Ddisk must be at least 1 MiB");
     if (disk > std.math.maxInt(u64) / bytes_per_mib) @panic("-Ddisk is too large");
 
     const disk_bytes = disk * bytes_per_mib;
+    const is_x86 = arch_choice == .x86_64;
 
-    const target = b.resolveTargetQuery(.{
+    const target = if (is_x86) b.resolveTargetQuery(.{
+
+        .cpu_arch = .x86_64,
+        .os_tag = .freestanding,
+        .abi = .none,
+        .ofmt = .elf,
+        .cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64 },
+
+    }) else b.resolveTargetQuery(.{
 
         .cpu_arch = .aarch64,
         .os_tag = .freestanding,
@@ -46,9 +63,21 @@ pub fn build(b: *std.Build) void {
     });
 
     kernel_module.addImport("build_options", options.createModule());
-    kernel_module.addAssemblyFile(b.path("kernel/arch/aarch64/asm/start.S"));
-    kernel_module.addAssemblyFile(b.path("kernel/arch/aarch64/asm/vectors.S"));
-    kernel_module.addAssemblyFile(b.path("kernel/arch/aarch64/asm/switch.S"));
+
+    if (is_x86) {
+
+        kernel_module.addAssemblyFile(b.path("kernel/arch/x86_64/asm/start.S"));
+        kernel_module.addAssemblyFile(b.path("kernel/arch/x86_64/asm/isr.S"));
+        kernel_module.addAssemblyFile(b.path("kernel/arch/x86_64/asm/switch.S"));
+        kernel_module.addAssemblyFile(b.path("kernel/arch/x86_64/asm/gdt.S"));
+
+    } else {
+
+        kernel_module.addAssemblyFile(b.path("kernel/arch/aarch64/asm/start.S"));
+        kernel_module.addAssemblyFile(b.path("kernel/arch/aarch64/asm/vectors.S"));
+        kernel_module.addAssemblyFile(b.path("kernel/arch/aarch64/asm/switch.S"));
+
+    }
 
     const kernel = b.addExecutable(.{
 
@@ -57,7 +86,19 @@ pub fn build(b: *std.Build) void {
 
     });
 
-    kernel.setLinkerScript(b.path("kernel/arch/aarch64/asm/linker.ld"));
+    if (is_x86) {
+
+        kernel.setLinkerScript(b.path("kernel/arch/x86_64/asm/linker.ld"));
+        kernel.root_module.strip = true;
+        // Zig 0.15's self-hosted x86 backend emits invalid XRELEASE prefixes; LLVM does not.
+        kernel.use_llvm = true;
+
+    } else {
+
+        kernel.setLinkerScript(b.path("kernel/arch/aarch64/asm/linker.ld"));
+
+    }
+
     kernel.entry = .{ .symbol_name = "_start" };
 
     // User modules are multithreaded since M7: pooled servers run worker threads (07-userspace-ddd.md Section 7.2).
@@ -95,13 +136,26 @@ pub fn build(b: *std.Build) void {
     const catalog_file = catalog_step.add("app-catalog.bin", catalog_bytes);
 
     const flatten = host_tool(b, "flatten", "tools/flatten.zig");
+    const mbwrap = host_tool(b, "mbwrap", "tools/mbwrap.zig");
     const bundle_tool = host_tool(b, "bundle", "tools/bundle.zig");
     const seedisk = host_seedisk(b);
     const qemu_runner = host_tool(b, "qemu-run", "tools/qemu-run.zig");
 
     const kernel_image = flatten_image(b, flatten, kernel, "granite-kernel.bin");
+
+    // x86: wrap the flat image with a Multiboot1 AOUT header so QEMU `-kernel` finds magic in the first 8 KiB.
+    const qemu_kernel = if (is_x86) blk: {
+
+        const wrap = b.addRunArtifact(mbwrap);
+        wrap.addArtifactArg(kernel);
+        wrap.addFileArg(kernel_image);
+        break :blk wrap.addOutputFileArg("granite-kernel.mb");
+
+    } else kernel_image;
+
     const flint = artifacts.get("flint") orelse @panic("missing flint module");
     const flint_image = flatten_image(b, flatten, flint, "flint.bin");
+
 
     const bundle_run = b.addRunArtifact(bundle_tool);
     const bundle_image = bundle_run.addOutputFileArg("bundle.img");
@@ -130,6 +184,7 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(kernel);
     b.getInstallStep().dependOn(&b.addInstallBinFile(kernel_image, "granite-kernel.bin").step);
+    if (is_x86) b.getInstallStep().dependOn(&b.addInstallBinFile(qemu_kernel, "granite-kernel.mb").step);
     b.getInstallStep().dependOn(&b.addInstallBinFile(flint_image, "flint.bin").step);
     b.getInstallStep().dependOn(&b.addInstallBinFile(bundle_image, "bundle.img").step);
 
@@ -153,64 +208,78 @@ pub fn build(b: *std.Build) void {
 
     seedisk_run.has_side_effects = true;
 
-    add_qemu_step(b, kernel_image, bundle_image, .{
+    const qemu_arch: QemuArch = if (is_x86) .x86_64 else .aarch64;
 
-        .name = "qemu",
-        .description = "Boot the full M7 system under QEMU `virt` with the persistent disk",
+    add_qemu_step(b, qemu_kernel, bundle_image, .{
+
+        .name = if (is_x86) "qemu-x86" else "qemu",
+        .description = if (is_x86)
+            "Boot the full system under QEMU q35 (x86_64)"
+        else
+            "Boot the full M7 system under QEMU `virt` with the persistent disk",
         .debug = false,
         .test_build = test_build,
-        .disk = .{ .path = disk_path, .prepare = seedisk_run },
-        .smp = smp,
+        .disk = if (is_x86) null else .{ .path = disk_path, .prepare = seedisk_run },
+        .smp = if (is_x86) 1 else smp,
         .memory = memory,
+        .arch = qemu_arch,
 
     }, null);
 
-    add_qemu_step(b, kernel_image, bundle_image, .{
+    if (!is_x86) {
 
-        .name = "qemu-debug",
-        .description = "Boot the full M7 system under QEMU `virt`, halted, with a gdb stub on :1234",
-        .debug = true,
-        .test_build = test_build,
-        .disk = .{ .path = disk_path, .prepare = seedisk_run },
-        .smp = smp,
-        .memory = memory,
+        add_qemu_step(b, qemu_kernel, bundle_image, .{
 
-    }, null);
+            .name = "qemu-debug",
+            .description = "Boot the full M7 system under QEMU `virt`, halted, with a gdb stub on :1234",
+            .debug = true,
+            .test_build = test_build,
+            .disk = .{ .path = disk_path, .prepare = seedisk_run },
+            .smp = smp,
+            .memory = memory,
+            .arch = .aarch64,
 
-    add_qemu_step(b, kernel_image, bundle_image, .{
+        }, null);
 
-        .name = "qemu-gui",
-        .description = "Boot the full system with the virtio-gpu display and virtio-input devices (M9)",
-        .debug = false,
-        .test_build = test_build,
-        .disk = .{ .path = disk_path, .prepare = seedisk_run },
-        .smp = smp,
-        .memory = memory,
-        .gui = true,
+        add_qemu_step(b, qemu_kernel, bundle_image, .{
 
-    }, qemu_runner);
+            .name = "qemu-gui",
+            .description = "Boot the full system with the virtio-gpu display and virtio-input devices (M9)",
+            .debug = false,
+            .test_build = test_build,
+            .disk = .{ .path = disk_path, .prepare = seedisk_run },
+            .smp = smp,
+            .memory = memory,
+            .gui = true,
+            .arch = .aarch64,
 
-    add_qemu_step(b, kernel_image, bundle_image, .{
+        }, qemu_runner);
 
-        .name = "qemu-nodisk",
-        .description = "Boot the full system without a disk (the filesystem reports unavailable)",
-        .debug = false,
-        .test_build = test_build,
-        .disk = null,
-        .smp = smp,
-        .memory = memory,
+        add_qemu_step(b, qemu_kernel, bundle_image, .{
 
-    }, null);
+            .name = "qemu-nodisk",
+            .description = "Boot the full system without a disk (the filesystem reports unavailable)",
+            .debug = false,
+            .test_build = test_build,
+            .disk = null,
+            .smp = smp,
+            .memory = memory,
+            .arch = .aarch64,
 
-    add_qemu_step(b, kernel_image, null, .{
+        }, null);
 
-        .name = "qemu-bare",
+    }
+
+    add_qemu_step(b, qemu_kernel, null, .{
+
+        .name = if (is_x86) "qemu-x86-bare" else "qemu-bare",
         .description = "Boot the kernel without an initrd (halts after initialization)",
         .debug = false,
         .test_build = test_build,
         .disk = null,
-        .smp = smp,
+        .smp = if (is_x86) 1 else smp,
         .memory = memory,
+        .arch = qemu_arch,
 
     }, null);
 
@@ -365,6 +434,13 @@ fn add_seed_program(run: *std.Build.Step.Run, name: []const u8, artifact: *std.B
 
 }
 
+const QemuArch = enum {
+
+    aarch64,
+    x86_64,
+
+};
+
 const QemuDisk = struct {
 
     path: []const u8,
@@ -382,32 +458,48 @@ const QemuStep = struct {
     smp: u64,
     memory: u64,
     gui: bool = false,
+    arch: QemuArch = .aarch64,
 
 };
 
 fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.LazyPath, step: QemuStep, qemu_runner: ?*std.Build.Step.Compile) void {
+
+    const qemu_bin = if (step.arch == .x86_64) "qemu-system-x86_64" else "qemu-system-aarch64";
 
     const run = if (step.gui) blk: {
 
         const gui_run = b.addRunArtifact(qemu_runner.?);
 
         gui_run.has_side_effects = true;
-        gui_run.addArg("qemu-system-aarch64");
+        gui_run.addArg(qemu_bin);
 
         break :blk gui_run;
 
     } else blk: {
 
-        break :blk b.addSystemCommand(&.{"qemu-system-aarch64"});
+        break :blk b.addSystemCommand(&.{qemu_bin});
 
     };
 
-    run.addArgs(&.{
-        "-machine", "virt,gic-version=3",
-        "-cpu",     "cortex-a57",
-        "-smp",     b.fmt("{d}", .{step.smp}),
-        "-m",       b.fmt("{d}M", .{step.memory}),
-    });
+    if (step.arch == .x86_64) {
+
+        run.addArgs(&.{
+            "-machine", "q35",
+            "-cpu",     "qemu64",
+            "-smp",     b.fmt("{d}", .{step.smp}),
+            "-m",       b.fmt("{d}M", .{step.memory}),
+        });
+
+    } else {
+
+        run.addArgs(&.{
+            "-machine", "virt,gic-version=3",
+            "-cpu",     "cortex-a57",
+            "-smp",     b.fmt("{d}", .{step.smp}),
+            "-m",       b.fmt("{d}M", .{step.memory}),
+        });
+
+    }
 
     // GUI boots open a host display window with the serial console on stdio; everything else is headless.
 
@@ -425,7 +517,7 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
 
     }
 
-    if (step.test_build) {
+    if (step.test_build and step.arch == .aarch64) {
 
         run.addArg("-semihosting");
 

@@ -29,6 +29,32 @@ pub const SyscallFrame = extern struct {
     spsr: u64,
     reserved: u64,
 
+    // aarch64 ABI: number in x8, args in x0..x4, result in x0 (DMA phys in x1).
+
+    pub fn number(self: *const SyscallFrame) u64 {
+
+        return self.registers[8];
+
+    }
+
+    pub fn arg(self: *const SyscallFrame, index: usize) u64 {
+
+        return self.registers[index];
+
+    }
+
+    pub fn set_result(self: *SyscallFrame, value: u64) void {
+
+        self.registers[0] = value;
+
+    }
+
+    pub fn set_extra(self: *SyscallFrame, value: u64) void {
+
+        self.registers[1] = value;
+
+    }
+
 };
 
 // Kernel IRQ flow (06-kernel-ddd.md Section 7.4): claim, quiet the source, end-of-interrupt, then act.

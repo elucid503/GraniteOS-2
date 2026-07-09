@@ -3,29 +3,14 @@
 const std = @import("std");
 
 const frames = @import("../memory/frames.zig");
+const machine_module = @import("machine.zig");
 
 const types = @import("../types.zig");
 const Error = @import("../error.zig").Error;
 
 pub const MemoryRange = frames.MemoryRange;
 pub const IntctrlWindows = types.IntctrlWindows;
-
-pub const Machine = struct {
-
-    memory: []const MemoryRange,
-    core_count: usize,
-    intctrl: ?IntctrlWindows,
-
-    // The initrd span from /chosen (QEMU -initrd): the boot modules the hand-off turns into Regions.
-    initrd: ?MemoryRange,
-
-    // Each CPU node's `reg` (its MPIDR affinity), the PSCI CPU_ON targets for secondary bring-up (M8).
-    cpus: []const u64,
-
-    // The PSCI conduit from /psci; null means no firmware power control (single-core boot).
-    power: ?types.PowerMethod,
-
-};
+pub const Machine = machine_module.Machine;
 
 const magic = 0xd00dfeed;
 
@@ -196,6 +181,9 @@ pub fn parse(dtb: usize, memory_out: []MemoryRange, cpu_out: []u64) Error!Machin
 
         .cpus = cpu_out[0..@min(core_count, cpu_out.len)],
         .power = power,
+
+        .discovery = dtb,
+        .discovery_length = total_size(dtb),
 
     };
 

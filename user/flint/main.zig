@@ -66,11 +66,25 @@ const files_block_badge: u64 = 1;
 
 pub export fn _start() linksection(".text.start") callconv(.naked) noreturn {
 
-    asm volatile (
-        \\ mov x29, xzr
-        \\ mov x30, xzr
-        \\ b   flint_enter
-    );
+    if (comptime @import("builtin").cpu.arch == .x86_64) {
+
+        asm volatile (
+            \\ xor %%rbp, %%rbp
+            \\ and $-16, %%rsp
+            \\ call *%[target]
+            :
+            : [target] "{rax}" (&flint_enter),
+        );
+
+    } else {
+
+        asm volatile (
+            \\ mov x29, xzr
+            \\ mov x30, xzr
+            \\ b   flint_enter
+        );
+
+    }
 
 }
 
@@ -90,16 +104,30 @@ fn main(arg: u64) noreturn {
 
 fn run(arg: u64) !void {
 
-    const dtb_offset: usize = @intCast(arg & 0xffff);
+    const discovery_offset: usize = @intCast(arg & 0xffff);
     bundle_offset = @intCast((arg >> 16) & 0xffff);
     bundle_length = @intCast(arg >> 32);
 
-    const dtb_base = try sys.map(cap.self_space, cap.flint.dtb, 0, sys.read);
-    const dtb = dtb_base + dtb_offset;
+    const discovery_base = try sys.map(cap.self_space, cap.flint.dtb, 0, sys.read);
+    const discovery = discovery_base + discovery_offset;
 
-    console_uart = lib.dtb.find_uart(dtb) orelse return error.NotFound;
-    find_virtio_devices(dtb);
-    machine_core_count = @max(1, lib.dtb.core_count(dtb));
+    if (lib.platform.read(discovery)) |info| {
+
+        console_uart = .{
+
+            .base = @intCast(info.uart_base),
+            .interrupt_line = info.uart_irq,
+
+        };
+        machine_core_count = @max(1, info.core_count);
+
+    } else {
+
+        console_uart = lib.dtb.find_uart(discovery) orelse return error.NotFound;
+        find_virtio_devices(discovery);
+        machine_core_count = @max(1, lib.dtb.core_count(discovery));
+
+    }
 
     const bundle_base = try sys.map(cap.self_space, cap.flint.module, 0, sys.read);
     bundle = try lib.bundle.Bundle.open(bundle_base + bundle_offset, bundle_length);
@@ -282,7 +310,14 @@ fn spawn_naming() !void {
 fn spawn_console() !void {
 
     const image = bundle.find("console") orelse return error.NotFound;
-    const window = try sys.create_device_region(console_uart.base, page_size, cap.flint.devices);
+
+    // PL011 uses an MMIO page; 16550 uses port I/O (base is a port number, not a physical page).
+    const use_ports = console_uart.base < 0x10000;
+    const window = if (use_ports)
+        try sys.create_device_region(0, page_size, cap.flint.devices)
+    else
+        try sys.create_device_region(console_uart.base, page_size, cap.flint.devices);
+
     const interrupt = try sys.create(.interrupt, console_uart.interrupt_line, cap.flint.interrupts);
     const memory = try sys.create(.memory_authority, child_budget, cap.flint.memory);
     const init_endpoint = try sys.create(.endpoint, 0, 0);
@@ -308,6 +343,8 @@ fn spawn_console() !void {
         .authority = memory,
         .args = &.{"console"},
         .grants = &grants,
+        .data3 = if (use_ports) @intFromEnum(lib.platform.UartKind.uart16550) else @intFromEnum(lib.platform.UartKind.pl011),
+        .data4 = console_uart.base,
 
     }, &.{ window, interrupt, memory, init_endpoint, report });
 

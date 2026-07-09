@@ -8,7 +8,7 @@ const config = @import("../config.zig");
 const arch = @import("../arch/arch.zig");
 const frames = @import("../memory/frames.zig");
 const scheduler = @import("../sched/scheduler.zig");
-const dtb = @import("dtb.zig");
+const machine_module = @import("machine.zig");
 
 const types = @import("../types.zig");
 
@@ -24,10 +24,12 @@ const online_timeout_ns: u64 = 500_000_000;
 
 var records: [config.max_cores]types.BootRecord = undefined;
 
-/// Start every secondary the DTB lists; returns the number of cores online afterwards.
-pub fn start(machine: dtb.Machine) usize {
+/// Start every secondary the machine lists; returns the number of cores online afterwards.
+pub fn start(machine: machine_module.Machine) usize {
 
     const method = machine.power orelse return scheduler.online_count();
+
+    if (method == .none) return scheduler.online_count();
 
     for (machine.cpus) |mpidr| {
 

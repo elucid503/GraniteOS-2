@@ -10,7 +10,7 @@ const transfer = @import("../ipc/transfer.zig");
 
 const handle_module = @import("../cap/handle.zig");
 const Handle = handle_module.Handle;
-const SyscallFrame = @import("../arch/aarch64/trap.zig").SyscallFrame;
+const SyscallFrame = arch.SyscallFrame;
 
 const thread_module = @import("../object/thread.zig");
 const process_module = @import("../object/process.zig");
@@ -52,6 +52,8 @@ pub const Number = enum(u64) {
     inspect,
     set_name,
     sleep,
+    port_in,
+    port_out,
 
 };
 
@@ -76,28 +78,28 @@ pub var debug_last_number: u64 = 0;
 pub var debug_last_arg0: u64 = 0;
 pub var debug_last_arg1: u64 = 0;
 
-/// Trap entry: decode the verb in x8, run its handler, and write the signed ABI result back into x0.
+/// Trap entry: decode the verb, run its handler, and write the signed ABI result back into the frame.
 pub fn dispatch(frame: *SyscallFrame) void {
 
-    debug_last_number = frame.registers[8];
-    debug_last_arg0 = frame.registers[0];
-    debug_last_arg1 = frame.registers[1];
+    debug_last_number = frame.number();
+    debug_last_arg0 = frame.arg(0);
+    debug_last_arg1 = frame.arg(1);
 
     const result = run(frame);
 
-    frame.registers[0] = @bitCast(err.to_abi(result));
+    frame.set_result(@bitCast(err.to_abi(result)));
 
 }
 
 fn run(frame: *SyscallFrame) Error!u64 {
 
-    const number = std.meta.intToEnum(Number, frame.registers[8]) catch return error.Invalid;
+    const number = std.meta.intToEnum(Number, frame.number()) catch return error.Invalid;
 
-    const a0 = frame.registers[0];
-    const a1 = frame.registers[1];
-    const a2 = frame.registers[2];
-    const a3 = frame.registers[3];
-    const a4 = frame.registers[4];
+    const a0 = frame.arg(0);
+    const a1 = frame.arg(1);
+    const a2 = frame.arg(2);
+    const a3 = frame.arg(3);
+    const a4 = frame.arg(4);
 
     return switch (number) {
 
@@ -121,6 +123,8 @@ fn run(frame: *SyscallFrame) Error!u64 {
         .inspect => inspect_call(a0, a1, a2),
         .set_name => set_name(a0, a1),
         .sleep => sleep(a0),
+        .port_in => port_in(a0, a1),
+        .port_out => port_out(a0, a1, a2),
 
     };
 
@@ -219,7 +223,7 @@ fn create_dma_region(frame: *SyscallFrame, length: u64, authority_raw: u64) Erro
 
     const region = try Region.create_dma(length);
 
-    frame.registers[1] = region.base;
+    frame.set_extra(region.base);
 
     return region;
 
@@ -310,6 +314,24 @@ fn yield() Error!u64 {
 fn sleep(ns: u64) Error!u64 {
 
     scheduler.sleep(ns);
+
+    return 0;
+
+}
+
+fn port_in(width: u64, port: u64) Error!u64 {
+
+    if (port > std.math.maxInt(u16) or width > std.math.maxInt(u8)) return error.Invalid;
+
+    return @as(u64, try arch.port_in(@intCast(width), @intCast(port)));
+
+}
+
+fn port_out(width: u64, port: u64, value: u64) Error!u64 {
+
+    if (port > std.math.maxInt(u16) or width > std.math.maxInt(u8) or value > std.math.maxInt(u32)) return error.Invalid;
+
+    try arch.port_out(@intCast(width), @intCast(port), @intCast(value));
 
     return 0;
 

@@ -45,6 +45,8 @@ const Number = enum(u64) {
     inspect,
     set_name,
     sleep,
+    port_in,
+    port_out,
 
 };
 
@@ -244,52 +246,97 @@ pub fn set_name(name: []const u8) Error!void {
 
 }
 
-// The raw trap. The kernel's svc path saves and restores the whole register frame, so only x0 (the result) changes.
+pub fn port_in(width: u8, port: u16) Error!u32 {
 
-fn invoke(number: Number, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) i64 {
-
-    if (comptime builtin.target.cpu.arch != .aarch64) {
-
-        @panic("user syscalls are target-only");
-
-    }
-
-    return asm volatile ("svc #0"
-        : [result] "={x0}" (-> i64),
-        : [number] "{x8}" (@intFromEnum(number)),
-          [a0] "{x0}" (a0),
-          [a1] "{x1}" (a1),
-          [a2] "{x2}" (a2),
-          [a3] "{x3}" (a3),
-          [a4] "{x4}" (a4),
-        : .{ .memory = true });
+    return @intCast(try check(invoke(.port_in, width, port, 0, 0, 0)));
 
 }
 
-// The two-register variant: x0 carries the signed result, x1 an extra success value (the DMA physical base).
+pub fn port_out(width: u8, port: u16, value: u32) Error!void {
 
-fn invoke_two(number: Number, a0: u64, a1: u64, a2: u64, extra: *u64) i64 {
+    _ = try check(invoke(.port_out, width, port, value, 0, 0));
 
-    if (comptime builtin.target.cpu.arch != .aarch64) {
+}
 
-        @panic("user syscalls are target-only");
+// The raw trap. aarch64: number in x8, args in x0-x4. x86_64: number in rax, args in rdi/rsi/rdx/r10/r8.
+
+fn invoke(number: Number, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) i64 {
+
+    if (comptime builtin.target.cpu.arch == .aarch64) {
+
+        return asm volatile ("svc #0"
+            : [result] "={x0}" (-> i64),
+            : [number] "{x8}" (@intFromEnum(number)),
+              [a0] "{x0}" (a0),
+              [a1] "{x1}" (a1),
+              [a2] "{x2}" (a2),
+              [a3] "{x3}" (a3),
+              [a4] "{x4}" (a4),
+            : .{ .memory = true });
 
     }
 
-    var second: u64 = undefined;
+    if (comptime builtin.target.cpu.arch == .x86_64) {
 
-    const result = asm volatile ("svc #0"
-        : [result] "={x0}" (-> i64),
-          [second] "={x1}" (second),
-        : [number] "{x8}" (@intFromEnum(number)),
-          [a0] "{x0}" (a0),
-          [a1] "{x1}" (a1),
-          [a2] "{x2}" (a2),
-        : .{ .memory = true });
+        return asm volatile ("syscall"
+            : [result] "={rax}" (-> i64),
+            : [number] "{rax}" (@intFromEnum(number)),
+              [a0] "{rdi}" (a0),
+              [a1] "{rsi}" (a1),
+              [a2] "{rdx}" (a2),
+              [a3] "{r10}" (a3),
+              [a4] "{r8}" (a4),
+            : .{ .rcx = true, .r11 = true, .memory = true });
 
-    extra.* = second;
+    }
 
-    return result;
+    @panic("user syscalls are target-only");
+
+}
+
+// The two-register variant: primary result plus an extra success value (the DMA physical base).
+
+fn invoke_two(number: Number, a0: u64, a1: u64, a2: u64, extra: *u64) i64 {
+
+    if (comptime builtin.target.cpu.arch == .aarch64) {
+
+        var second: u64 = undefined;
+
+        const result = asm volatile ("svc #0"
+            : [result] "={x0}" (-> i64),
+              [second] "={x1}" (second),
+            : [number] "{x8}" (@intFromEnum(number)),
+              [a0] "{x0}" (a0),
+              [a1] "{x1}" (a1),
+              [a2] "{x2}" (a2),
+            : .{ .memory = true });
+
+        extra.* = second;
+
+        return result;
+
+    }
+
+    if (comptime builtin.target.cpu.arch == .x86_64) {
+
+        var second: u64 = undefined;
+
+        const result = asm volatile ("syscall"
+            : [result] "={rax}" (-> i64),
+              [second] "={rdx}" (second),
+            : [number] "{rax}" (@intFromEnum(number)),
+              [a0] "{rdi}" (a0),
+              [a1] "{rsi}" (a1),
+              [a2] "{rdx}" (a2),
+            : .{ .rcx = true, .r11 = true, .memory = true });
+
+        extra.* = second;
+
+        return result;
+
+    }
+
+    @panic("user syscalls are target-only");
 
 }
 

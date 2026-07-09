@@ -32,6 +32,12 @@ pub fn Cache(comptime T: type) type {
     const header_size = std.mem.alignForward(usize, @sizeOf(Slab), object_align);
     const capacity = (page_size - header_size) / object_size;
 
+    comptime {
+
+        if (capacity == 0) @compileError("slab object does not fit in a page");
+
+    }
+
     return struct {
 
         // Slabs with at least one free object; a full slab is found again on `free` via the object's frame.

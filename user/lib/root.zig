@@ -2,7 +2,10 @@
 
 const builtin = @import("builtin");
 
-pub const start = if (builtin.target.cpu.arch == .aarch64) @import("runtime/start.zig") else @import("runtime/host_start.zig");
+pub const start = if (builtin.target.cpu.arch == .aarch64 or builtin.target.cpu.arch == .x86_64)
+    @import("runtime/start.zig")
+else
+    @import("runtime/host_start.zig");
 pub const sys = @import("syscall/sys.zig");
 pub const budget = @import("budget.zig");
 pub const cap = @import("cap/cap.zig");
@@ -11,6 +14,7 @@ pub const proto = @import("ipc/proto.zig");
 pub const session = @import("ipc/session.zig");
 pub const mem = @import("mem/mem.zig");
 pub const dtb = @import("boot/dtb.zig");
+pub const platform = @import("boot/platform.zig");
 pub const bundle = @import("boot/bundle.zig");
 pub const app_catalog = @import("boot/app_catalog.zig");
 pub const elf = @import("boot/elf.zig");

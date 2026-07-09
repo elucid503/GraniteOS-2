@@ -31,6 +31,39 @@ pub const Context = extern struct {
 
 };
 
+pub const SyscallFrame = extern struct {
+
+    number_value: u64 = 0,
+    args: [5]u64 = .{ 0, 0, 0, 0, 0 },
+    result: u64 = 0,
+    extra: u64 = 0,
+
+    pub fn number(self: *const SyscallFrame) u64 {
+
+        return self.number_value;
+
+    }
+
+    pub fn arg(self: *const SyscallFrame, index: usize) u64 {
+
+        return self.args[index];
+
+    }
+
+    pub fn set_result(self: *SyscallFrame, value: u64) void {
+
+        self.result = value;
+
+    }
+
+    pub fn set_extra(self: *SyscallFrame, value: u64) void {
+
+        self.extra = value;
+
+    }
+
+};
+
 pub fn core_id() u32 {
 
     return 0;
@@ -69,6 +102,12 @@ pub fn clean_invalidate_data_cache(base: usize, length: usize) void {
 pub fn halt() noreturn {
 
     unreachable;
+
+}
+
+pub fn debug_putchar(byte: u8) void {
+
+    _ = byte;
 
 }
 
@@ -205,3 +244,20 @@ pub fn intctrl_disable_line(irq: u32) void {
 }
 
 pub fn timer_init() void {}
+
+pub fn port_in(width: u8, port: u16) Error!u32 {
+
+    _ = width;
+    _ = port;
+
+    return error.NotAllowed;
+
+}
+
+pub fn port_out(width: u8, port: u16, value: u32) void {
+
+    _ = width;
+    _ = port;
+    _ = value;
+
+}

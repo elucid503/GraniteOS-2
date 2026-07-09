@@ -652,7 +652,15 @@ fn payload_read(device: *Device, offset: usize) u32 {
 
 fn barrier() void {
 
-    asm volatile ("dsb sy" ::: .{ .memory = true });
+    if (comptime @import("builtin").cpu.arch == .x86_64) {
+
+        asm volatile ("mfence" ::: .{ .memory = true });
+
+    } else {
+
+        asm volatile ("dsb sy" ::: .{ .memory = true });
+
+    }
 
 }
 

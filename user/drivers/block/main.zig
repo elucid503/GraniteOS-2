@@ -439,7 +439,15 @@ fn session_for(badge: u64) ?*Session {
 
 fn barrier() void {
 
-    asm volatile ("dsb sy" ::: .{ .memory = true });
+    if (comptime @import("builtin").cpu.arch == .x86_64) {
+
+        asm volatile ("mfence" ::: .{ .memory = true });
+
+    } else {
+
+        asm volatile ("dsb sy" ::: .{ .memory = true });
+
+    }
 
 }
 

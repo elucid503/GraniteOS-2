@@ -1,11 +1,7 @@
-// Panic-only debug console over the PL011 UART (06-kernel-ddd.md Section 14): polled, not a service - the real console is a user driver.
+// Panic-only debug console (06-kernel-ddd.md Section 14): polled, not a service - the real console is a user driver.
 
-const board = @import("../arch/board/virt.zig");
+const arch = @import("../arch/arch.zig");
 const spinlock = @import("../sync/spinlock.zig");
-
-const data_register = 0x00; // DR: write a byte to transmit
-const flag_register = 0x18; // FR
-const transmit_fifo_full = 1 << 5; // FR.TXFF
 
 // Serializes whole prints across cores; a panicking core seizes the console instead, so a peer
 // holding the lock mid-print can never wedge the diagnostic.
@@ -13,32 +9,22 @@ const transmit_fifo_full = 1 << 5; // FR.TXFF
 var lock: spinlock.SpinLock = .{};
 var panicking: bool = false;
 
-fn register(offset: usize) *volatile u32 {
-
-    return @ptrFromInt(board.uart_base + offset);
-
-}
-
 /// The panic path takes the console unconditionally from here on (and halts the other cores anyway).
 pub fn seize_for_panic() void {
 
-    @atomicStore(bool, &panicking, true, .release);
+    @atomicStore(bool, &panicking, true, .seq_cst);
 
 }
 
 fn guarded() bool {
 
-    return !@atomicLoad(bool, &panicking, .acquire);
+    return !@atomicLoad(bool, &panicking, .seq_cst);
 
 }
 
 pub fn debug_putchar(byte: u8) void {
 
-    const flags = register(flag_register);
-
-    while (flags.* & transmit_fifo_full != 0) {}
-
-    register(data_register).* = byte;
+    arch.debug_putchar(byte);
 
 }
 

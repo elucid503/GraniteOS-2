@@ -6,24 +6,43 @@ const builtin = @import("builtin");
 
 const sys = @import("syscall/sys.zig");
 
-/// Nanoseconds since boot, from the physical counter (CNTPCT_EL0) scaled by its frequency (CNTFRQ_EL0).
+/// Nanoseconds since boot.
 pub fn now_ns() u64 {
 
-    if (comptime builtin.target.cpu.arch != .aarch64) return 0;
+    if (comptime builtin.target.cpu.arch == .aarch64) {
 
-    const frequency = asm volatile ("mrs %[out], cntfrq_el0"
-        : [out] "=r" (-> u64),
-    );
+        const frequency = asm volatile ("mrs %[out], cntfrq_el0"
+            : [out] "=r" (-> u64),
+        );
 
-    const ticks = asm volatile (
-        \\ isb
-        \\ mrs %[out], cntpct_el0
-        : [out] "=r" (-> u64),
-    );
+        const ticks = asm volatile (
+            \\ isb
+            \\ mrs %[out], cntpct_el0
+            : [out] "=r" (-> u64),
+        );
 
-    if (frequency == 0) return 0;
+        if (frequency == 0) return 0;
 
-    return @intCast(@as(u128, ticks) * 1_000_000_000 / frequency);
+        return @intCast(@as(u128, ticks) * 1_000_000_000 / frequency);
+
+    }
+
+    if (comptime builtin.target.cpu.arch == .x86_64) {
+
+        // Rough TSC scale for QEMU; good enough for shell pacing.
+        var low: u32 = undefined;
+        var high: u32 = undefined;
+
+        asm volatile ("rdtsc"
+            : [low] "={eax}" (low),
+              [high] "={edx}" (high),
+        );
+
+        return ((@as(u64, high) << 32) | low) / 2;
+
+    }
+
+    return 0;
 
 }
 

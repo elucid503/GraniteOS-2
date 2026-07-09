@@ -23,11 +23,25 @@ var stdout_stream: ?stream.Stream = null;
 
 pub export fn _start() linksection(".text.start") callconv(.naked) noreturn {
 
-    asm volatile (
-        \\ mov x29, xzr
-        \\ mov x30, xzr
-        \\ b   user_enter
-    );
+    if (comptime @import("builtin").target.cpu.arch == .x86_64) {
+
+        asm volatile (
+            \\ xor %%rbp, %%rbp
+            \\ and $-16, %%rsp
+            \\ call *%[target]
+            :
+            : [target] "{rax}" (&user_enter),
+        );
+
+    } else {
+
+        asm volatile (
+            \\ mov x29, xzr
+            \\ mov x30, xzr
+            \\ b   user_enter
+        );
+
+    }
 
 }
 

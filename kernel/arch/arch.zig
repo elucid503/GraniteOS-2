@@ -3,8 +3,11 @@
 const builtin = @import("builtin");
 
 const types = @import("../types.zig");
+const Error = @import("../error.zig").Error;
 
-const is_target = builtin.cpu.arch == .aarch64 and builtin.os.tag == .freestanding;
+const is_aarch64 = builtin.cpu.arch == .aarch64 and builtin.os.tag == .freestanding;
+const is_x86_64 = builtin.cpu.arch == .x86_64 and builtin.os.tag == .freestanding;
+const is_target = is_aarch64 or is_x86_64;
 
 comptime {
 
@@ -14,16 +17,19 @@ comptime {
 
 const host = @import("host.zig");
 
-const cpu = if (is_target) @import("aarch64/cpu.zig") else host;
-const mmu = if (is_target) @import("aarch64/mmu.zig") else host;
-const context = if (is_target) @import("aarch64/context.zig") else host;
-const timer = if (is_target) @import("aarch64/timer.zig") else host;
-const gic = if (is_target) @import("aarch64/gic.zig") else host;
-const psci = if (is_target) @import("aarch64/psci.zig") else host;
+const cpu = if (is_aarch64) @import("aarch64/cpu.zig") else if (is_x86_64) @import("x86_64/cpu.zig") else host;
+const mmu = if (is_aarch64) @import("aarch64/mmu.zig") else if (is_x86_64) @import("x86_64/mmu.zig") else host;
+const context = if (is_aarch64) @import("aarch64/context.zig") else if (is_x86_64) @import("x86_64/context.zig") else host;
+const timer = if (is_aarch64) @import("aarch64/timer.zig") else if (is_x86_64) @import("x86_64/timer.zig") else host;
+const intctrl = if (is_aarch64) @import("aarch64/gic.zig") else if (is_x86_64) @import("x86_64/apic.zig") else host;
+const smp = if (is_aarch64) @import("aarch64/psci.zig") else if (is_x86_64) @import("x86_64/smp.zig") else host;
+const trap = if (is_aarch64) @import("aarch64/trap.zig") else if (is_x86_64) @import("x86_64/trap.zig") else host;
+const console_arch = if (is_aarch64) @import("aarch64/console.zig") else if (is_x86_64) @import("x86_64/console.zig") else host;
 
 pub const PhysAddr = types.PhysAddr;
 pub const VirtAddr = types.VirtAddr;
 pub const Permissions = mmu.Permissions;
+pub const SyscallFrame = if (is_target) trap.SyscallFrame else host.SyscallFrame;
 
 // CPU control.
 
@@ -39,6 +45,7 @@ pub const restore_interrupts = cpu.restore_interrupts;
 pub const sync_instruction_cache = cpu.sync_instruction_cache;
 pub const clean_invalidate_data_cache = cpu.clean_invalidate_data_cache;
 pub const halt = cpu.halt;
+pub const debug_putchar = console_arch.debug_putchar;
 
 // Thread context.
 
@@ -59,12 +66,12 @@ pub const flush_tlb_page = mmu.flush_tlb_page;
 pub const free_table = mmu.free_table;
 pub const map_ram = mmu.map_ram;
 
-// Interrupt controller (GICv3).
+// Interrupt controller.
 
-pub const intctrl_init_primary = if (is_target) gic.init_primary else host.intctrl_init_primary;
-pub const intctrl_init_secondary = if (is_target) gic.init_secondary else host.intctrl_init_secondary;
-pub const intctrl_enable_line = if (is_target) gic.enable_line else host.intctrl_enable_line;
-pub const intctrl_disable_line = if (is_target) gic.disable_line else host.intctrl_disable_line;
+pub const intctrl_init_primary = if (is_target) intctrl.init_primary else host.intctrl_init_primary;
+pub const intctrl_init_secondary = if (is_target) intctrl.init_secondary else host.intctrl_init_secondary;
+pub const intctrl_enable_line = if (is_target) intctrl.enable_line else host.intctrl_enable_line;
+pub const intctrl_disable_line = if (is_target) intctrl.disable_line else host.intctrl_disable_line;
 
 // Timer (monotonic; variable quantum for the MLFQ).
 
@@ -74,8 +81,25 @@ pub const now_ns = timer.now_ns;
 pub const arm_deadline = timer.arm_deadline;
 pub const disarm_deadline = timer.stop;
 
-// SMP (06-kernel-ddd.md Section 16.2): secondary bring-up and cross-core pokes. Cross-core TLB shootdown
-// needs no call here - the aarch64 impl broadcasts its TLB invalidates (inner-shareable) from map/unmap.
+// Port I/O (x86 only; aarch64 returns NotAllowed).
+
+pub fn port_in(width: u8, port: u16) Error!u32 {
+
+    if (!is_x86_64) return error.NotAllowed;
+
+    return cpu.port_in(width, port);
+
+}
+
+pub fn port_out(width: u8, port: u16, value: u32) Error!void {
+
+    if (!is_x86_64) return error.NotAllowed;
+
+    cpu.port_out(width, port, value);
+
+}
+
+// SMP (06-kernel-ddd.md Section 16.2): secondary bring-up and cross-core pokes.
 
 pub const Ipi = enum {
 
@@ -84,16 +108,33 @@ pub const Ipi = enum {
 
 };
 
-pub const start_core = if (is_target) psci.start_core else host.start_core;
+pub const start_core = if (is_target) smp.start_core else host.start_core;
 
 pub fn send_ipi(target_core: u32, kind: Ipi) void {
 
     if (!is_target) return host.send_ipi(target_core, kind);
 
+    if (is_aarch64) {
+
+        const gic = @import("aarch64/gic.zig");
+
+        switch (kind) {
+
+            .reschedule => gic.send_sgi(target_core, gic.sgi_reschedule),
+            .halt => gic.send_sgi(target_core, gic.sgi_halt),
+
+        }
+
+        return;
+
+    }
+
+    const apic = @import("x86_64/apic.zig");
+
     switch (kind) {
 
-        .reschedule => gic.send_sgi(target_core, gic.sgi_reschedule),
-        .halt => gic.send_sgi(target_core, gic.sgi_halt),
+        .reschedule => apic.send_ipi(target_core, apic.vector_reschedule),
+        .halt => apic.send_ipi(target_core, apic.vector_halt),
 
     }
 
@@ -104,18 +145,30 @@ pub fn halt_others() void {
 
     if (!is_target) return host.halt_others();
 
-    gic.send_sgi_others(gic.sgi_halt);
+    if (is_aarch64) {
+
+        @import("aarch64/gic.zig").send_sgi_others(@import("aarch64/gic.zig").sgi_halt);
+        return;
+
+    }
+
+    @import("x86_64/apic.zig").send_ipi_others(@import("x86_64/apic.zig").vector_halt);
 
 }
 
-// Loads in the boot bridge and trap entry so their exported symbols (`kernel_boot`, `kernel_trap`) link against the assembly.
+// Loads in the boot bridge and trap entry so their exported symbols link against the assembly.
 
 comptime {
 
-    if (is_target) {
+    if (is_aarch64) {
 
         _ = @import("aarch64/boot.zig");
         _ = @import("aarch64/trap.zig");
+
+    } else if (is_x86_64) {
+
+        _ = @import("x86_64/boot.zig");
+        _ = @import("x86_64/trap.zig");
 
     }
 

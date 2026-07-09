@@ -1,4 +1,6 @@
-// PL011 console driver (07-userspace-ddd.md Section 5.1): an ordinary process holding only its MMIO window, its Interrupt, and an Endpoint. RX is interrupt-driven - the driver binds its line to a Notification and blocks in `wait`, never spinning. Serves the Stream interface in cooked mode: buffered lines, echo, backspace.
+// Console driver (07-userspace-ddd.md Section 5.1): PL011 (MMIO) or 16550 (port I/O). RX is interrupt-driven.
+
+const builtin = @import("builtin");
 
 const lib = @import("lib");
 
@@ -6,6 +8,7 @@ const cap = lib.cap;
 const ipc = lib.ipc;
 const proto = lib.proto;
 const sys = lib.sys;
+const platform = lib.platform;
 
 const Handle = cap.Handle;
 const Message = ipc.Message;
@@ -18,31 +21,42 @@ comptime {
 
 // PL011 registers (offsets from the mapped window).
 
-const data = 0x00; // DR
-const flags = 0x18; // FR
-const line_control = 0x2c; // LCRH
-const control = 0x30; // CR
-const interrupt_mask = 0x38; // IMSC
-const interrupt_clear = 0x44; // ICR
+const pl011_data = 0x00;
+const pl011_flags = 0x18;
+const pl011_line_control = 0x2c;
+const pl011_control = 0x30;
+const pl011_interrupt_mask = 0x38;
+const pl011_interrupt_clear = 0x44;
 
-const receive_empty: u32 = 1 << 4; // FR.RXFE
-const transmit_full: u32 = 1 << 5; // FR.TXFF
+const pl011_receive_empty: u32 = 1 << 4;
+const pl011_transmit_full: u32 = 1 << 5;
+const pl011_word_length_8: u32 = 0b11 << 5;
+const pl011_enable_uart: u32 = 1;
+const pl011_enable_transmit: u32 = 1 << 8;
+const pl011_enable_receive: u32 = 1 << 9;
+const pl011_receive_interrupt: u32 = 1 << 4;
+const pl011_all_interrupts: u32 = 0x7ff;
 
-const word_length_8: u32 = 0b11 << 5; // LCRH.WLEN, FIFOs off so every byte raises RX
-const enable_uart: u32 = 1; // CR.UARTEN
-const enable_transmit: u32 = 1 << 8; // CR.TXE
-const enable_receive: u32 = 1 << 9; // CR.RXE
-const receive_interrupt: u32 = 1 << 4; // IMSC.RXIM
-const all_interrupts: u32 = 0x7ff;
+// 16550 port offsets from the I/O base.
 
-const rx_bit: u64 = 1; // the notification bit the interrupt is bound to
+const uart_data: u16 = 0;
+const uart_ier: u16 = 1;
+const uart_fcr: u16 = 2;
+const uart_lcr: u16 = 3;
+const uart_mcr: u16 = 4;
+const uart_lsr: u16 = 5;
 
-var uart: usize = 0;
+const lsr_data_ready: u8 = 1 << 0;
+const lsr_transmit_empty: u8 = 1 << 5;
+const ier_received_data: u8 = 1 << 0;
+
+const rx_bit: u64 = 1;
+
+var uart_kind: platform.UartKind = .pl011;
+var uart_mmio: usize = 0;
+var uart_port: u16 = 0;
 var rx_notification: Handle = 0;
 var uart_lock: ipc.Lock = .{};
-
-// Per-client shared buffers (05-server-protocol.md): attached once, then reused by every read/write. Sessions are keyed
-// by the caller's badge — small ones granted by Flint/Marble, larger ones minted per lookup by the name service.
 
 const max_sessions = 16;
 
@@ -61,13 +75,9 @@ pub fn main(_: []const []const u8) u8 {
 
     run() catch |failure| {
 
-        if (uart != 0) {
-
-            put_text("console: fatal ");
-            put_text(@errorName(failure));
-            put_text("\n");
-
-        }
+        put_text("console: fatal ");
+        put_text(@errorName(failure));
+        put_text("\n");
 
         return 1;
 
@@ -79,18 +89,37 @@ pub fn main(_: []const []const u8) u8 {
 
 fn run() !void {
 
-    // Drivers live in the fixed band above the MLFQ so an interrupt wake runs promptly.
-
     try sys.configure(cap.self_thread, .scheduling_class, cap.class_driver);
 
-    uart = try sys.map(cap.self_space, cap.driver.device, 0, sys.read | sys.write);
+    const kind_raw = lib.start.word(3);
+    const base = lib.start.word(4);
+
+    uart_kind = std.meta.intToEnum(platform.UartKind, @as(u32, @truncate(kind_raw))) catch .pl011;
+
+    if (uart_kind == .uart16550) {
+
+        uart_port = @intCast(base);
+
+    } else {
+
+        uart_mmio = try sys.map(cap.self_space, cap.driver.device, 0, sys.read | sys.write);
+
+    }
 
     rx_notification = try sys.create(.notification, 0, 0);
     try sys.bind(cap.driver.interrupt, rx_notification, rx_bit);
 
     init_uart();
 
-    put_text("Console: PL011 driver ... Loaded\n");
+    if (uart_kind == .uart16550) {
+
+        put_text("Console: 16550 driver ... Loaded\n");
+
+    } else {
+
+        put_text("Console: PL011 driver ... Loaded\n");
+
+    }
 
     ipc.serve_pool(cap.driver.endpoint, 2, dispatch);
 
@@ -121,8 +150,6 @@ fn identify(out: *Message) i64 {
 
 }
 
-// Map the client's shared buffer once; every later read/write passes only offset/length into it.
-
 fn attach(badge: u64, in: *const Message) i64 {
 
     if (in.handle_count < 1) return -7;
@@ -150,8 +177,6 @@ fn read(badge: u64, offset: u64, capacity: u64) i64 {
 
 }
 
-// Cooked-mode read: gather one line into the session buffer, echoing as it is typed; one IPC per line.
-
 fn read_cooked(span: []u8) i64 {
 
     var length: usize = 0;
@@ -162,7 +187,7 @@ fn read_cooked(span: []u8) i64 {
 
         if (receive_pending()) {
 
-            const byte: u8 = @truncate(register(data).*);
+            const byte = read_byte();
             uart_lock.release();
 
             if (byte == '\r' or byte == '\n') {
@@ -209,8 +234,6 @@ fn read_cooked(span: []u8) i64 {
 
 }
 
-// Raw-mode read: return one byte per call with no echo.
-
 fn read_raw(span: []u8) i64 {
 
     if (span.len == 0) return -7;
@@ -221,7 +244,7 @@ fn read_raw(span: []u8) i64 {
 
         if (receive_pending()) {
 
-            span[0] = @truncate(register(data).*);
+            span[0] = read_byte();
             uart_lock.release();
 
             _ = sys.acknowledge(cap.driver.interrupt) catch {};
@@ -280,29 +303,58 @@ fn session_for(badge: u64) ?*Session {
 
 }
 
-// Hardware access
-
 fn init_uart() void {
 
-    register(control).* = 0;
-    register(interrupt_clear).* = all_interrupts;
-    register(line_control).* = word_length_8;
-    register(interrupt_mask).* = receive_interrupt;
-    register(control).* = enable_uart | enable_transmit | enable_receive;
+    if (uart_kind == .uart16550) {
+
+        sys.port_out(1, uart_port + uart_ier, 0) catch {};
+        sys.port_out(1, uart_port + uart_lcr, 0x80) catch {};
+        sys.port_out(1, uart_port + uart_data, 0x01) catch {};
+        sys.port_out(1, uart_port + uart_ier, 0x00) catch {};
+        sys.port_out(1, uart_port + uart_lcr, 0x03) catch {};
+        sys.port_out(1, uart_port + uart_fcr, 0xc7) catch {};
+        sys.port_out(1, uart_port + uart_mcr, 0x0b) catch {};
+        sys.port_out(1, uart_port + uart_ier, ier_received_data) catch {};
+        return;
+
+    }
+
+    register(pl011_control).* = 0;
+    register(pl011_interrupt_clear).* = pl011_all_interrupts;
+    register(pl011_line_control).* = pl011_word_length_8;
+    register(pl011_interrupt_mask).* = pl011_receive_interrupt;
+    register(pl011_control).* = pl011_enable_uart | pl011_enable_transmit | pl011_enable_receive;
 
 }
 
 fn receive_pending() bool {
 
-    return register(flags).* & receive_empty == 0;
+    if (uart_kind == .uart16550) {
+
+        const status = sys.port_in(1, uart_port + uart_lsr) catch return false;
+        return status & lsr_data_ready != 0;
+
+    }
+
+    return register(pl011_flags).* & pl011_receive_empty == 0;
+
+}
+
+fn read_byte() u8 {
+
+    if (uart_kind == .uart16550) {
+
+        return @truncate(sys.port_in(1, uart_port + uart_data) catch 0);
+
+    }
+
+    return @truncate(register(pl011_data).*);
 
 }
 
 fn put_text(text: []const u8) void {
 
     for (text) |byte| {
-
-        // Serial terminals expect a carriage return before the line feed.
 
         if (byte == '\n') put_byte('\r');
 
@@ -316,16 +368,31 @@ fn put_byte(byte: u8) void {
 
     uart_lock.acquire();
 
-    // PL011 TX is polled; yield while the host chardev drains - a tight spin here blocks the console
-    // server's reply and every caller waiting on stream.write (including drivers mid-startup).
+    if (uart_kind == .uart16550) {
 
-    while (register(flags).* & transmit_full != 0) {
+        while (true) {
 
-        sys.yield();
+            const status = sys.port_in(1, uart_port + uart_lsr) catch break;
+
+            if (status & lsr_transmit_empty != 0) break;
+
+            sys.yield();
+
+        }
+
+        sys.port_out(1, uart_port + uart_data, byte) catch {};
+
+    } else {
+
+        while (register(pl011_flags).* & pl011_transmit_full != 0) {
+
+            sys.yield();
+
+        }
+
+        register(pl011_data).* = byte;
 
     }
-
-    register(data).* = byte;
 
     uart_lock.release();
 
@@ -333,6 +400,8 @@ fn put_byte(byte: u8) void {
 
 fn register(offset: usize) *volatile u32 {
 
-    return @ptrFromInt(uart + offset);
+    return @ptrFromInt(uart_mmio + offset);
 
 }
+
+const std = @import("std");

@@ -56,6 +56,8 @@ fn call(method: types.PowerMethod, function: u64, a1: u64, a2: u64, a3: u64) i64
               [a3] "{x3}" (a3),
             : .{ .memory = true }),
 
+        .none => return -1,
+
     }
 
     return result;

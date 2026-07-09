@@ -13,12 +13,14 @@ pub const IntctrlWindows = struct {
 
 };
 
-// How firmware wants power calls made (PSCI conduit on aarch64); discovered from the DTB's /psci node.
+// How firmware wants secondary cores started; discovered from the DTB's /psci node on aarch64.
+// x86_64 uses `.none` until INIT-SIPI bring-up lands.
 
 pub const PowerMethod = enum {
 
     hvc,
     smc,
+    none,
 
 };
 

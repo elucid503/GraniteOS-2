@@ -1,13 +1,14 @@
 // Kernel entry: discover the machine, bring up memory, interrupts, objects, and the scheduler, then hand off to user space.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const arch = @import("arch/arch.zig");
 const config = @import("config.zig");
 const console = @import("debug/console.zig");
 const panic_path = @import("debug/panic.zig");
 
-const dtb = @import("boot/dtb.zig");
+const machine_module = @import("boot/machine.zig");
 const handoff = @import("boot/handoff.zig");
 const smp = @import("boot/smp.zig");
 const frames = @import("memory/frames.zig");
@@ -32,22 +33,23 @@ const bytes_per_mib: u64 = 1024 * 1024;
 extern const __kernel_start: u8;
 extern const __kernel_end: u8;
 
-pub fn main(dtb_address: arch.PhysAddr) noreturn {
+/// Portable entry: `boot_info` is an FDT on aarch64, or a Multiboot2 info pointer on x86_64 (parsed by the arch boot bridge into a Machine before this is called).
+pub fn main(machine: machine_module.Machine) noreturn {
 
-    console.debug_print("GraniteOS-2 (aarch64 virt)\n\n");
+    if (comptime builtin.cpu.arch == .x86_64) {
 
-    var memory_banks: [8]dtb.MemoryRange = undefined;
-    var cpu_ids: [config.max_cores]u64 = undefined;
-    const machine = dtb.parse(dtb_address, &memory_banks, &cpu_ids) catch {
+        console.debug_print("GraniteOS-2 (x86_64 pc)\n\n");
 
-        panic_path.panic("dtb: could not parse the device tree", null);
+    } else {
 
-    };
+        console.debug_print("GraniteOS-2 (aarch64 virt)\n\n");
+
+    }
 
     report_machine(machine);
 
     arch.map_ram(machine.memory);
-    frames.init(machine.memory, &reserved(dtb_address, machine.initrd));
+    frames.init(machine.memory, &reserved(machine));
     region.init();
     address_space.init();
 
@@ -56,7 +58,7 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
     arch.intctrl_init_primary(machine.intctrl);
     arch.timer_init();
 
-    console.debug_print("Interrupts: GIC and timer ... Loaded\n");
+    console.debug_print("Interrupts: controller and timer ... Loaded\n");
 
     process_module.init();
     thread_module.init();
@@ -73,9 +75,16 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
 
     report_smp(smp.start(machine));
 
+    console.debug_print("Kernel image ");
+    console.debug_print_hex(@intFromPtr(&__kernel_start));
+    console.debug_print("..");
+    console.debug_print_hex(@intFromPtr(&__kernel_end));
+    console.debug_print("\n");
+
     if (machine.initrd) |initrd| {
 
-        handoff.start(initrd, dtb_address) catch {
+        console.debug_print("Handoff: create space\n");
+        handoff.start(initrd, machine.discovery, machine.discovery_length) catch {
 
             panic_path.panic("boot hand-off failed", null);
 
@@ -94,7 +103,7 @@ pub fn main(dtb_address: arch.PhysAddr) noreturn {
 
 }
 
-/// Secondary-core entry after `start.S` and the arch boot bridge (MMU already on).
+/// Secondary-core entry after arch boot bridge (MMU already on).
 pub fn main_secondary(core_id: u32) noreturn {
 
     arch.intctrl_init_secondary();
@@ -105,23 +114,23 @@ pub fn main_secondary(core_id: u32) noreturn {
 
 }
 
-fn reserved(dtb_address: arch.PhysAddr, initrd: ?dtb.MemoryRange) [3]frames.MemoryRange {
+fn reserved(machine: machine_module.Machine) [3]frames.MemoryRange {
 
     const kernel_base = std.mem.alignBackward(usize, @intFromPtr(&__kernel_start), page_size);
     const kernel_top = std.mem.alignForward(usize, @intFromPtr(&__kernel_end), page_size);
 
-    const dtb_base = std.mem.alignBackward(usize, dtb_address, page_size);
-    const dtb_top = std.mem.alignForward(usize, dtb_address + dtb.total_size(dtb_address), page_size);
+    const discovery_base = std.mem.alignBackward(usize, machine.discovery, page_size);
+    const discovery_top = std.mem.alignForward(usize, machine.discovery + machine.discovery_length, page_size);
 
     var spans = [3]frames.MemoryRange{
 
         .{ .base = kernel_base, .length = kernel_top - kernel_base },
-        .{ .base = dtb_base, .length = dtb_top - dtb_base },
+        .{ .base = discovery_base, .length = discovery_top - discovery_base },
         .{ .base = 0, .length = 0 },
 
     };
 
-    if (initrd) |modules| {
+    if (machine.initrd) |modules| {
 
         const modules_base = std.mem.alignBackward(usize, modules.base, page_size);
         const modules_top = std.mem.alignForward(usize, modules.base + modules.length, page_size);
@@ -134,7 +143,7 @@ fn reserved(dtb_address: arch.PhysAddr, initrd: ?dtb.MemoryRange) [3]frames.Memo
 
 }
 
-fn report_machine(machine: dtb.Machine) void {
+fn report_machine(machine: machine_module.Machine) void {
 
     var total_ram: u64 = 0;
 
