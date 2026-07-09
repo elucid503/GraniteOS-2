@@ -3,9 +3,6 @@
 const std = @import("std");
 
 const draw = @import("../draw/draw.zig");
-const path_mod = @import("../draw/path.zig");
-const raster = @import("../draw/raster.zig");
-const stroke = @import("../draw/stroke.zig");
 const text_mod = @import("../draw/text.zig");
 const vector = @import("../draw/vector.zig");
 
@@ -1050,11 +1047,9 @@ pub fn scrollbar(surface: *const Surface, track: Rect, scroll: Scroll) void {
     surface.fill_rect(track, theme.surface_alt);
 
     const t = scroll.thumb(track.h);
+    const thumb_rect = Rect{ .x = track.x + 1, .y = track.y + t.pos, .w = @max(1, track.w - 2), .h = t.len };
 
-    var shape = path_mod.Path{};
-
-    shape.add_round_rect(path_mod.from_px(track.x + 1), path_mod.from_px(track.y + t.pos), path_mod.from_px(@max(1, track.w - 2)), path_mod.from_px(t.len), path_mod.from_px(3));
-    raster.fill(surface, &shape, theme.accent_dim);
+    draw.round.fill_round_rect(surface, thumb_rect, 3, theme.accent_dim);
 
 }
 

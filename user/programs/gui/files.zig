@@ -11,7 +11,6 @@ const cap = lib.cap;
 const events = lib.events;
 const gfx = lib.gfx;
 const proto = lib.proto;
-const sys = lib.sys;
 const ui = lib.ui;
 
 const Rect = gfx.Rect;
@@ -32,6 +31,7 @@ comptime {
 const max_entries = 256;
 const max_path = 512;
 const preview_bytes = 2048;
+const event_batch_max = 32;
 
 const toolbar_height: i32 = 38;
 const row_height: i32 = 32;
@@ -65,6 +65,8 @@ const MenuAction = enum {
     edit_notepad,
     view_details,
     add_desktop,
+    rename_item,
+    move_item,
     delete_item,
 
 };
@@ -82,6 +84,9 @@ const menu_rows = [_]MenuRow{
     .{ .action = .view_details },
     .{ .action = .add_desktop },
     .{ .separator = {} },
+    .{ .action = .rename_item },
+    .{ .action = .move_item },
+    .{ .separator = {} },
     .{ .action = .delete_item },
 
 };
@@ -94,6 +99,16 @@ const menu_label_pad: i32 = 12;
 
 const details_w: i32 = 340;
 const details_h: i32 = 240;
+
+const prompt_width: i32 = 380;
+const prompt_height: i32 = 140;
+
+const PromptKind = enum {
+
+    rename,
+    move,
+
+};
 
 var menu_open = false;
 var menu_x: i32 = 0;
@@ -112,6 +127,16 @@ var details_length: u64 = 0;
 var details_status: []const u8 = "";
 
 var pointer_x: i32 = -1;
+
+var prompt_open = false;
+var prompt_kind: PromptKind = .rename;
+var prompt_source: [max_path]u8 = undefined;
+var prompt_source_len: usize = 0;
+var prompt_status: []const u8 = "";
+
+var keyboard = lib.keymap.Keyboard{};
+var name_storage: [max_path]u8 = undefined;
+var name_field = ui.EditBuffer{ .bytes = &name_storage };
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -145,14 +170,43 @@ fn run() !void {
 
     while (true) {
 
-        const event = try connection.wait_event();
+        var batch: [event_batch_max]events.Event = undefined;
+        var count: usize = 0;
+
+        batch[count] = try connection.wait_event();
+        count += 1;
+
+        while (count < event_batch_max) {
+
+            if (connection.poll_event()) |event| {
+
+                batch[count] = event;
+                count += 1;
+
+            } else break;
+
+        }
+
+        if (dispatch_batch(batch[0..count])) return;
+
+    }
+
+}
+
+/// Returns true when the window should close.
+fn dispatch_batch(batch: []const events.Event) bool {
+
+    var last_move: ?events.Event = null;
+    var scroll_delta: i64 = 0;
+
+    for (batch) |event| {
 
         switch (event.kind) {
 
             events.kind_window_close => {
 
                 window.destroy();
-                return;
+                return true;
 
             },
 
@@ -166,6 +220,12 @@ fn run() !void {
 
             events.kind_button_down => button_down(event),
 
+            events.kind_key_down => {
+
+                if (prompt_open) prompt_key(event.code);
+
+            },
+
             events.kind_prefs_changed => {
 
                 lib.prefs.refresh();
@@ -175,42 +235,11 @@ fn run() !void {
 
             events.kind_scroll => {
 
-                if (!menu_open and !details_open) wheel(event.value);
+                if (!menu_open and !details_open and !prompt_open) scroll_delta += event.value;
 
             },
 
-            events.kind_pointer_move => {
-
-                pointer_x = event.x;
-                pointer_y = event.y;
-
-                if (menu_open) {
-
-                    const hit = menu_hit(event.x, event.y);
-
-                    if (hit != menu_hover) {
-
-                        menu_hover = hit;
-                        paint();
-
-                    }
-
-                } else {
-
-                    const token = hover_token(event.x, event.y);
-
-                    if (token != last_hover) {
-
-                        last_hover = token;
-                        paint();
-
-                    }
-
-                }
-
-                update_cursor(event.x, event.y);
-
-            },
+            events.kind_pointer_move => last_move = event,
 
             else => {},
 
@@ -218,11 +247,76 @@ fn run() !void {
 
     }
 
+    if (scroll_delta != 0) wheel(scroll_delta);
+
+    if (last_move) |event| handle_pointer_move(event);
+
+    return false;
+
+}
+
+fn handle_pointer_move(event: events.Event) void {
+
+    pointer_x = event.x;
+    pointer_y = event.y;
+
+    if (prompt_open) {
+
+        update_cursor(event.x, event.y);
+        return;
+
+    }
+
+    if (menu_open) {
+
+        const hit = menu_hit(event.x, event.y);
+
+        if (hit != menu_hover) {
+
+            menu_hover = hit;
+            paint();
+
+        }
+
+    } else if (details_open) {
+
+        const token: i32 = if (details_hit(event.x, event.y) != null) 1 else 0;
+
+        if (token != last_hover) {
+
+            last_hover = token;
+            paint();
+
+        }
+
+    } else {
+
+        const token = hover_token(event.x, event.y);
+
+        if (token != last_hover) {
+
+            last_hover = token;
+            paint();
+
+        }
+
+    }
+
+    update_cursor(event.x, event.y);
+
 }
 
 fn button_down(event: events.Event) void {
 
     if (event.code != events.button_left and event.code != events.button_right) return;
+
+    if (prompt_open) {
+
+        if (event.code == events.button_left) prompt_click(event.x, event.y);
+
+        return;
+
+    }
 
     if (details_open) {
 
@@ -401,6 +495,21 @@ fn precedes(a: Entry, b: Entry) bool {
 
 fn update_cursor(x: i32, y: i32) void {
 
+    if (prompt_open) {
+
+        const rect = prompt_rect();
+        const field = Rect{ .x = rect.x + 16, .y = rect.y + 40, .w = rect.w - 32, .h = 28 };
+        const confirm = Rect{ .x = rect.x + 16, .y = rect.y + 84, .w = 100, .h = 32 };
+        const cancel = Rect{ .x = rect.x + 124, .y = rect.y + 84, .w = 100, .h = 32 };
+
+        if (field.contains(x, y)) lib.cursor.set(&connection, .selector)
+        else if (confirm.contains(x, y) or cancel.contains(x, y)) lib.cursor.set(&connection, .clicker)
+        else lib.cursor.set(&connection, .pointer);
+
+        return;
+
+    }
+
     if (details_open) {
 
         if (details_hit(x, y) != null) lib.cursor.set(&connection, .clicker)
@@ -487,6 +596,8 @@ fn menu_label(action: MenuAction) []const u8 {
         .edit_notepad => "Edit via Notepad",
         .view_details => "View Details",
         .add_desktop => "Add To Desktop",
+        .rename_item => "Rename",
+        .move_item => "Move…",
         .delete_item => "Delete Item",
 
     };
@@ -590,6 +701,10 @@ fn run_menu_action(action: MenuAction, index: usize) void {
 
         },
 
+        .rename_item => open_prompt(.rename, path, entry.name[0..entry.name_len]),
+
+        .move_item => open_prompt(.move, path, path),
+
         .delete_item => {
 
             const handle = if (client) |*c| c else return;
@@ -601,6 +716,204 @@ fn run_menu_action(action: MenuAction, index: usize) void {
         },
 
     }
+
+}
+
+fn open_prompt(kind: PromptKind, source_path: []const u8, initial: []const u8) void {
+
+    close_menu();
+    close_details();
+
+    prompt_kind = kind;
+    prompt_status = "";
+
+    prompt_source_len = @min(source_path.len, prompt_source.len);
+    @memcpy(prompt_source[0..prompt_source_len], source_path[0..prompt_source_len]);
+
+    set_edit_text(initial);
+    prompt_open = true;
+    paint();
+
+}
+
+fn close_prompt() void {
+
+    if (!prompt_open) return;
+
+    prompt_open = false;
+    prompt_status = "";
+    paint();
+
+}
+
+fn set_edit_text(content: []const u8) void {
+
+    name_field.clear();
+
+    const length = @min(content.len, name_storage.len);
+
+    @memcpy(name_storage[0..length], content[0..length]);
+    name_field.len = length;
+    name_field.cursor = length;
+
+}
+
+fn prompt_rect() Rect {
+
+    const width: i32 = @intCast(window.surface.width);
+    const height: i32 = @intCast(window.surface.height);
+
+    return .{
+
+        .x = @divTrunc(width - prompt_width, 2),
+        .y = @divTrunc(height - prompt_height, 2),
+        .w = prompt_width,
+        .h = prompt_height,
+
+    };
+
+}
+
+fn prompt_key(code: u16) void {
+
+    if (keyboard.modifier(events.kind_key_down, code)) return;
+
+    var buffer: [3]u8 = undefined;
+    const bytes = keyboard.bytes(code, &buffer);
+
+    if (bytes.len == 1 and bytes[0] == '\r') {
+
+        confirm_prompt();
+        return;
+
+    }
+
+    if (bytes.len == 1 and bytes[0] == 0x1b) {
+
+        close_prompt();
+        return;
+
+    }
+
+    if (name_field.feed(bytes)) paint();
+
+}
+
+fn prompt_click(x: i32, y: i32) void {
+
+    const rect = prompt_rect();
+    const confirm = Rect{ .x = rect.x + 16, .y = rect.y + 84, .w = 100, .h = 32 };
+    const cancel = Rect{ .x = rect.x + 124, .y = rect.y + 84, .w = 100, .h = 32 };
+
+    if (confirm.contains(x, y)) {
+
+        confirm_prompt();
+        return;
+
+    }
+
+    if (cancel.contains(x, y)) {
+
+        close_prompt();
+        return;
+
+    }
+
+    if (!rect.contains(x, y)) close_prompt();
+
+}
+
+fn confirm_prompt() void {
+
+    const handle = if (client) |*c| c else return;
+    const source = prompt_source[0..prompt_source_len];
+    const typed = name_field.slice();
+
+    if (typed.len == 0) {
+
+        prompt_status = "Name required";
+        paint();
+        return;
+
+    }
+
+    var dest_buf: [max_path]u8 = undefined;
+    const dest = switch (prompt_kind) {
+
+        .rename => blk: {
+
+            const parent = path_parent(source);
+            break :blk lib.fs.canonicalize(parent, typed, &dest_buf) catch {
+
+                prompt_status = "Invalid name";
+                paint();
+                return;
+
+            };
+
+        },
+
+        .move => lib.fs.canonicalize(cwd, typed, &dest_buf) catch {
+
+            prompt_status = "Invalid path";
+            paint();
+            return;
+
+        },
+
+    };
+
+    if (std.mem.eql(u8, source, dest)) {
+
+        close_prompt();
+        return;
+
+    }
+
+    handle.rename(source, dest) catch {
+
+        prompt_status = "Rename failed";
+        paint();
+        return;
+
+    };
+
+    // If the item left this directory, drop selection; otherwise keep browsing.
+    reload();
+
+    selected = null;
+
+    for (entries[0..entry_count], 0..) |entry, index| {
+
+        var path_buffer: [max_path]u8 = undefined;
+        const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch continue;
+
+        if (std.mem.eql(u8, path, dest)) {
+
+            selected = index;
+            break;
+
+        }
+
+    }
+
+    close_prompt();
+
+}
+
+fn path_parent(path: []const u8) []const u8 {
+
+    if (path.len <= 1) return "/";
+
+    if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
+
+        if (slash == 0) return "/";
+
+        return path[0..slash];
+
+    }
+
+    return cwd;
 
 }
 
@@ -729,6 +1042,7 @@ fn toggle_details_writable() void {
 
 fn click(x: i32, y: i32) void {
 
+    if (prompt_open) close_prompt();
     if (menu_open) close_menu();
 
     if (y < toolbar_height) {
@@ -906,8 +1220,107 @@ fn paint() void {
 
     if (menu_open) paint_menu(surface);
     if (details_open) paint_details_modal(surface);
+    if (prompt_open) paint_prompt(surface);
 
     window.present_all() catch {};
+
+}
+
+fn paint_prompt(surface: *const gfx.Surface) void {
+
+    const rect = prompt_rect();
+    var page = ui.Page{ .font = &font };
+
+    page.begin(@intCast(surface.width), @intCast(surface.height), .{
+
+        .width = .{ .px = @intCast(surface.width) },
+        .height = .{ .px = @intCast(surface.height) },
+
+    });
+
+    const title: []const u8 = switch (prompt_kind) {
+
+        .rename => "Rename item",
+        .move => "Move to path",
+
+    };
+
+    const confirm_label: []const u8 = switch (prompt_kind) {
+
+        .rename => "Rename",
+        .move => "Move",
+
+    };
+
+    const panel = page.box(ui.Page.root, .{
+
+        .direction = .column,
+        .width = .{ .px = rect.w },
+        .height = .{ .px = rect.h },
+        .margin = .{ .left = rect.x, .top = rect.y },
+        .padding = ui.Edge.all(16),
+        .gap = 8,
+        .background = ui.theme.window_bg,
+        .border = ui.theme.border,
+        .radius = 8,
+
+    });
+
+    _ = page.label(panel, title, .{
+
+        .height = .{ .px = 14 },
+        .size = 14,
+        .color = ui.theme.text,
+
+    });
+
+    _ = page.field(panel, &name_field, if (prompt_kind == .rename) "new name" else "destination path", true, .{
+
+        .width = .{ .grow = 1 },
+        .height = .{ .px = 28 },
+        .size = 13,
+
+    });
+
+    if (prompt_status.len > 0) {
+
+        _ = page.label(panel, prompt_status, .{
+
+            .height = .{ .px = 12 },
+            .size = 11,
+            .color = ui.theme.warn,
+
+        });
+
+    }
+
+    const buttons = page.box(panel, .{
+
+        .direction = .row,
+        .height = .{ .px = 32 },
+        .gap = 8,
+
+    });
+
+    _ = page.button(buttons, 1, confirm_label, .{
+
+        .width = .{ .px = 100 },
+        .height = .{ .px = 32 },
+        .size = 13,
+        .background = ui.theme.accent_dim,
+
+    });
+
+    _ = page.button(buttons, 2, "Cancel", .{
+
+        .width = .{ .px = 100 },
+        .height = .{ .px = 32 },
+        .size = 13,
+
+    });
+
+    page.end();
+    page.paint(surface);
 
 }
 

@@ -260,14 +260,14 @@ pub fn draw_resize_grip(back: *const Surface, window: *const Window, color: Colo
 
 }
 
-/// A one-pixel outline on the straight frame edges (corners come from the title bar and content shape).
+/// One-pixel frame outline: rect fills + cached corner rims (no path raster on the drag hot path).
 pub fn draw_frame_border(back: *const Surface, window: *const Window, color: Color) void {
 
     draw.round.stroke_round_rect_fast(back, window.frame(), corner_radius, 1, color);
 
 }
 
-/// The interactive-resize rubber band.
+/// The interactive-resize rubber band (fast path is fine: temporary, not chrome).
 pub fn draw_outline(back: *const Surface, rect: Rect, color: Color) void {
 
     draw.round.stroke_round_rect_fast(back, rect, corner_radius, 2, color);

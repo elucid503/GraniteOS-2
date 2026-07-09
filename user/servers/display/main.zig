@@ -889,6 +889,7 @@ fn slot_of(window: *Window) usize {
 fn drain_input() void {
 
     var moved = false;
+    var motion_pending = false;
 
     while (input_ring.pop()) |event| {
 
@@ -896,34 +897,52 @@ fn drain_input() void {
 
             events.kind_pointer_move => {
 
+                // Coalesce motion: only the last sample in this wake is applied. Intermediate
+                // samples would union damage along the whole path and thrash the compositor.
                 pointer_x = scale(event.x, screen_width);
                 pointer_y = scale(event.y, screen_height);
                 moved = true;
-
-                handle_pointer_move();
-
-            },
-
-            events.kind_button_down => handle_button_down(event),
-            events.kind_button_up => handle_button_up(event),
-
-            events.kind_key_down, events.kind_key_up => {
-
-                if (manager.focused()) |window| forward(window, event);
+                motion_pending = true;
 
             },
 
-            events.kind_scroll => {
+            else => {
 
-                if (window_under_pointer()) |window| forward(window, event);
+                if (motion_pending) {
+
+                    handle_pointer_move();
+                    motion_pending = false;
+
+                }
+
+                switch (event.kind) {
+
+                    events.kind_button_down => handle_button_down(event),
+                    events.kind_button_up => handle_button_up(event),
+
+                    events.kind_key_down, events.kind_key_up => {
+
+                        if (manager.focused()) |window| forward(window, event);
+
+                    },
+
+                    events.kind_scroll => {
+
+                        if (window_under_pointer()) |window| forward(window, event);
+
+                    },
+
+                    else => {},
+
+                }
 
             },
-
-            else => {},
 
         }
 
     }
+
+    if (motion_pending) handle_pointer_move();
 
     // One cursor-plane move per batch, after the last motion event.
 
@@ -1376,7 +1395,8 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     if (window.decorated()) {
 
-        render.draw_resize_grip(&view, window, theme.title_blurred);
+        // Grip is idle-only chrome; skip during drag/resize to save a few stroke lines per frame.
+        if (drag_id == 0 and resize_id == 0) render.draw_resize_grip(&view, window, theme.title_blurred);
         render.draw_frame_border(&view, window, theme.border);
 
     }

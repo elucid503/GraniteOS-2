@@ -13,11 +13,14 @@ const Point = path_mod.Point;
 const Rect = draw.Rect;
 const Surface = draw.Surface;
 
+// Width covers a full HD scanline; edge capacity is sized for icon/chrome paths (not freehand).
 pub const max_width = 2048;
-pub const max_edges = 8192;
+pub const max_edges = 4096;
 
 // One pixel of full coverage: 64 subpixels of height times 128 (double the 64-wide area term).
 const full_coverage: i64 = 64 * 128;
+
+
 
 const Edge = struct {
 
@@ -188,14 +191,15 @@ pub const Raster = struct {
 
     const max_depth = 16;
 
-    // Subdivide until the control net sits within an eighth of a pixel of the chord.
+    // Quarter-pixel flatness: keeps icon arcs and round-rect corners from faceting at small sizes.
 
     fn flatten_quad(self: *Raster, a: Point, b: Point, c: Point, x_min: i32, x_max: i32, depth: u8) void {
 
         const dev_x = @abs(2 * b.x - a.x - c.x);
         const dev_y = @abs(2 * b.y - a.y - c.y);
 
-        if (depth >= max_depth or (dev_x <= 32 and dev_y <= 32)) {
+        // ~3/8 px flatness: sharper than 1/2 px without exploding edge counts on icons.
+        if (depth >= max_depth or (dev_x <= 24 and dev_y <= 24)) {
 
             self.add_edge(a, c, x_min, x_max);
 
@@ -219,7 +223,7 @@ pub const Raster = struct {
         const dev2_x = @abs(3 * c.x - a.x - 2 * d.x);
         const dev2_y = @abs(3 * c.y - a.y - 2 * d.y);
 
-        if (depth >= max_depth or (@max(dev1_x, dev2_x) <= 48 and @max(dev1_y, dev2_y) <= 48)) {
+        if (depth >= max_depth or (@max(dev1_x, dev2_x) <= 32 and @max(dev1_y, dev2_y) <= 32)) {
 
             self.add_edge(a, d, x_min, x_max);
 
@@ -415,9 +419,10 @@ pub const Raster = struct {
             self.cover[index] = 0;
 
             const magnitude: i64 = @intCast(@abs(total));
-            const alpha: u8 = @intCast(@min(255, @divTrunc(magnitude * 255, full_coverage)));
 
-            self.alphas[index] = alpha;
+            // Linear coverage only: masks/glyphs need exact analytic alpha. Display gamma is applied
+            // in SurfaceWriter so compositing masks stay unbiased.
+            self.alphas[index] = @intCast(@min(255, @divTrunc(magnitude * 255, full_coverage)));
 
         }
 

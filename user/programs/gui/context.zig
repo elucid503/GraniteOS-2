@@ -233,8 +233,9 @@ fn handle_desktop(event: events.Event) void {
 
             if (pin != pin_hover) {
 
+                const previous = pin_hover;
                 pin_hover = pin;
-                paint_desktop();
+                paint_pin_hover(previous, pin);
 
             }
 
@@ -732,33 +733,87 @@ fn paint_desktop() void {
 
 }
 
+/// Only repaint the pin cells that changed hover state — avoids a full desktop present on every move.
+fn paint_pin_hover(previous: ?usize, next: ?usize) void {
+
+    if (menu_open or prompt_open) {
+
+        paint_desktop();
+        return;
+
+    }
+
+    const surface = &desktop.surface;
+    var damage = Rect.empty;
+
+    if (previous) |index| {
+
+        if (index < pin_count) {
+
+            const cell = pin_cell(index);
+
+            paint_one_pin(surface, index);
+            damage = damage.cover(cell);
+
+        }
+
+    }
+
+    if (next) |index| {
+
+        if (index < pin_count) {
+
+            const cell = pin_cell(index);
+
+            paint_one_pin(surface, index);
+            damage = damage.cover(cell);
+
+        }
+
+    }
+
+    if (!damage.is_empty()) desktop.present(damage) catch {};
+
+}
+
 fn paint_pins(surface: *const gfx.Surface) void {
 
     var index: usize = 0;
 
     while (index < pin_count) : (index += 1) {
 
-        const cell = pin_cell(index);
-        const hovered = pin_hover != null and pin_hover.? == index;
-
-        if (hovered) ui.fill_round_rect(surface, cell, 8, ui.theme.hover);
-
-        const icon = if (pin_is_dir[index]) lib.icons.folder else lib.icons.file;
-        const tint = if (pin_is_dir[index]) ui.theme.accent else ui.theme.text_dim;
-        const icon_x = cell.x + @divTrunc(cell.w - pin_icon, 2);
-        const icon_y = cell.y + 10;
-
-        lib.draw.vector.icon_in(surface, .{ .x = icon_x, .y = icon_y, .w = pin_icon, .h = pin_icon }, icon, tint);
-
-        const label = pin_label(pins[index].slice());
-        const visible = ui.truncate(&font, label, 12, cell.w - 8);
-        const text_w = font.text_width(visible, 12);
-        const text_x = cell.x + @divTrunc(cell.w - text_w, 2);
-        const text_y = icon_y + pin_icon + 8;
-
-        font.draw(surface, text_x, text_y, 12, visible, ui.theme.text);
+        paint_one_pin(surface, index);
 
     }
+
+}
+
+fn paint_one_pin(surface: *const gfx.Surface, index: usize) void {
+
+    if (index >= pin_count) return;
+
+    const cell = pin_cell(index);
+
+    surface.fill_rect(cell, lib.prefs.wallpaper());
+
+    const hovered = pin_hover != null and pin_hover.? == index;
+
+    if (hovered) ui.fill_round_rect(surface, cell, 8, ui.theme.hover);
+
+    const icon = if (pin_is_dir[index]) lib.icons.folder else lib.icons.file;
+    const tint = if (pin_is_dir[index]) ui.theme.accent else ui.theme.text_dim;
+    const icon_x = cell.x + @divTrunc(cell.w - pin_icon, 2);
+    const icon_y = cell.y + 10;
+
+    lib.draw.vector.icon_in(surface, .{ .x = icon_x, .y = icon_y, .w = pin_icon, .h = pin_icon }, icon, tint);
+
+    const label = pin_label(pins[index].slice());
+    const visible = ui.truncate(&font, label, 12, cell.w - 8);
+    const text_w = font.text_width(visible, 12);
+    const text_x = cell.x + @divTrunc(cell.w - text_w, 2);
+    const text_y = icon_y + pin_icon + 8;
+
+    font.draw(surface, text_x, text_y, 12, visible, ui.theme.text);
 
 }
 

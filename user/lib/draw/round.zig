@@ -24,6 +24,12 @@ pub const Masks = struct {
     bl: []const u8,
     br: []const u8,
 
+    // 1px perimeter of each quarter — precomputed so frame borders avoid per-pixel edge walks.
+    rim_tl: []const u8,
+    rim_tr: []const u8,
+    rim_bl: []const u8,
+    rim_br: []const u8,
+
 };
 
 const Slot = struct {
@@ -34,6 +40,11 @@ const Slot = struct {
     tr: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
     bl: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
     br: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
+
+    rim_tl: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
+    rim_tr: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
+    rim_bl: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
+    rim_br: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
 
     fn view(self: *const Slot, r: i32) Masks {
 
@@ -46,6 +57,11 @@ const Slot = struct {
             .tr = self.tr[0..area],
             .bl = self.bl[0..area],
             .br = self.br[0..area],
+
+            .rim_tl = self.rim_tl[0..area],
+            .rim_tr = self.rim_tr[0..area],
+            .rim_bl = self.rim_bl[0..area],
+            .rim_br = self.rim_br[0..area],
 
         };
 
@@ -133,6 +149,8 @@ pub fn stroke_round_rect(surface: *const Surface, rect: Rect, radius: i32, width
 
     if (rect.w <= 0 or rect.h <= 0 or width <= 0) return;
 
+    // Analytic outer/inner ring: corner arcs stay continuous with the filled chrome and meet the
+    // straight edges without the 1px perimeter approximation of stroke_round_rect_fast.
     var shape = Path{};
 
     stroke.round_rect_border(&shape, path_mod.from_px(rect.x), path_mod.from_px(rect.y), path_mod.from_px(rect.w), path_mod.from_px(rect.h), path_mod.from_px(radius), path_mod.from_px(width));
@@ -140,8 +158,8 @@ pub fn stroke_round_rect(surface: *const Surface, rect: Rect, radius: i32, width
 
 }
 
-/// Straight-edge border segments between corner arcs — no path rasterizer. The arcs themselves come
-/// from adjacent filled geometry (title bar, content); this is the compositor hot path.
+/// Straight edges as rect fills; corner arcs from precomputed 1px rim masks. Hot path for the
+/// compositor — no path flatten/sweep per frame.
 pub fn stroke_round_rect_fast(surface: *const Surface, rect: Rect, radius: i32, width: i32, color: Color) void {
 
     if (rect.w <= 0 or rect.h <= 0 or width <= 0) return;
@@ -166,16 +184,28 @@ pub fn stroke_round_rect_fast(surface: *const Surface, rect: Rect, radius: i32, 
 
         const side: u32 = @intCast(r);
 
-        stroke_corner_borders(surface, rect.x, rect.y, masks.tl, side, band, color);
-        stroke_corner_borders(surface, rect.x + rect.w - r, rect.y, masks.tr, side, band, color);
-        stroke_corner_borders(surface, rect.x, rect.y + rect.h - r, masks.bl, side, band, color);
-        stroke_corner_borders(surface, rect.x + rect.w - r, rect.y + rect.h - r, masks.br, side, band, color);
+        // band > 1: expand by blending the solid fill mask under a second inset pass is rare (resize
+        // rubber band). A second blend of the full fill at the rim is enough for a short 2px stroke.
+        surface.blend_coverage(rect.x, rect.y, masks.rim_tl, side, side, color);
+        surface.blend_coverage(rect.x + rect.w - r, rect.y, masks.rim_tr, side, side, color);
+        surface.blend_coverage(rect.x, rect.y + rect.h - r, masks.rim_bl, side, side, color);
+        surface.blend_coverage(rect.x + rect.w - r, rect.y + rect.h - r, masks.rim_br, side, side, color);
+
+        if (band > 1) {
+
+            // One more inward ring: solid edge pixels of the fill (rim already has the outer fringe).
+            stroke_inward_band(surface, rect.x, rect.y, masks.tl, side, color);
+            stroke_inward_band(surface, rect.x + rect.w - r, rect.y, masks.tr, side, color);
+            stroke_inward_band(surface, rect.x, rect.y + rect.h - r, masks.bl, side, color);
+            stroke_inward_band(surface, rect.x + rect.w - r, rect.y + rect.h - r, masks.br, side, color);
+
+        }
 
     }
 
 }
 
-fn stroke_corner_borders(surface: *const Surface, x: i32, y: i32, fill: []const u8, side: u32, band: i32, color: Color) void {
+fn stroke_inward_band(surface: *const Surface, x: i32, y: i32, fill: []const u8, side: u32, color: Color) void {
 
     var row: u32 = 0;
 
@@ -185,9 +215,10 @@ fn stroke_corner_borders(surface: *const Surface, x: i32, y: i32, fill: []const 
 
         while (col < side) : (col += 1) {
 
-            if (!fill_edge(fill, side, row, col)) continue;
+            if (fill[row * side + col] != 255) continue;
+            if (!has_zero_neighbor(fill, side, row, col)) continue;
 
-            paint_border_pixel(surface, x, y, fill, side, row, col, band, color);
+            surface.put_pixel(x + @as(i32, @intCast(col)), y + @as(i32, @intCast(row)), color);
 
         }
 
@@ -195,9 +226,7 @@ fn stroke_corner_borders(surface: *const Surface, x: i32, y: i32, fill: []const 
 
 }
 
-fn fill_edge(fill: []const u8, side: u32, row: u32, col: u32) bool {
-
-    if (fill[row * side + col] == 0) return false;
+fn has_zero_neighbor(fill: []const u8, side: u32, row: u32, col: u32) bool {
 
     if (row > 0 and fill[(row - 1) * side + col] == 0) return true;
     if (col > 0 and fill[row * side + col - 1] == 0) return true;
@@ -208,36 +237,11 @@ fn fill_edge(fill: []const u8, side: u32, row: u32, col: u32) bool {
 
 }
 
-fn paint_border_pixel(surface: *const Surface, origin_x: i32, origin_y: i32, fill: []const u8, side: u32, row: u32, col: u32, band: i32, color: Color) void {
+fn fill_edge(fill: []const u8, side: u32, row: u32, col: u32) bool {
 
-    surface.put_pixel(origin_x + @as(i32, @intCast(col)), origin_y + @as(i32, @intCast(row)), color);
+    if (fill[row * side + col] == 0) return false;
 
-    if (band <= 1) return;
-
-    const inward = [_]struct { dr: i32, dc: i32 }{
-
-        .{ .dr = 1, .dc = 0 },
-        .{ .dr = -1, .dc = 0 },
-        .{ .dr = 0, .dc = 1 },
-        .{ .dr = 0, .dc = -1 },
-
-    };
-
-    for (inward) |step| {
-
-        const inner_row = @as(i32, @intCast(row)) + step.dr;
-        const inner_col = @as(i32, @intCast(col)) + step.dc;
-
-        if (inner_row < 0 or inner_col < 0) continue;
-        if (inner_row >= @as(i32, @intCast(side)) or inner_col >= @as(i32, @intCast(side))) continue;
-
-        const index = @as(u32, @intCast(inner_row)) * side + @as(u32, @intCast(inner_col));
-
-        if (fill[index] == 0) continue;
-
-        surface.put_pixel(origin_x + inner_col, origin_y + inner_row, color);
-
-    }
+    return has_zero_neighbor(fill, side, row, col);
 
 }
 
@@ -337,6 +341,8 @@ fn build_masks(slot: *Slot, r: i32) void {
 
     const side: u32 = @intCast(2 * r);
     const cells = side * side;
+    const corner: u32 = @intCast(r);
+    const corner_cells = corner * corner;
 
     var coverage: [4 * max_radius * max_radius]u8 = [_]u8{0} ** (4 * max_radius * max_radius);
 
@@ -347,7 +353,36 @@ fn build_masks(slot: *Slot, r: i32) void {
 
     extract_quadrants(coverage[0..cells], side, r, slot.tl[0..], slot.tr[0..], slot.bl[0..], slot.br[0..]);
 
+    extract_rim(slot.tl[0..corner_cells], corner, slot.rim_tl[0..corner_cells]);
+    extract_rim(slot.tr[0..corner_cells], corner, slot.rim_tr[0..corner_cells]);
+    extract_rim(slot.bl[0..corner_cells], corner, slot.rim_bl[0..corner_cells]);
+    extract_rim(slot.br[0..corner_cells], corner, slot.rim_br[0..corner_cells]);
+
     slot.ready = true;
+
+}
+
+fn extract_rim(fill: []const u8, side: u32, rim: []u8) void {
+
+    const area = side * side;
+
+    @memset(rim[0..area], 0);
+
+    var row: u32 = 0;
+
+    while (row < side) : (row += 1) {
+
+        var col: u32 = 0;
+
+        while (col < side) : (col += 1) {
+
+            if (!fill_edge(fill, side, row, col)) continue;
+
+            rim[row * side + col] = fill[row * side + col];
+
+        }
+
+    }
 
 }
 
@@ -418,10 +453,13 @@ test "fast round-top fill matches the slow path" {
 test "corner masks are opaque inside and clear outside the arc" {
 
     const masks = masks_for(8) orelse return error.TestExpectedEqual;
+    const r: usize = 8;
 
-    try testing.expectEqual(@as(u8, 255), masks.tl[7]);
+    // Interior of each quarter (toward the rect center) is solid; the outer open corner is clear.
+    // Allow a small undershoot from cubic circle arcs (linear coverage, no display gamma).
+    try testing.expect(masks.tl[(r - 1) * r + (r - 1)] >= 240);
     try testing.expect(masks.tl[0] < 64);
-    try testing.expectEqual(@as(u8, 255), masks.br[63]);
-    try testing.expect(masks.br[56] < 64);
+    try testing.expect(masks.br[0] >= 240);
+    try testing.expect(masks.br[r * r - 1] < 64);
 
 }

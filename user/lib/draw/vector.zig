@@ -35,21 +35,18 @@ const Transform = struct {
 
     view: ViewBox,
     dest: Rect,
-    snap_strokes: bool = false,
+    // Subpixel offset so stroke centres land on pixel centres (odd widths) or pixel edges (even).
+    snap: i32 = 0,
 
     fn x(self: *const Transform, value: i32) i32 {
 
-        const snap: i32 = if (self.snap_strokes) 32 else 0;
-
-        return path_mod.from_px(self.dest.x) + @as(i32, @intCast(@divTrunc(@as(i64, value - self.view.x) * self.dest.w * 64, self.view.w))) + snap;
+        return path_mod.from_px(self.dest.x) + @as(i32, @intCast(@divTrunc(@as(i64, value - self.view.x) * self.dest.w * 64, self.view.w))) + self.snap;
 
     }
 
     fn y(self: *const Transform, value: i32) i32 {
 
-        const snap: i32 = if (self.snap_strokes) 32 else 0;
-
-        return path_mod.from_px(self.dest.y) + @as(i32, @intCast(@divTrunc(@as(i64, value - self.view.y) * self.dest.h * 64, self.view.h))) + snap;
+        return path_mod.from_px(self.dest.y) + @as(i32, @intCast(@divTrunc(@as(i64, value - self.view.y) * self.dest.h * 64, self.view.h))) + self.snap;
 
     }
 
@@ -67,6 +64,15 @@ const Transform = struct {
 
 };
 
+/// Half-pixel snap for odd whole-pixel stroke widths; none for even — keeps lines on the pixel grid.
+fn stroke_snap(width_fx: i32) i32 {
+
+    const width_px = @divTrunc(width_fx + 32, 64);
+
+    return if ((width_px & 1) != 0) 32 else 0;
+
+}
+
 const FixedPoint = struct {
 
     x: i32,
@@ -78,9 +84,12 @@ const FixedPoint = struct {
 /// icon-set default (a twelfth of the box).
 pub fn build_stroked(path: *Path, rect: Rect, svg: []const u8, width_fx: i32) void {
 
-    const transform = Transform{ .view = parse_view_box(svg), .dest = rect, .snap_strokes = true };
-    const default_width = @as(i32, @intCast(@divTrunc(@as(i64, @min(rect.w, rect.h)) * 2 * 64 + 12, 24)));
-    const width = if (width_fx > 0) width_fx else @max(96, default_width);
+    // Slightly heavier default at tiny sizes so 16px icons do not thin out after AA.
+    const side = @min(rect.w, rect.h);
+    const default_width: i32 = @intCast(@divTrunc(@as(i64, side) * 2 * 64 + 12, 24));
+    const floor_width: i32 = if (side <= 18) 112 else 96;
+    const width: i32 = if (width_fx > 0) width_fx else @max(floor_width, default_width);
+    const transform = Transform{ .view = parse_view_box(svg), .dest = rect, .snap = stroke_snap(width) };
 
     var offset: usize = 0;
 

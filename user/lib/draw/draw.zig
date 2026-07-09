@@ -334,13 +334,38 @@ pub const Surface = struct {
 
         count = @min(count, room);
 
+        if (count == 0) return;
+
         const base = @as(u32, @intCast(y)) * self.stride + @as(u32, @intCast(start_x));
+        const row = coverage[first .. first + count];
+
+        // Long solid runs (shape interiors) use memset; short/AA rows skip the probe.
+        if (count >= 32 and row[0] == 255) {
+
+            var solid = true;
+            var probe: usize = 1;
+
+            while (solid and probe < count) : (probe += 1) {
+
+                if (row[probe] != 255) solid = false;
+
+            }
+
+            if (solid) {
+
+                @memset(self.pixels[base .. base + count], color);
+
+                return;
+
+            }
+
+        }
 
         var index: usize = 0;
 
         while (index < count) : (index += 1) {
 
-            const alpha = coverage[first + index];
+            const alpha = row[index];
 
             if (alpha == 0) continue;
 
