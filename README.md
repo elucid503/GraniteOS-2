@@ -6,6 +6,8 @@ interrupt dispatch, and capabilities; the filesystem, block and display drivers,
 and the compositor become user-space servers. The system is SMP-capable and
 ships with a persistent on-disk filesystem plus an optional (but highly reccomended) virtio-gpu desktop.
 
+[![GraniteOS Desktop Demo](_docs/desktop_demo.png)](_docs/desktop_demo.png)
+
 ## Requirements
 
 - **Zig 0.15** (tested with 0.15.2)
