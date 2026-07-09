@@ -38,7 +38,7 @@ filesystem. If virtio-gpu hardware is present (`zig build qemu-gui`), Flint
 starts the display and input drivers, the compositor, the launcher, and a
 welcome desktop with taskbar chrome. Type `exit` at the `marble [/] >` prompt
 to watch the supervisor restart Marble; quit QEMU with `Ctrl-A` then `x`.
-`scripts/m6.sh` drives Marble over serial; `scripts/m9.sh` smoke-tests the GUI
+`scripts/m6.sh` drives Marble over serial; `scripts/m9.sh` tests the GUI
 stack.
 
 ## Layout
