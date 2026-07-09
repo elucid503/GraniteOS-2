@@ -1,5 +1,4 @@
 zig-out/
 .zig-cache/
 disk.img
-_docs
 CLAUDE.md
