@@ -1,5 +1,4 @@
-// Timer: stopwatch and countdown. A small worker wakes the UI while a clock is running; all painting stays on
-// the main thread. Clock text stays within the glyph-cache size limit so large Path frames never hit the stack.
+// Timer: stopwatch and countdown. A small worker wakes the UI while a clock is running; all painting stays on the main thread.
 
 const std = @import("std");
 
@@ -15,7 +14,7 @@ const Rect = gfx.Rect;
 
 pub const app_meta = .{
     .title = "Timer",
-    .description = "Stopwatch and countdown",
+    .description = "Run a stopwatch or timer.",
     .icon = "timer",
     .category = "Accessories",
 };

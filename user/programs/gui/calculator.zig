@@ -13,7 +13,7 @@ const Rect = gfx.Rect;
 
 pub const app_meta = .{
     .title = "Calculator",
-    .description = "Basic arithmetic",
+    .description = "Execute simple calculations.",
     .icon = "calculator",
     .category = "Accessories",
 };

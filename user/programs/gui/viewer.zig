@@ -14,7 +14,7 @@ const Rect = gfx.Rect;
 
 pub const app_meta = .{
     .title = "Images",
-    .description = "View PNG images",
+    .description = "View PNG images.",
     .icon = "image",
     .category = "Graphics",
 };

@@ -16,7 +16,7 @@ const Rect = gfx.Rect;
 
 pub const app_meta = .{
     .title = "Status",
-    .description = "Live system metrics",
+    .description = "See live system metrics.",
     .icon = "chart",
     .category = "System",
 };

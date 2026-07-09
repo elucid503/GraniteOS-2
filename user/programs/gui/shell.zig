@@ -16,10 +16,12 @@ const Handle = cap.Handle;
 const Message = ipc.Message;
 
 pub const app_meta = .{
+
     .title = "Terminal",
-    .description = "MARBLE command shell",
+    .description = "Run the MARBLE shell.",
     .icon = "terminal",
     .category = "System",
+
 };
 
 comptime {

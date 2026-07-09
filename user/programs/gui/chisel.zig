@@ -1,5 +1,4 @@
-// Chisel: a fast MS Paint-style drawing pad. Pixels live in a private canvas buffer; strokes present only
-// their dirty rect so freehand drawing stays responsive. Export writes a PNG via lib/draw/png.encode.
+// Chisel: a fast MS Paint-style drawing pad. Pixels live in a private canvas buffer; strokes present only their dirty rect so freehand drawing stays responsive. Export writes a PNG via lib/draw/png.encode.
 
 const std = @import("std");
 
@@ -17,7 +16,7 @@ const Color = gfx.Color;
 
 pub const app_meta = .{
     .title = "Chisel",
-    .description = "Draw and export PNG",
+    .description = "Create and save drawings.",
     .icon = "paint",
     .category = "Graphics",
 };

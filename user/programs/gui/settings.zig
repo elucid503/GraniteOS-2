@@ -9,7 +9,7 @@ const ui = lib.ui;
 
 pub const app_meta = .{
     .title = "Settings",
-    .description = "Color theme",
+    .description = "Manage the theme and more.",
     .icon = "settings",
     .category = "System",
 };

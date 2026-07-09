@@ -1,8 +1,4 @@
-// File Manager: a two-pane browser over the Strata filesystem. The left pane lists the working directory (folders
-// first, with sizes); clicking a folder descends into it and the toolbar's up button climbs back out. Drag an entry
-// onto a folder to move it there, or onto the toolbar to move it to the parent directory. The right pane shows
-// details for the selected entry and a short text preview for files. It is a plain Filesystem client - the same
-// interface the shell's fs utilities speak - so it reflects exactly what is on disk.
+// File Manager: a two-pane browser over the Strata filesystem.
 
 const std = @import("std");
 
@@ -19,7 +15,7 @@ const Entry = proto.filesystem.Entry;
 
 pub const app_meta = .{
     .title = "Files",
-    .description = "Browse the filesystem",
+    .description = "Browse and manage files.",
     .icon = "folder",
     .category = "System",
 };

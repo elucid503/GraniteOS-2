@@ -14,7 +14,7 @@ const Rect = gfx.Rect;
 
 pub const app_meta = .{
     .title = "Notepad",
-    .description = "Edit text files",
+    .description = "Edit and save text files.",
     .icon = "file",
     .category = "Accessories",
 };
