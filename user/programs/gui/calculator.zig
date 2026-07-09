@@ -43,6 +43,10 @@ var font: lib.draw.text.Face = undefined;
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
 
+// Deliberate exception to the no-float rule: the kernel does not preserve FP/SIMD registers across context
+// switches, so this arithmetic is only safe as long as no preemption lands between dependent FP instructions.
+// Every other program stays integer/fixed-point; convert this to fixed-point decimal before relying on it.
+
 var display_value: f64 = 0;
 var stored: f64 = 0;
 var pending: Op = .none;
@@ -52,9 +56,7 @@ var error_state = false;
 var display_text: [32]u8 = undefined;
 var display_len: usize = 1;
 
-var pointer_x: i32 = -1;
-var pointer_y: i32 = -1;
-var last_hover: i32 = -2;
+var regions = ui.HitRegions{};
 
 const Key = enum {
 
@@ -141,17 +143,7 @@ fn run() !void {
 
             events.kind_pointer_move => {
 
-                pointer_x = event.x;
-                pointer_y = event.y;
-
-                const hover: i32 = if (key_at(event.x, event.y)) |key| @intFromEnum(key) else -1;
-
-                if (hover != last_hover) {
-
-                    last_hover = hover;
-                    paint();
-
-                }
+                if (regions.pointer_move(event.x, event.y)) paint();
 
                 update_cursor(event.x, event.y);
 
@@ -455,77 +447,25 @@ fn grid_rect() Rect {
 
 fn key_rect(index: usize) Rect {
 
-    const grid = grid_rect();
-    const cols: i32 = 4;
-    const rows: i32 = 5;
-    const col: i32 = @intCast(index % 4);
+    const grid = ui.Grid{ .rect = grid_rect(), .columns = 4, .rows = 5, .gap = btn_gap };
     const row: i32 = @intCast(index / 4);
 
-    const cell_w = @divTrunc(grid.w - btn_gap * (cols - 1), cols);
-    const cell_h = @divTrunc(grid.h - btn_gap * (rows - 1), rows);
+    // Zero spans two columns; decimal and equals fill out the bottom row.
+    if (index == @intFromEnum(Key.zero)) return grid.cell(0, row, 2);
+    if (index == @intFromEnum(Key.decimal)) return grid.cell(2, row, 1);
+    if (index == @intFromEnum(Key.equals)) return grid.cell(3, row, 1);
 
-    // Zero spans two columns; equals sits in the last cell of the bottom row.
-    if (index == @intFromEnum(Key.zero)) {
-
-        return .{
-
-            .x = grid.x,
-            .y = grid.y + row * (cell_h + btn_gap),
-            .w = cell_w * 2 + btn_gap,
-            .h = cell_h,
-
-        };
-
-    }
-
-    if (index == @intFromEnum(Key.decimal)) {
-
-        return .{
-
-            .x = grid.x + 2 * (cell_w + btn_gap),
-            .y = grid.y + row * (cell_h + btn_gap),
-            .w = cell_w,
-            .h = cell_h,
-
-        };
-
-    }
-
-    if (index == @intFromEnum(Key.equals)) {
-
-        return .{
-
-            .x = grid.x + 3 * (cell_w + btn_gap),
-            .y = grid.y + row * (cell_h + btn_gap),
-            .w = cell_w,
-            .h = cell_h,
-
-        };
-
-    }
-
-    return .{
-
-        .x = grid.x + col * (cell_w + btn_gap),
-        .y = grid.y + row * (cell_h + btn_gap),
-        .w = cell_w,
-        .h = cell_h,
-
-    };
+    return grid.cell(@intCast(index % 4), row, 1);
 
 }
 
 fn key_at(x: i32, y: i32) ?Key {
 
-    var index: usize = 0;
+    const id = regions.hit(x, y);
 
-    while (index < key_labels.len) : (index += 1) {
+    if (id == 0) return null;
 
-        if (key_rect(index).contains(x, y)) return @enumFromInt(index);
-
-    }
-
-    return null;
+    return @enumFromInt(id - 1);
 
 }
 
@@ -550,23 +490,24 @@ fn paint() void {
 
     font.draw(surface, text_x, text_y, size, visible, if (error_state) ui.theme.warn else ui.theme.text);
 
+    regions.reset();
+
     var index: usize = 0;
 
     while (index < key_labels.len) : (index += 1) {
 
         const rect = key_rect(index);
-        const hovered = pointer_x >= rect.x and pointer_x < rect.x + rect.w and pointer_y >= rect.y and pointer_y < rect.y + rect.h;
+        const id: u32 = @intCast(index + 1);
         const is_op = index == 3 or index == 7 or index == 11 or index == 15 or index == 18;
-        const fill = if (hovered) ui.theme.hover else if (is_op) ui.theme.accent_dim else ui.theme.surface_alt;
 
-        ui.fill_round_rect(surface, rect, 6, fill);
+        regions.add(id, rect);
 
-        const label = key_labels[index];
-        const label_w = font.text_width(label, 16);
-        const label_x = rect.x + @divTrunc(rect.w - label_w, 2);
-        const label_y = rect.y + @divTrunc(rect.h - font.line_height(16), 2);
+        ui.widgets.button(surface, &font, rect, key_labels[index], .{
 
-        font.draw(surface, label_x, label_y, 16, label, ui.theme.text);
+            .hovered = regions.hovered(id),
+            .accent = is_op,
+
+        }, .{ .size = 16 });
 
     }
 

@@ -7,6 +7,16 @@ const text_mod = @import("../draw/text.zig");
 const vector = @import("../draw/vector.zig");
 
 pub const chart = @import("chart.zig");
+pub const widgets = @import("widgets.zig");
+
+// Freeform (non-flex-tree) widgets, re-exported so apps write `ui.TabStrip` like they write `ui.Page`.
+
+pub const HitRegions = widgets.HitRegions;
+pub const TabStrip = widgets.TabStrip;
+pub const Menu = widgets.Menu;
+pub const Grid = widgets.Grid;
+pub const ButtonState = widgets.ButtonState;
+pub const ButtonStyle = widgets.ButtonStyle;
 
 const Color = draw.Color;
 const Face = text_mod.Face;

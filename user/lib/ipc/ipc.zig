@@ -145,28 +145,9 @@ fn serve_loop(endpoint: Handle, dispatch: Dispatch) noreturn {
 
 }
 
-/// A yielding mutual-exclusion lock for a pooled server's own data structures (05-server-protocol.md).
-pub const Lock = struct {
-
-    state: u32 = 0,
-
-    pub fn acquire(self: *Lock) void {
-
-        while (@atomicRmw(u32, &self.state, .Xchg, 1, .acquire) != 0) {
-
-            sys.yield();
-
-        }
-
-    }
-
-    pub fn release(self: *Lock) void {
-
-        @atomicStore(u32, &self.state, 0, .release);
-
-    }
-
-};
+/// Mutual exclusion for a pooled server's own data structures (05-server-protocol.md): the shared
+/// notification-parked mutex, so contended workers park instead of yield-spinning.
+pub const Lock = @import("../sync.zig").Mutex;
 
 fn decoded(message: Message) Error!Message {
 

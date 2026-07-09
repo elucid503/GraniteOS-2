@@ -109,6 +109,12 @@ fn run() !void {
 
             events.kind_pointer_move => update_cursor(event.x, event.y),
 
+            events.kind_scroll => {
+
+                if (wheel(event.value)) paint();
+
+            },
+
             events.kind_prefs_changed => {
 
                 lib.prefs.refresh();
@@ -500,6 +506,29 @@ fn visible_rows() usize {
 
 }
 
+fn total_rows() usize {
+
+    var rows: usize = 1;
+
+    for (content[0..content_len]) |ch| {
+
+        if (ch == '\n') rows += 1;
+
+    }
+
+    return rows;
+
+}
+
+fn max_scroll() usize {
+
+    const total = total_rows();
+    const visible = visible_rows();
+
+    return if (total > visible) total - visible else 0;
+
+}
+
 fn clamp_scroll() void {
 
     const row = cursor_row();
@@ -507,6 +536,31 @@ fn clamp_scroll() void {
     if (row < scroll_row) scroll_row = row;
 
     if (row >= scroll_row + visible_rows()) scroll_row = row - visible_rows() + 1;
+
+    if (scroll_row > max_scroll()) scroll_row = max_scroll();
+
+}
+
+/// Wheel scrolling, one row per notch; true when the view moved (repaint).
+fn wheel(delta: i64) bool {
+
+    if (delta < 0 and scroll_row < max_scroll()) {
+
+        scroll_row += 1;
+
+        return true;
+
+    }
+
+    if (delta > 0 and scroll_row > 0) {
+
+        scroll_row -= 1;
+
+        return true;
+
+    }
+
+    return false;
 
 }
 
@@ -526,28 +580,37 @@ fn paint() void {
     const max_w = width - text_x * 2;
 
     var row: usize = 0;
+    var shown: usize = 0;
     var line_start: usize = 0;
     var index: usize = 0;
 
-    while (index <= content_len and row < visible_rows()) : (index += 1) {
+    while (index <= content_len and shown < visible_rows()) : (index += 1) {
 
         const at_end = index == content_len;
 
         if (at_end or content[index] == '\n') {
 
-            if (row + scroll_row == cursor_row() and caret_on) {
+            if (row >= scroll_row) {
 
-                const before = content[line_start..@min(cursor, index)];
-                const caret_x = text_x + font.text_width(before, font_size);
+                const line_y = text_y + @as(i32, @intCast(shown)) * line_h;
 
-                surface.fill_rect(.{ .x = caret_x, .y = text_y + @as(i32, @intCast(row)) * line_h, .w = 1, .h = line_h - 2 }, ui.theme.accent);
+                if (row == cursor_row() and caret_on) {
+
+                    const before = content[line_start..@min(cursor, index)];
+                    const caret_x = text_x + font.text_width(before, font_size);
+
+                    surface.fill_rect(.{ .x = caret_x, .y = line_y, .w = 1, .h = line_h - 2 }, ui.theme.accent);
+
+                }
+
+                const line = content[line_start..index];
+                const clipped = ui.truncate(&font, line, font_size, max_w);
+
+                font.draw(surface, text_x, line_y, font_size, clipped, ui.theme.text);
+
+                shown += 1;
 
             }
-
-            const line = content[line_start..index];
-            const clipped = ui.truncate(&font, line, font_size, max_w);
-
-            font.draw(surface, text_x, text_y + @as(i32, @intCast(row)) * line_h, font_size, clipped, ui.theme.text);
 
             row += 1;
             line_start = index + 1;
@@ -563,6 +626,23 @@ fn paint() void {
         surface.fill_rect(.{ .x = text_x, .y = text_y, .w = 1, .h = line_h - 2 }, ui.theme.accent);
 
     }
+
+    const height: i32 = @intCast(surface.height);
+
+    ui.scrollbar(surface, .{
+
+        .x = width - ui.scrollbar_width - 2,
+        .y = text_y,
+        .w = ui.scrollbar_width,
+        .h = height - text_y - 4,
+
+    }, .{
+
+        .offset = @intCast(scroll_row),
+        .content = @intCast(total_rows()),
+        .viewport = @intCast(visible_rows()),
+
+    });
 
     window.present_all() catch {};
 

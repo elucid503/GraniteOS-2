@@ -84,13 +84,13 @@ const Tab = enum(usize) {
 
 };
 
-const tabs = [_]struct { label: []const u8, icon: []const u8 }{
+const tab_items = [_]ui.TabStrip.Item{
 
-    .{ .label = "Scheduler", .icon = lib.icons.apps },
-    .{ .label = "Processes", .icon = lib.icons.chart },
-    .{ .label = "CPU", .icon = lib.icons.cpu },
-    .{ .label = "Disk", .icon = lib.icons.disk },
-    .{ .label = "Memory", .icon = lib.icons.memory },
+    .{ .label = "Scheduler", .svg = lib.icons.apps },
+    .{ .label = "Processes", .svg = lib.icons.chart },
+    .{ .label = "CPU", .svg = lib.icons.cpu },
+    .{ .label = "Disk", .svg = lib.icons.disk },
+    .{ .label = "Memory", .svg = lib.icons.memory },
 
 };
 
@@ -177,8 +177,7 @@ var window: lib.window.Window = undefined;
 
 var active: Tab = .scheduler;
 
-var tab_ptr_x: i32 = -1;
-var last_tab_hover: i32 = -2;
+var tab_strip = ui.TabStrip{ .items = &tab_items, .height = tab_height };
 
 // Shared between the sampler thread and the paint loop.
 
@@ -258,10 +257,14 @@ fn run() !void {
 
                 events.kind_button_down => {
 
-                    if (event.code == events.button_left and event.y < tab_height) {
+                    if (event.code == events.button_left) {
 
-                        select_tab(event.x);
-                        dirty = true;
+                        if (tab_strip.index_at(@intCast(window.surface.width), event.x, event.y)) |index| {
+
+                            active = @enumFromInt(index);
+                            dirty = true;
+
+                        }
 
                     }
 
@@ -283,25 +286,7 @@ fn run() !void {
 
                 events.kind_pointer_move => {
 
-                    tab_ptr_x = event.x;
-
-                    if (event.y < tab_height) {
-
-                        const token = tab_hover_token(event.x);
-
-                        if (token != last_tab_hover) {
-
-                            last_tab_hover = token;
-                            paint_tabs_only();
-
-                        }
-
-                    } else if (last_tab_hover != -2) {
-
-                        last_tab_hover = -2;
-                        paint_tabs_only();
-
-                    }
+                    if (tab_strip.pointer_move(@intCast(window.surface.width), event.x, event.y)) paint_tabs_only();
 
                     update_cursor(event.x, event.y);
 
@@ -322,19 +307,6 @@ fn run() !void {
         _ = sys.wait(ready) catch {};
 
     }
-
-}
-
-fn select_tab(x: i32) void {
-
-    const width: i32 = @intCast(window.surface.width);
-    const each = @divTrunc(width, @as(i32, @intCast(tabs.len)));
-
-    if (each <= 0) return;
-
-    const index: usize = @intCast(@min(@divTrunc(x, each), @as(i32, @intCast(tabs.len - 1))));
-
-    active = @enumFromInt(index);
 
 }
 
@@ -430,17 +402,6 @@ fn busy_cores(snapshot: sysinfo.CpuSnapshot) u32 {
 
 }
 
-fn tab_hover_token(x: i32) i32 {
-
-    const width: i32 = @intCast(window.surface.width);
-    const each = @divTrunc(width, @as(i32, @intCast(tabs.len)));
-
-    if (each <= 0) return -1;
-
-    return @intCast(@min(@divTrunc(x, each), @as(i32, @intCast(tabs.len - 1))));
-
-}
-
 fn update_cursor(_: i32, y: i32) void {
 
     if (y < tab_height) lib.cursor.set(&connection, .clicker)
@@ -452,7 +413,7 @@ fn update_cursor(_: i32, y: i32) void {
 
 fn tab_bar_rect() Rect {
 
-    return .{ .x = 0, .y = 0, .w = @intCast(window.surface.width), .h = tab_height };
+    return tab_strip.bar_rect(@intCast(window.surface.width));
 
 }
 
@@ -495,51 +456,7 @@ fn paint() void {
 
 fn paint_tabs(surface: *const gfx.Surface) void {
 
-    const width: i32 = @intCast(surface.width);
-    const each = @divTrunc(width, @as(i32, @intCast(tabs.len)));
-    const active_index: i32 = @intCast(@intFromEnum(active));
-    const active_x = active_index * each;
-    const border_y = tab_height - 1;
-    const active_pill_left = active_x + 10;
-    const active_pill_right = active_x + each - 10;
-
-    surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = tab_height }, ui.theme.surface_alt);
-
-    for (tabs, 0..) |tab, index| {
-
-        const x = @as(i32, @intCast(index)) * each;
-        const is_active = active_index == @as(i32, @intCast(index));
-        const is_hovered = last_tab_hover == @as(i32, @intCast(index));
-        const pill = Rect{ .x = x + 10, .y = 6, .w = each - 20, .h = tab_height - 12 };
-
-        if (is_active) {
-
-            ui.fill_round_rect(surface, pill, 6, ui.theme.active);
-
-        } else if (is_hovered) {
-
-            ui.fill_round_rect(surface, pill, 6, ui.theme.hover);
-
-        }
-
-        const tint = if (is_active) ui.theme.text else ui.theme.text_dim;
-
-        lib.draw.vector.icon_in(surface, .{ .x = x + 18, .y = 11, .w = 20, .h = 20 }, tab.icon, tint);
-        text_in(surface, .{ .x = x + 44, .y = 0, .w = each - 48, .h = tab_height }, 0, 14, tab.label, tint);
-
-    }
-
-    if (active_pill_left > 0) {
-
-        surface.fill_rect(.{ .x = 0, .y = border_y, .w = active_pill_left, .h = 1 }, ui.theme.border);
-
-    }
-
-    if (active_pill_right < width) {
-
-        surface.fill_rect(.{ .x = active_pill_right, .y = border_y, .w = width - active_pill_right, .h = 1 }, ui.theme.border);
-
-    }
+    tab_strip.paint(surface, &font, @intCast(surface.width), @intFromEnum(active));
 
 }
 

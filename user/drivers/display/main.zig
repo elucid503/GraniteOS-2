@@ -281,9 +281,11 @@ const cursorq = 1;
 const cursor_resource: u32 = 1;
 
 const notification_bit: u64 = 1;
-const submit_sleep_ns: u64 = 1_000_000;
-const control_submit_waits: usize = 250;
-const cursor_submit_waits: usize = 50;
+const tick_bit: u64 = 2;
+
+const watchdog_tick_ns: u64 = 10_000_000;
+const control_submit_timeout_ns: u64 = 250_000_000;
+const cursor_submit_timeout_ns: u64 = 50_000_000;
 
 var regs: usize = 0;
 var version: u32 = 0;
@@ -312,8 +314,13 @@ var cursor_ready = false;
 var event_notification: ?Handle = null;
 var event_bits: u64 = proto.display.mode_bit;
 
-// virtio completion and config events share one bound notification; submit() sleeps on it instead of spinning.
+// virtio completion and config events share one bound notification; submit() blocks on it instead of spinning.
 var device_wake: Handle = 0;
+
+// A watchdog thread ticks device_wake while a submission is in flight, so a dead host (headless boot, closed
+// SDL window) still bounds the wait and lets submit() return error.Gone instead of hanging forever.
+var watchdog_arm: Handle = 0;
+var submit_in_flight: bool = false;
 
 // EVENT_DISPLAY can assert while submit() is waiting; note it here and apply after the in-flight command finishes.
 var display_config_pending = false;
@@ -340,6 +347,9 @@ fn run() !void {
     device_wake = try sys.create(.notification, 0, 0);
     try sys.bind(cap.driver.interrupt, device_wake, notification_bit);
     try sys.configure(cap.self_thread, .bound_notification, device_wake);
+
+    watchdog_arm = try sys.create(.notification, 0, 0);
+    try start_watchdog();
 
     const dma = try sys.create_dma(dma_pages * page_size, cap.driver.dma);
     dma_base = try sys.map(cap.self_space, dma.region, 0, sys.read | sys.write);
@@ -914,7 +924,8 @@ fn apply_display_resize() bool {
 
 }
 
-// Synchronous command submission: one out descriptor (the command), one in descriptor (the response), then poll the used ring. Config events raised while polling are handled on the next endpoint wake.
+// Synchronous command submission: one out descriptor (the command), one in descriptor (the response), then block
+// on the bound completion interrupt. Config events raised while waiting are handled on the next endpoint wake.
 
 fn command(comptime T: type, payload: T) !u32 {
 
@@ -966,8 +977,16 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
 
     const used: *volatile Used = @ptrFromInt(queue_base + used_offset);
 
-    const wait_limit = if (queue == cursorq) cursor_submit_waits else control_submit_waits;
-    var waits: usize = 0;
+    const timeout_ns = if (queue == cursorq) cursor_submit_timeout_ns else control_submit_timeout_ns;
+    const deadline = lib.time.now_ns() + timeout_ns;
+
+    @atomicStore(bool, &submit_in_flight, true, .release);
+    defer @atomicStore(bool, &submit_in_flight, false, .release);
+
+    sys.notify(watchdog_arm, tick_bit) catch {};
+
+    // The device is only quieted after the kernel has masked the (level-triggered) line and signaled the
+    // notification; acknowledging earlier could drop the wakeup and hang the wait.
 
     while (true) {
 
@@ -976,21 +995,58 @@ fn submit(queue: u32, length: usize, bytes: [*]const u8) !u32 {
         if (used.idx != last_used[queue]) {
 
             last_used[queue] = used.idx;
+
             acknowledge_used();
+            _ = sys.acknowledge(cap.driver.interrupt) catch {};
+
+            note_display_config_event();
 
             return response.kind;
 
         }
 
+        if (lib.time.now_ns() >= deadline) return error.Gone;
+
+        _ = sys.wait(device_wake) catch return error.Gone;
+
         acknowledge_used();
+        _ = sys.acknowledge(cap.driver.interrupt) catch {};
 
         note_display_config_event();
 
-        if (waits >= wait_limit) return error.Gone;
+    }
 
-        sys.sleep(submit_sleep_ns);
+}
 
-        waits += 1;
+// Ticks device_wake while a submission is in flight so submit()'s deadline is checked even if the host
+// never completes the command (and therefore never raises the interrupt).
+
+const watchdog_stack_pages = 4;
+
+fn start_watchdog() !void {
+
+    const stack = try sys.create(.region, watchdog_stack_pages * page_size, cap.memory);
+    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
+    const thread = try sys.create_thread(@intFromPtr(&watchdog), base + watchdog_stack_pages * page_size);
+
+    sys.close(stack) catch {};
+
+    try sys.start(thread);
+
+}
+
+fn watchdog() callconv(.c) noreturn {
+
+    while (true) {
+
+        _ = sys.wait(watchdog_arm) catch {};
+
+        while (@atomicLoad(bool, &submit_in_flight, .acquire)) {
+
+            sys.sleep(watchdog_tick_ns);
+            sys.notify(device_wake, tick_bit) catch {};
+
+        }
 
     }
 

@@ -34,32 +34,26 @@ const MenuAction = enum {
 
 };
 
-const MenuRow = union(enum) {
+// Row labels and their actions stay parallel; ui.Menu owns layout, hover, hit-testing, and painting.
 
-    action: MenuAction,
-    separator,
+const desktop_menu_rows = [_]ui.Menu.Row{
 
-};
-
-const desktop_menu_rows = [_]MenuRow{
-
-    .{ .action = .create_file },
-    .{ .action = .create_folder },
-    .{ .separator = {} },
-    .{ .action = .open_marble },
+    .{ .item = "Create New File" },
+    .{ .item = "Create New Folder" },
+    .separator,
+    .{ .item = "Open MARBLE Here" },
 
 };
 
-const pin_menu_rows = [_]MenuRow{
+const desktop_menu_actions = [_]?MenuAction{ .create_file, .create_folder, null, .open_marble };
 
-    .{ .action = .remove_pin },
+const pin_menu_rows = [_]ui.Menu.Row{
+
+    .{ .item = "Remove from Desktop" },
 
 };
 
-const menu_row_h: i32 = 30;
-const menu_separator_h: i32 = 9;
-const menu_w: i32 = 190;
-const menu_inset: i32 = 4;
+const pin_menu_actions = [_]?MenuAction{.remove_pin};
 
 const prompt_width: i32 = 300;
 const prompt_height: i32 = 120;
@@ -82,10 +76,7 @@ var wallpaper_image: ?lib.draw.png.Image = null;
 var wallpaper_theme: ?lib.prefs.ThemeId = null;
 var wallpaper_arena: []u8 = &.{};
 
-var menu_open = false;
-var menu_x: i32 = 0;
-var menu_y: i32 = 0;
-var menu_hover: ?usize = null;
+var menu = ui.Menu{};
 var menu_opened_ms: u64 = 0;
 var menu_on_pin: ?usize = null;
 
@@ -111,9 +102,9 @@ const PromptKind = enum {
 
 };
 
-fn active_menu_rows() []const MenuRow {
+fn active_menu_actions() []const ?MenuAction {
 
-    return if (menu_on_pin != null) pin_menu_rows[0..] else desktop_menu_rows[0..];
+    return if (menu_on_pin != null) pin_menu_actions[0..] else desktop_menu_actions[0..];
 
 }
 
@@ -224,16 +215,9 @@ fn handle_desktop(event: events.Event) void {
 
             update_cursor(event.x, event.y);
 
-            if (menu_open) {
+            if (menu.open) {
 
-                const hit = menu_hit(event.x, event.y);
-
-                if (hit != menu_hover) {
-
-                    menu_hover = hit;
-                    paint_menu_region();
-
-                }
+                if (menu.pointer_move(event.x, event.y)) paint_menu_region();
 
                 return;
 
@@ -268,7 +252,7 @@ fn handle_desktop(event: events.Event) void {
 
             if (lib.time.now_ms() - menu_opened_ms < blur_guard_ms) return;
 
-            if (menu_open or prompt_open) {
+            if (menu.open or prompt_open) {
 
                 close_menu();
                 close_prompt();
@@ -341,9 +325,9 @@ fn update_cursor(x: i32, y: i32) void {
 
     }
 
-    if (menu_open) {
+    if (menu.open) {
 
-        if (menu_hit(x, y) != null) lib.cursor.set(&connection, .clicker)
+        if (menu.hit(x, y) != null) lib.cursor.set(&connection, .clicker)
         else lib.cursor.set(&connection, .pointer);
 
         return;
@@ -363,7 +347,7 @@ fn button_down(event: events.Event) void {
     const previous_pins = pin_count;
     reload_pins_if_stale();
 
-    if (previous_pins != pin_count and !menu_open and !prompt_open) paint_desktop();
+    if (previous_pins != pin_count and !menu.open and !prompt_open) paint_desktop();
 
     if (prompt_open) {
 
@@ -373,11 +357,11 @@ fn button_down(event: events.Event) void {
 
     }
 
-    if (menu_open and event.code == events.button_left) {
+    if (menu.open and event.code == events.button_left) {
 
-        if (menu_hit(event.x, event.y)) |hit| {
+        if (menu.hit(event.x, event.y)) |hit| {
 
-            const action = menu_action(hit);
+            const action = active_menu_actions()[hit];
             const pin_index = menu_on_pin;
 
             close_menu();
@@ -423,7 +407,7 @@ fn button_down(event: events.Event) void {
 
     }
 
-    if (menu_open) {
+    if (menu.open) {
 
         close_menu();
         return;
@@ -438,20 +422,12 @@ fn open_menu(x: i32, y: i32, pin_index: ?usize) void {
 
     close_prompt();
 
-    menu_x = x;
-    menu_y = y;
-    menu_hover = null;
     menu_on_pin = pin_index;
-    menu_open = true;
     menu_opened_ms = lib.time.now_ms();
 
-    // Clamp to the desktop surface.
-    const width: i32 = @intCast(desktop.surface.width);
-    const height: i32 = @intCast(desktop.surface.height);
-    const menu_h = menu_content_height() + menu_inset * 2;
+    const rows: []const ui.Menu.Row = if (pin_index != null) pin_menu_rows[0..] else desktop_menu_rows[0..];
 
-    if (menu_x + menu_w > width) menu_x = @max(0, width - menu_w);
-    if (menu_y + menu_h > height) menu_y = @max(0, height - menu_h);
+    menu.open_at(rows, x, y, @intCast(desktop.surface.width), @intCast(desktop.surface.height));
 
     paint_desktop();
 
@@ -459,10 +435,9 @@ fn open_menu(x: i32, y: i32, pin_index: ?usize) void {
 
 fn close_menu() void {
 
-    if (!menu_open) return;
+    if (!menu.open) return;
 
-    menu_open = false;
-    menu_hover = null;
+    menu.close();
     menu_on_pin = null;
 
     paint_desktop();
@@ -627,53 +602,6 @@ fn open_marble_here() void {
 
 }
 
-fn menu_label(action: MenuAction) []const u8 {
-
-    return switch (action) {
-
-        .create_file => "Create New File",
-        .create_folder => "Create New Folder",
-        .open_marble => "Open MARBLE Here",
-        .remove_pin => "Remove from Desktop",
-
-    };
-
-}
-
-fn menu_action(index: usize) ?MenuAction {
-
-    const rows = active_menu_rows();
-
-    if (index >= rows.len) return null;
-
-    return switch (rows[index]) {
-
-        .action => |action| action,
-        .separator => null,
-
-    };
-
-}
-
-fn menu_content_height() i32 {
-
-    var height: i32 = 0;
-
-    for (active_menu_rows()) |row| {
-
-        height += switch (row) {
-
-            .action => menu_row_h,
-            .separator => menu_separator_h,
-
-        };
-
-    }
-
-    return height;
-
-}
-
 fn confirm_prompt() void {
 
     const name = name_field.slice();
@@ -709,19 +637,6 @@ fn prompt_rect() Rect {
 
 }
 
-fn menu_bounds() Rect {
-
-    return .{
-
-        .x = menu_x,
-        .y = menu_y,
-        .w = menu_w,
-        .h = menu_content_height() + menu_inset * 2,
-
-    };
-
-}
-
 fn paint_menu_region() void {
 
     // Menu hover redraws the whole desktop so pin icons under the menu stay correct.
@@ -736,7 +651,7 @@ fn paint_desktop() void {
     paint_wallpaper(surface, null);
     paint_pins(surface);
 
-    if (menu_open) paint_menu(surface);
+    menu.paint(surface, &font);
 
     if (prompt_open) paint_prompt(surface);
 
@@ -817,7 +732,7 @@ fn paint_wallpaper(surface: *const gfx.Surface, rect: ?Rect) void {
 /// Only repaint the pin cells that changed hover state — avoids a full desktop present on every move.
 fn paint_pin_hover(previous: ?usize, next: ?usize) void {
 
-    if (menu_open or prompt_open) {
+    if (menu.open or prompt_open) {
 
         paint_desktop();
         return;
@@ -977,138 +892,3 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
 }
 
-fn menu_hit(x: i32, y: i32) ?usize {
-
-    if (x < menu_x or x >= menu_x + menu_w) return null;
-
-    var cursor_y = menu_y + menu_inset;
-
-    if (y < cursor_y) return null;
-
-    const rows = active_menu_rows();
-
-    for (rows, 0..) |row, index| {
-
-        const span = switch (row) {
-
-            .action => menu_row_h,
-            .separator => menu_separator_h,
-
-        };
-
-        if (y >= cursor_y and y < cursor_y + span) {
-
-            return switch (row) {
-
-                .action => index,
-                .separator => null,
-
-            };
-
-        }
-
-        cursor_y += span;
-
-    }
-
-    return null;
-
-}
-
-fn paint_menu(surface: *const gfx.Surface) void {
-
-    var page = ui.Page{ .font = &font };
-
-    page.begin(@intCast(surface.width), @intCast(surface.height), .{
-
-        .width = .{ .px = @intCast(surface.width) },
-        .height = .{ .px = @intCast(surface.height) },
-
-    });
-
-    const menu = page.box(ui.Page.root, .{
-
-        .direction = .column,
-        .width = .{ .px = menu_w },
-        .height = .{ .px = menu_content_height() + menu_inset * 2 },
-        .margin = .{ .left = menu_x, .top = menu_y },
-        .padding = ui.Edge.all(menu_inset),
-        .background = ui.theme.surface,
-        .border = ui.theme.border,
-        .radius = 6,
-
-    });
-
-    const rows = active_menu_rows();
-
-    for (rows, 0..) |row, index| {
-
-        switch (row) {
-
-            .action => |action| {
-
-                const hovered = menu_hover != null and menu_hover.? == index;
-
-                _ = page.label(menu, menu_label(action), .{
-
-                    .width = .{ .grow = 1 },
-                    .height = .{ .px = menu_row_h - 1 },
-                    .padding = ui.Edge.symmetric(12, 0),
-                    .size = 13,
-                    .color = ui.theme.text,
-                    .background = if (hovered) ui.theme.hover else null,
-                    .radius = 4,
-
-                });
-
-            },
-
-            .separator => {
-
-                _ = page.box(menu, .{
-
-                    .width = .{ .grow = 1 },
-                    .height = .{ .px = menu_separator_h },
-                    .margin = ui.Edge.only(0, 0, 2, 0),
-
-                });
-
-            },
-
-        }
-
-    }
-
-    page.end();
-    page.paint(surface);
-
-    var cursor_y = menu_y + menu_inset;
-
-    for (rows) |row| {
-
-        switch (row) {
-
-            .action => cursor_y += menu_row_h,
-
-            .separator => {
-
-                const line_y = cursor_y + @divTrunc(menu_separator_h, 2);
-
-                surface.fill_rect(.{
-
-                    .x = menu_x + menu_inset + 8,
-                    .y = line_y,
-                    .w = menu_w - 2 * menu_inset - 16,
-                    .h = 1,
-
-                }, ui.theme.border);
-
-                cursor_y += menu_separator_h;
-
-            },
-
-        }
-
-    }
-
-}

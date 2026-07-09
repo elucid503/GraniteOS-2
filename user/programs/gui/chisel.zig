@@ -1328,25 +1328,27 @@ fn is_shape_tool(t: Tool) bool {
 
 fn paint_chip(surface: *const gfx.Surface, rect: Rect, label: []const u8, hot: bool, selected: bool) void {
 
-    const fill = if (selected) ui.theme.active else if (hot) ui.theme.hover else ui.theme.surface_alt;
+    ui.widgets.button(surface, &font, rect, label, .{
 
-    ui.fill_round_rect(surface, rect, chip_radius, fill);
-    ui.stroke_round_rect(surface, rect, chip_radius, 1, if (selected) ui.theme.accent else ui.theme.border);
+        .hovered = hot,
+        .selected = selected,
+        .outlined = true,
 
-    const text_w = font.text_width(label, 12);
-    const tx = rect.x + @divTrunc(rect.w - text_w, 2);
-    const ty = rect.y + @divTrunc(rect.h - font.line_height(12), 2);
-
-    font.draw(surface, tx, ty, 12, label, ui.theme.text);
+    }, .{ .radius = chip_radius, .size = 12 });
 
 }
 
 fn paint_menu_chip(surface: *const gfx.Surface, rect: Rect, label: []const u8, hot: bool, selected: bool) void {
 
-    const fill = if (selected) ui.theme.active else if (hot) ui.theme.hover else ui.theme.surface_alt;
+    // The shared chip frame, then a label+chevron composite centered by hand.
 
-    ui.fill_round_rect(surface, rect, chip_radius, fill);
-    ui.stroke_round_rect(surface, rect, chip_radius, 1, if (selected) ui.theme.accent else ui.theme.border);
+    ui.widgets.button(surface, &font, rect, "", .{
+
+        .hovered = hot,
+        .selected = selected,
+        .outlined = true,
+
+    }, .{ .radius = chip_radius, .size = 12 });
 
     const text_w = font.text_width(label, 12);
     const chevron_gap: i32 = 6;

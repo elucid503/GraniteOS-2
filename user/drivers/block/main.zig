@@ -7,6 +7,7 @@ const ipc = lib.ipc;
 const proto = lib.proto;
 const sys = lib.sys;
 
+const Handle = cap.Handle;
 const Message = ipc.Message;
 
 comptime {
@@ -127,6 +128,11 @@ var dma_physical: u64 = 0;
 var sector_count: u64 = 0;
 var last_used: u16 = 0;
 
+// Completion interrupts land here; transfer() blocks in wait instead of spinning on the used ring.
+var completion: Handle = 0;
+
+const completion_bit: u64 = 1;
+
 // Per-client shared buffers (05-server-protocol.md): attached once, then reused by every read/write.
 
 const max_sessions = 16;
@@ -162,6 +168,9 @@ fn run() !void {
 
     const window = try sys.map(cap.self_space, cap.driver.device, 0, sys.read | sys.write);
     regs = window + @as(usize, @intCast(lib.start.word(3)));
+
+    completion = try sys.create(.notification, 0, 0);
+    try sys.bind(cap.driver.interrupt, completion, completion_bit);
 
     const dma = try sys.create_dma(dma_pages * page_size, cap.driver.dma);
     dma_base = try sys.map(cap.self_space, dma.region, 0, sys.read | sys.write);
@@ -340,7 +349,7 @@ fn write_sector(badge: u64, sector: u64, offset: u64) i64 {
 
 }
 
-// Submit one 3-descriptor request chain (header, one sector, status byte) and sleep until the device completes it.
+// Submit one 3-descriptor request chain (header, one sector, status byte) and block until the completion interrupt.
 
 fn transfer(kind: u32, sector: u64) i64 {
 
@@ -380,6 +389,9 @@ fn transfer(kind: u32, sector: u64) i64 {
 
     const used: *volatile Used = @ptrFromInt(dma_base + used_offset);
 
+    // Clearing the device's interrupt status before the line fires would drop the (level-triggered) wakeup,
+    // so the device is only quieted after the kernel has masked the line and signaled the notification.
+
     while (true) {
 
         barrier();
@@ -387,14 +399,18 @@ fn transfer(kind: u32, sector: u64) i64 {
         if (used.idx != last_used) {
 
             last_used = used.idx;
+
             acknowledge_device_status();
+            _ = sys.acknowledge(cap.driver.interrupt) catch {};
 
             return if (status_byte.* == 0) 0 else -7;
 
         }
 
+        _ = sys.wait(completion) catch return -7;
+
         acknowledge_device_status();
-        sys.yield();
+        _ = sys.acknowledge(cap.driver.interrupt) catch {};
 
     }
 

@@ -9,6 +9,7 @@ pub const cap = @import("cap/cap.zig");
 pub const ipc = @import("ipc/ipc.zig");
 pub const proto = @import("ipc/proto.zig");
 pub const session = @import("ipc/session.zig");
+pub const sync = @import("sync.zig");
 pub const mem = @import("mem/mem.zig");
 pub const dtb = @import("boot/dtb.zig");
 pub const bundle = @import("boot/bundle.zig");

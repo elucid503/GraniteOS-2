@@ -111,13 +111,17 @@ var keyboard = lib.keymap.Keyboard{};
 var search_storage: [48]u8 = undefined;
 var search = ui.EditBuffer{ .bytes = &search_storage };
 
-var bar_ptr_x: i32 = -1;
-var menu_ptr_x: i32 = -1;
-var menu_ptr_y: i32 = -1;
+// Hit regions per window, rebuilt on paint; a move only repaints when the hovered id actually changes.
 
-// Which element the pointer last hovered, so a move only repaints when the highlight would actually change.
-var last_bar_hover: i32 = -3;
-var last_menu_hover: i32 = -3;
+var bar_regions = ui.HitRegions{};
+var menu_regions = ui.HitRegions{};
+
+const launcher_id: u32 = 1;
+const overflow_id: u32 = 99;
+const window_id_base: u32 = 100;
+const category_id_base: u32 = 1000;
+const browse_id_base: u32 = 2000;
+const search_id_base: u32 = 3000;
 
 var ready: cap.Handle = 0;
 // Separate wake bits so the clock tick does not re-list every window over IPC.
@@ -205,9 +209,11 @@ fn handle(event: events.Event) void {
 
 }
 
-fn update_bar_cursor(x: i32) void {
+fn update_bar_cursor(x: i32, y: i32) void {
 
-    if (x < launcher_width() or bar_hover_token(x) >= 0) lib.cursor.set(&connection, .clicker)
+    const id = bar_regions.hit(x, y);
+
+    if (id != 0 and id != overflow_id) lib.cursor.set(&connection, .clicker)
     else lib.cursor.set(&connection, .pointer);
 
 }
@@ -215,7 +221,7 @@ fn update_bar_cursor(x: i32) void {
 fn update_menu_cursor(x: i32, y: i32) void {
 
     if (y < search_height()) lib.cursor.set(&connection, .selector)
-    else if (menu_hover_token(x, y) >= 0) lib.cursor.set(&connection, .clicker)
+    else if (menu_regions.hit(x, y) != 0) lib.cursor.set(&connection, .clicker)
     else lib.cursor.set(&connection, .pointer);
 
 }
@@ -252,31 +258,24 @@ fn handle_bar(event: events.Event) void {
 
             if (event.code != events.button_left) return;
 
-            if (event.x < launcher_width()) {
+            const id = bar_regions.hit(event.x, event.y);
+
+            if (id == launcher_id) {
 
                 toggle_menu();
                 return;
 
             }
 
-            activate_at(event.x);
+            if (id >= window_id_base) activate_window(id - window_id_base);
 
         },
 
         events.kind_pointer_move => {
 
-            bar_ptr_x = event.x;
+            if (bar_regions.pointer_move(event.x, event.y)) paint_bar();
 
-            const token = bar_hover_token(event.x);
-
-            if (token != last_bar_hover) {
-
-                last_bar_hover = token;
-                paint_bar();
-
-            }
-
-            update_bar_cursor(event.x);
+            update_bar_cursor(event.x, event.y);
 
         },
 
@@ -307,30 +306,6 @@ fn handle_bar(event: events.Event) void {
 
 }
 
-fn bar_hover_token(x: i32) i32 {
-
-    if (x < launcher_width()) return -2;
-
-    const layout = button_layout();
-
-    if (layout.width <= 0 or x < layout.start) return -1;
-
-    var index: usize = 0;
-
-    while (index < layout.visible) : (index += 1) {
-
-        const left = layout.start + @as(i32, @intCast(index)) * (layout.width + button_gap());
-
-        if (x >= left and x < left + layout.width) return @intCast(index);
-
-    }
-
-    if (layout.overflow and x >= layout.overflow_x and x < layout.overflow_x + layout.width) return -4;
-
-    return -1;
-
-}
-
 fn handle_menu(event: events.Event) void {
 
     switch (event.kind) {
@@ -344,9 +319,6 @@ fn handle_menu(event: events.Event) void {
         },
 
         events.kind_pointer_move => {
-
-            menu_ptr_x = event.x;
-            menu_ptr_y = event.y;
 
             var need = false;
 
@@ -366,14 +338,7 @@ fn handle_menu(event: events.Event) void {
 
             }
 
-            const token = menu_hover_token(event.x, event.y);
-
-            if (token != last_menu_hover) {
-
-                last_menu_hover = token;
-                need = true;
-
-            }
+            if (menu_regions.pointer_move(event.x, event.y)) need = true;
 
             if (need) paint_menu();
 
@@ -389,24 +354,9 @@ fn handle_menu(event: events.Event) void {
 
 }
 
-fn activate_at(x: i32) void {
+fn activate_window(index: usize) void {
 
-    if (window_count == 0) return;
-
-    const layout = button_layout();
-
-    if (layout.width <= 0) return;
-
-    if (x < layout.start) return;
-
-    const stride = layout.width + button_gap();
-    const index: usize = @intCast(@divTrunc(x - layout.start, stride));
-
-    if (index >= layout.visible) return;
-
-    const left = layout.start + @as(i32, @intCast(index)) * stride;
-
-    if (x >= left + layout.width) return;
+    if (index >= window_count) return;
 
     const entry = windows[index];
 
@@ -457,11 +407,13 @@ fn menu_key(code: u16) void {
 
 fn menu_click(x: i32, y: i32) void {
 
-    if (y < search_height()) return;
+    const id = menu_regions.hit(x, y);
 
-    if (searching()) {
+    if (id == 0) return;
 
-        if (search_app_at(y)) |app| {
+    if (id >= search_id_base) {
+
+        if (search_app(id - search_id_base)) |app| {
 
             launch(app.program);
             close_menu();
@@ -472,16 +424,12 @@ fn menu_click(x: i32, y: i32) void {
 
     }
 
-    if (x < category_col_width()) {
+    if (id >= browse_id_base) {
 
-        if (category_at(y)) |index| {
+        if (category_app(active_category, id - browse_id_base)) |app| {
 
-            if (index != active_category) {
-
-                active_category = index;
-                paint_menu();
-
-            }
+            launch(app.program);
+            close_menu();
 
         }
 
@@ -489,10 +437,12 @@ fn menu_click(x: i32, y: i32) void {
 
     }
 
-    if (browse_app_at(y)) |app| {
+    const index = id - category_id_base;
 
-        launch(app.program);
-        close_menu();
+    if (index != active_category) {
+
+        active_category = index;
+        paint_menu();
 
     }
 
@@ -654,22 +604,6 @@ fn category_at(y: i32) ?usize {
 
 }
 
-fn browse_app_at(y: i32) ?lib.wm.App {
-
-    const row = row_at(y) orelse return null;
-
-    return category_app(active_category, row);
-
-}
-
-fn search_app_at(y: i32) ?lib.wm.App {
-
-    const row = row_at(y) orelse return null;
-
-    return search_app(row);
-
-}
-
 fn launch_first() void {
 
     for (apps[0..app_count]) |app| {
@@ -783,9 +717,8 @@ fn open_menu() void {
 
     search.clear();
     active_category = 0;
-    menu_ptr_x = -1;
-    menu_ptr_y = -1;
-    last_menu_hover = -3;
+
+    _ = menu_regions.leave();
 
     // Reopen at the browse size; a prior session may have left the window expanded for search results.
     sync_menu_size();
@@ -843,28 +776,6 @@ fn launch(program: []const u8) void {
     }
 
     _ = ipc.request(launch_endpoint, proto.launch.spawn, &words, &.{}) catch {};
-
-}
-
-// A stable token per hovered element so a pointer move only repaints when the highlight actually changes.
-fn menu_hover_token(x: i32, y: i32) i32 {
-
-    const row = row_at(y) orelse return -1;
-    const index: i32 = @intCast(row);
-
-    if (searching()) {
-
-        return if (row < match_count()) 3000 + index else -2;
-
-    }
-
-    if (x < category_col_width()) {
-
-        return if (row < category_count) 1000 + index else -2;
-
-    }
-
-    return if (row < category_size(active_category)) 2000 + index else -2;
 
 }
 
@@ -938,6 +849,8 @@ fn paint_bar() void {
     surface.fill(ui.theme.surface_alt);
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = 1 }, ui.theme.border);
 
+    bar_regions.reset();
+
     // Launcher button.
 
     const icon_size: i32 = 22;
@@ -951,7 +864,9 @@ fn paint_bar() void {
 
     };
 
-    const launcher_hovered = bar_ptr_x >= 0 and bar_ptr_x < launcher_width();
+    bar_regions.add(launcher_id, .{ .x = 0, .y = 0, .w = launcher_width(), .h = bar_height() });
+
+    const launcher_hovered = bar_regions.hovered(launcher_id);
 
     if (menu_open) {
 
@@ -977,11 +892,14 @@ fn paint_bar() void {
 
         const x = layout.start + @as(i32, @intCast(index)) * (layout.width + button_gap());
         const rect = Rect{ .x = x, .y = 5, .w = layout.width, .h = bar_height() - 10 };
+        const id = window_id_base + @as(u32, @intCast(index));
+
+        bar_regions.add(id, .{ .x = x, .y = 0, .w = layout.width, .h = bar_height() });
 
         const info_entry = windows[index];
         const focused = info_entry.focused != 0;
         const minimized = info_entry.minimized != 0;
-        const hovered = bar_ptr_x >= rect.x and bar_ptr_x < rect.x + rect.w;
+        const hovered = bar_regions.hovered(id);
 
         const fill = if (minimized) ui.theme.surface else if (focused) ui.theme.accent_dim else if (hovered) ui.theme.hover else ui.theme.surface_alt;
 
@@ -1008,6 +926,8 @@ fn paint_bar() void {
     if (layout.overflow and layout.width > 0) {
 
         const rect = Rect{ .x = layout.overflow_x, .y = 5, .w = layout.width, .h = bar_height() - 10 };
+
+        bar_regions.add(overflow_id, .{ .x = layout.overflow_x, .y = 0, .w = layout.width, .h = bar_height() });
         const remaining = window_count - layout.visible;
         var buffer: [8]u8 = undefined;
         const label = std.fmt.bufPrint(&buffer, "+{d}", .{remaining}) catch "+";
@@ -1055,6 +975,8 @@ fn paint_menu_content() void {
     const width: i32 = @intCast(surface.width);
 
     panel(surface, surface.bounds(), ui.theme.window_bg);
+
+    menu_regions.reset();
 
     paint_search_box(surface, width);
 
@@ -1119,7 +1041,11 @@ fn paint_categories(surface: *const gfx.Surface) void {
 
         const top = search_height() + @as(i32, @intCast(index)) * row_height();
         const rect = Rect{ .x = 6, .y = top + 3, .w = col_w - 12, .h = row_height() - 6 };
-        const hovered = menu_ptr_x >= 0 and menu_ptr_x < col_w and menu_ptr_y >= rect.y and menu_ptr_y < rect.y + rect.h;
+        const id = category_id_base + @as(u32, @intCast(index));
+
+        menu_regions.add(id, .{ .x = 0, .y = rect.y, .w = col_w, .h = rect.h });
+
+        const hovered = menu_regions.hovered(id);
         const is_active = index == active_category;
 
         if (is_active) {
@@ -1162,9 +1088,11 @@ fn paint_category_apps(surface: *const gfx.Surface, width: i32) void {
         const app = category_app(active_category, index) orelse break;
         const top = search_height() + @as(i32, @intCast(index)) * row_height();
         const rect = Rect{ .x = left + 6, .y = top + 3, .w = width - left - 12, .h = row_height() - 6 };
-        const hovered = menu_ptr_x >= left and menu_ptr_y >= rect.y and menu_ptr_y < rect.y + rect.h;
+        const id = browse_id_base + @as(u32, @intCast(index));
 
-        paint_app_row(surface, rect, app, hovered);
+        menu_regions.add(id, .{ .x = left, .y = rect.y, .w = width - left, .h = rect.h });
+
+        paint_app_row(surface, rect, app, menu_regions.hovered(id));
 
     }
 
@@ -1174,6 +1102,7 @@ fn paint_search_results(surface: *const gfx.Surface, width: i32) void {
 
     var y = search_height();
     var any = false;
+    var nth: u32 = 0;
 
     for (apps[0..app_count]) |app| {
 
@@ -1182,11 +1111,14 @@ fn paint_search_results(surface: *const gfx.Surface, width: i32) void {
         any = true;
 
         const rect = Rect{ .x = 6, .y = y + 3, .w = width - 12, .h = row_height() - 6 };
-        const hovered = menu_ptr_y >= rect.y and menu_ptr_y < rect.y + rect.h;
+        const id = search_id_base + nth;
 
-        paint_app_row(surface, rect, app, hovered);
+        menu_regions.add(id, .{ .x = 0, .y = rect.y, .w = width, .h = rect.h });
+
+        paint_app_row(surface, rect, app, menu_regions.hovered(id));
 
         y += row_height();
+        nth += 1;
 
     }
 
