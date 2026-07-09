@@ -111,6 +111,21 @@ pub const timer =
     \\</svg>
 ;
 
+pub const paint =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M4 18 L8 14 L18 4 L20 6 L10 16 L6 20 Z"/>
+    \\<path d="M14 8 L16 10"/>
+    \\</svg>
+;
+
+pub const image =
+    \\<svg viewBox="0 0 24 24">
+    \\<rect x="3" y="5" width="18" height="14" rx="1"/>
+    \\<circle cx="9" cy="10" r="2"/>
+    \\<polyline points="5 17 10 13 14 16 19 11"/>
+    \\</svg>
+;
+
 // Lucide mouse-pointer-2 — default arrow cursor.
 pub const pointer =
     \\<svg viewBox="0 0 24 24">

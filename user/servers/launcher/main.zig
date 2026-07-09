@@ -1,6 +1,4 @@
-// The launcher: the desktop's program spawner. GUI clients (the taskbar menu) ask it to start a bundled program by
-// name; it holds the module bundle, a memory authority for child budgets, and a console endpoint to hand each child
-// as its tty - so a taskbar needs no spawn authority of its own. It mirrors Flint's GUI spawn, one step removed.
+// The launcher: the desktop's program spawner.
 
 const std = @import("std");
 

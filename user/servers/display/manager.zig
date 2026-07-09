@@ -16,7 +16,7 @@ pub const max_windows = proto.window.max_windows;
 pub const title_height: i32 = 28;
 pub const chrome_size: i32 = 14;
 pub const chrome_margin: i32 = 8;
-pub const chrome_gap: i32 = 6;
+pub const chrome_gap: i32 = 12;
 pub const chrome_buttons: i32 = 3;
 pub const title_padding: i32 = 10;
 

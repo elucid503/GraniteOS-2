@@ -1,8 +1,4 @@
-// Shell: a graphical terminal that runs MARBLE. It implements the Stream interface itself - the very interface the
-// console driver speaks - so it hands the unmodified MARBLE binary a badged endpoint as its tty and renders the
-// character stream MARBLE and its children write. Keystrokes from the compositor are queued and returned to their
-// stdin reads. Worker threads serve the tty (a blocking read must not stall another program's write); the GUI thread
-// owns the window and a small VT100-subset cell grid. MARBLE gets real pipelines, history, and program execution.
+// Shell: a graphical terminal that runs MARBLE.
 
 const std = @import("std");
 
@@ -23,6 +19,7 @@ pub const app_meta = .{
     .title = "Terminal",
     .description = "MARBLE command shell",
     .icon = "terminal",
+    .category = "System",
 };
 
 comptime {

@@ -478,7 +478,7 @@ pub fn Volume(comptime Device: type) type {
                 const in_block: usize = @intCast(at % block_size);
                 const chunk = @min(amount - done, block_size - in_block);
 
-                const mapped = try self.map_block(&inode, number, @intCast(at / block_size), false);
+                const mapped = try self.map_block(&inode, @intCast(at / block_size), false, true);
 
                 if (mapped == 0) {
 
@@ -515,9 +515,13 @@ pub fn Volume(comptime Device: type) type {
                 const in_block: usize = @intCast(at % block_size);
                 const chunk = @min(bytes.len - done, block_size - in_block);
 
-                const mapped = try self.map_block(&inode, number, @intCast(at / block_size), true);
+                // A full-block chunk overwrites every byte the allocator would otherwise zero first, so
+                // skip that zero-write entirely; only a partial chunk needs the freshly allocated block
+                // pre-zeroed before the read-modify-write merge below.
+                const full_block = chunk == block_size;
+                const mapped = try self.map_block(&inode, @intCast(at / block_size), true, !full_block);
 
-                if (chunk < block_size) {
+                if (!full_block) {
 
                     try self.read_device(mapped, &block);
 
@@ -673,7 +677,7 @@ pub fn Volume(comptime Device: type) type {
 
             var block: [block_size]u8 = undefined;
 
-            const mapped = try self.map_block(dir, 0, @intCast(offset / block_size), false);
+            const mapped = try self.map_block(dir, @intCast(offset / block_size), false, true);
 
             if (mapped == 0) return std.mem.zeroes(DirEntry);
 
@@ -685,11 +689,13 @@ pub fn Volume(comptime Device: type) type {
 
         }
 
-        fn dir_put_entry(self: *Self, dir: *Inode, number: u32, offset: u64, entry: *const DirEntry) Error!void {
+        fn dir_put_entry(self: *Self, dir: *Inode, offset: u64, entry: *const DirEntry) Error!void {
 
             var block: [block_size]u8 = undefined;
 
-            const mapped = try self.map_block(dir, number, @intCast(offset / block_size), true);
+            // A directory block only ever gets one DirEntry written at a time, so a freshly allocated
+            // block must stay zeroed everywhere else (a zero `inode` field marks a hole for scans).
+            const mapped = try self.map_block(dir, @intCast(offset / block_size), true, true);
 
             try self.read_device(mapped, &block);
 
@@ -725,7 +731,7 @@ pub fn Volume(comptime Device: type) type {
 
             }
 
-            try self.dir_put_entry(&inode, dir, offset, &entry);
+            try self.dir_put_entry(&inode, offset, &entry);
 
             if (offset >= inode.length) {
 
@@ -753,7 +759,7 @@ pub fn Volume(comptime Device: type) type {
 
                 const hole = std.mem.zeroes(DirEntry);
 
-                try self.dir_put_entry(&inode, dir, offset, &hole);
+                try self.dir_put_entry(&inode, offset, &hole);
 
                 self.invalidate_dir(dir);
 
@@ -782,23 +788,22 @@ pub fn Volume(comptime Device: type) type {
         }
 
         // Block mapping: direct, then single-indirect, then double-indirect (07-userspace-ddd.md Section 7.1).
-        // With `allocate`, missing blocks (and missing indirect blocks) are claimed and the inode is persisted.
+        // With `allocate`, missing blocks (and missing indirect blocks) are claimed; the caller is responsible
+        // for persisting `inode.*` afterward (every caller already does its own unconditional write_inode, so
+        // map_block does not also persist it - avoiding a second full inode-block write per call).
+        //
+        // `zero` controls whether a freshly allocated *data* block is pre-zeroed: callers that are about to
+        // overwrite the entire block (a full-block file write) can skip that write since nothing of the old
+        // content survives. Pointer *table* blocks (indirect/double_indirect) always zero regardless of `zero`,
+        // since indirect_slot relies on unwritten pointers reading back as 0.
 
-        fn map_block(self: *Self, inode: *Inode, number: u32, file_block: u32, allocate: bool) Error!u32 {
-
-            var dirty = false;
-            defer if (dirty) {
-
-                self.write_inode(number, inode) catch {};
-
-            };
+        fn map_block(self: *Self, inode: *Inode, file_block: u32, allocate: bool, zero: bool) Error!u32 {
 
             if (file_block < direct_blocks) {
 
                 if (inode.direct[file_block] == 0 and allocate) {
 
-                    inode.direct[file_block] = try self.alloc_block();
-                    dirty = true;
+                    inode.direct[file_block] = try self.alloc_block(zero);
 
                 }
 
@@ -814,12 +819,11 @@ pub fn Volume(comptime Device: type) type {
 
                     if (!allocate) return 0;
 
-                    inode.indirect = try self.alloc_block();
-                    dirty = true;
+                    inode.indirect = try self.alloc_block(true);
 
                 }
 
-                return self.indirect_slot(inode.indirect, single, allocate);
+                return self.indirect_slot(inode.indirect, single, allocate, zero);
 
             }
 
@@ -831,20 +835,19 @@ pub fn Volume(comptime Device: type) type {
 
                 if (!allocate) return 0;
 
-                inode.double_indirect = try self.alloc_block();
-                dirty = true;
+                inode.double_indirect = try self.alloc_block(true);
 
             }
 
-            const level_one = try self.indirect_slot(inode.double_indirect, double / pointers_per_block, allocate);
+            const level_one = try self.indirect_slot(inode.double_indirect, double / pointers_per_block, allocate, true);
 
             if (level_one == 0) return 0;
 
-            return self.indirect_slot(level_one, double % pointers_per_block, allocate);
+            return self.indirect_slot(level_one, double % pointers_per_block, allocate, zero);
 
         }
 
-        fn indirect_slot(self: *Self, table: u32, index: u32, allocate: bool) Error!u32 {
+        fn indirect_slot(self: *Self, table: u32, index: u32, allocate: bool, zero: bool) Error!u32 {
 
             var block: [block_size]u8 = undefined;
 
@@ -854,7 +857,7 @@ pub fn Volume(comptime Device: type) type {
 
             if (pointers[index] == 0 and allocate) {
 
-                pointers[index] = try self.alloc_block();
+                pointers[index] = try self.alloc_block(zero);
                 try self.write_device(table, &block);
 
             }
@@ -906,7 +909,11 @@ pub fn Volume(comptime Device: type) type {
 
         // Allocation
 
-        fn alloc_block(self: *Self) Error!u32 {
+        // `zero`: pre-zero the block before handing it out. Pointer tables and directory blocks always need
+        // this (unwritten slots must read back as 0/hole); a full-block file-data write does not, since every
+        // byte gets overwritten immediately after by the caller - skipping it there halves that block's disk
+        // round trips, which matters a lot on the sector-at-a-time block driver this runs over.
+        fn alloc_block(self: *Self, zero: bool) Error!u32 {
 
             var block: [block_size]u8 = undefined;
             var bitmap_index: u32 = 0;
@@ -927,10 +934,12 @@ pub fn Volume(comptime Device: type) type {
                     byte.* |= @as(u8, 1) << bit;
                     try self.write_device(self.super.bitmap_start + bitmap_index, &block);
 
-                    // Hand out zeroed blocks so stale data never leaks into files or directories.
+                    if (zero) {
 
-                    const zeroes = [_]u8{0} ** block_size;
-                    try self.write_device(found, &zeroes);
+                        const zeroes = [_]u8{0} ** block_size;
+                        try self.write_device(found, &zeroes);
+
+                    }
 
                     return found;
 

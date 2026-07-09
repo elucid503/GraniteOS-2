@@ -18,6 +18,7 @@ pub const app_meta = .{
     .title = "Status",
     .description = "Live system metrics",
     .icon = "chart",
+    .category = "System",
 };
 
 comptime {

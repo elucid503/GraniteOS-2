@@ -14,7 +14,8 @@ const program_entry_size = bundle_name_bytes + program_description_bytes + progr
 const desktop_title_bytes = 32;
 const desktop_description_bytes = 48;
 const desktop_icon_bytes = 16;
-const desktop_entry_size = bundle_name_bytes + desktop_title_bytes + desktop_description_bytes + desktop_icon_bytes;
+const desktop_category_bytes = 16;
+const desktop_entry_size = bundle_name_bytes + desktop_title_bytes + desktop_description_bytes + desktop_icon_bytes + desktop_category_bytes;
 
 pub const Program = struct {
 
@@ -30,6 +31,7 @@ pub const Desktop = struct {
     title: []const u8,
     description: []const u8,
     icon: []const u8,
+    category: []const u8,
 
 };
 
@@ -89,13 +91,17 @@ pub const Catalog = struct {
         if (index >= self.desktop_count) return null;
 
         const entry = self.desktop_offset + index * desktop_entry_size;
+        const title_end = entry + bundle_name_bytes + desktop_title_bytes;
+        const description_end = title_end + desktop_description_bytes;
+        const icon_end = description_end + desktop_icon_bytes;
 
         return .{
 
             .program = fixed_name(self.bytes[entry .. entry + bundle_name_bytes]),
-            .title = fixed_text(self.bytes[entry + bundle_name_bytes .. entry + bundle_name_bytes + desktop_title_bytes]),
-            .description = fixed_text(self.bytes[entry + bundle_name_bytes + desktop_title_bytes .. entry + bundle_name_bytes + desktop_title_bytes + desktop_description_bytes]),
-            .icon = fixed_text(self.bytes[entry + bundle_name_bytes + desktop_title_bytes + desktop_description_bytes .. entry + desktop_entry_size]),
+            .title = fixed_text(self.bytes[entry + bundle_name_bytes .. title_end]),
+            .description = fixed_text(self.bytes[title_end..description_end]),
+            .icon = fixed_text(self.bytes[description_end..icon_end]),
+            .category = fixed_text(self.bytes[icon_end .. entry + desktop_entry_size]),
 
         };
 

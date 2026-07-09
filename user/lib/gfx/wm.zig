@@ -33,6 +33,7 @@ pub const App = struct {
     title: []const u8,
     description: []const u8,
     icon: []const u8,
+    category: []const u8,
 
 };
 
@@ -182,6 +183,7 @@ pub fn load_apps(bundle: *const bundle_mod.Bundle, out: []App) usize {
             .title = entry.title,
             .description = entry.description,
             .icon = icon_by_name(entry.icon),
+            .category = entry.category,
 
         };
 
@@ -216,6 +218,8 @@ pub fn icon_by_name(name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "settings")) return icons.apps;
     if (std.mem.eql(u8, name, "calculator")) return icons.calculator;
     if (std.mem.eql(u8, name, "timer")) return icons.timer;
+    if (std.mem.eql(u8, name, "paint")) return icons.paint;
+    if (std.mem.eql(u8, name, "image")) return icons.image;
 
     return icons.apps;
 

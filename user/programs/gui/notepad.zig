@@ -16,6 +16,7 @@ pub const app_meta = .{
     .title = "Notepad",
     .description = "Edit text files",
     .icon = "file",
+    .category = "Accessories",
 };
 
 comptime {

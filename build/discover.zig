@@ -82,13 +82,14 @@ pub const catalog_version: u32 = 1;
 
 const catalog_header_size = 16;
 const program_entry_size = 88;
-const desktop_entry_size = 120;
+const desktop_entry_size = 136;
 const bundle_name_bytes = 24;
 const program_description_bytes = 48;
 const program_category_bytes = 16;
 const desktop_title_bytes = 32;
 const desktop_description_bytes = 48;
 const desktop_icon_bytes = 16;
+const desktop_category_bytes = 16;
 
 pub fn scan(allocator: std.mem.Allocator) ![]Module {
 
@@ -239,7 +240,8 @@ fn walk_gui(list: *std.ArrayList(Module), allocator: std.mem.Allocator) !void {
         const kind: Kind = if (chrome_gui.has(stem)) .chrome else .desktop;
         const meta = try read_meta(allocator, source);
 
-        try list.append(allocator, try make_module(allocator, source, bundle_name, kind, meta, "desktop"));
+        // Apps that name no `.category` in their `app_meta` fall into a catch-all group in the launcher.
+        try list.append(allocator, try make_module(allocator, source, bundle_name, kind, meta, "Applications"));
 
     }
 
@@ -422,10 +424,16 @@ fn write_program_entry(out: []u8, module: Module) void {
 
 fn write_desktop_entry(out: []u8, module: Module) void {
 
+    const title_end = bundle_name_bytes + desktop_title_bytes;
+    const description_end = title_end + desktop_description_bytes;
+    const icon_end = description_end + desktop_icon_bytes;
+    const category_end = icon_end + desktop_category_bytes;
+
     write_fixed_name(out[0..bundle_name_bytes], module.bundle_name);
-    write_fixed_text(out[bundle_name_bytes .. bundle_name_bytes + desktop_title_bytes], module.title);
-    write_fixed_text(out[bundle_name_bytes + desktop_title_bytes .. bundle_name_bytes + desktop_title_bytes + desktop_description_bytes], module.description);
-    write_fixed_text(out[bundle_name_bytes + desktop_title_bytes + desktop_description_bytes .. bundle_name_bytes + desktop_title_bytes + desktop_description_bytes + desktop_icon_bytes], module.icon);
+    write_fixed_text(out[bundle_name_bytes..title_end], module.title);
+    write_fixed_text(out[title_end..description_end], module.description);
+    write_fixed_text(out[description_end..icon_end], module.icon);
+    write_fixed_text(out[icon_end..category_end], module.category);
 
 }
 

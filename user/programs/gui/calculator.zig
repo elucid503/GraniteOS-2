@@ -15,6 +15,7 @@ pub const app_meta = .{
     .title = "Calculator",
     .description = "Basic arithmetic",
     .icon = "calculator",
+    .category = "Accessories",
 };
 
 comptime {

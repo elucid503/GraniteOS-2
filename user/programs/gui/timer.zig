@@ -17,6 +17,7 @@ pub const app_meta = .{
     .title = "Timer",
     .description = "Stopwatch and countdown",
     .icon = "timer",
+    .category = "Accessories",
 };
 
 comptime {

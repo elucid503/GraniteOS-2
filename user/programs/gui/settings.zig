@@ -11,6 +11,7 @@ pub const app_meta = .{
     .title = "Settings",
     .description = "Color theme",
     .icon = "settings",
+    .category = "System",
 };
 
 comptime {

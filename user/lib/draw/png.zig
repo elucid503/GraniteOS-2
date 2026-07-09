@@ -1,5 +1,6 @@
-// PNG decoder: IHDR + zlib IDAT streams into XRGB pixel buffers. Supports 8-bit greyscale, RGB,
-// greyscale+alpha, and RGBA (no interlacing, no palette). Integer-only; freestanding-safe via std.compress.flate.
+// PNG codec: decode IHDR + zlib IDAT into XRGB, encode XRGB to RGB8 PNG (filter-None + stored zlib).
+// Decode supports 8-bit greyscale, RGB, greyscale+alpha, and RGBA (no interlacing, no palette).
+// Integer-only; freestanding-safe via std.compress.flate for inflate and hand-rolled store blocks for deflate.
 
 const std = @import("std");
 
@@ -92,6 +93,7 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) Error!Image {
     if (idat.len == 0) return error.BadPng;
 
     // Stream one scanline at a time so peak RAM is pixels + IDAT + two rows (not a full filtered frame).
+    // Inflate window lives on the heap so large decodes do not pressure the user stack (512 KiB).
     const pixels = allocator.alloc(u32, pixel_count) catch return error.OutOfMemory;
     errdefer allocator.free(pixels);
 
@@ -101,11 +103,13 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) Error!Image {
     const curr = allocator.alloc(u8, stride) catch return error.OutOfMemory;
     defer allocator.free(curr);
 
+    const window = allocator.alloc(u8, std.compress.flate.max_window_len) catch return error.OutOfMemory;
+    defer allocator.free(window);
+
     @memset(prev, 0);
 
     var input: std.Io.Reader = .fixed(idat);
-    var window: [std.compress.flate.max_window_len]u8 = undefined;
-    var inflate: std.compress.flate.Decompress = .init(&input, .zlib, &window);
+    var inflate: std.compress.flate.Decompress = .init(&input, .zlib, window);
 
     var y: u32 = 0;
 
@@ -140,6 +144,249 @@ pub fn dimensions(bytes: []const u8) Error!struct { width: u32, height: u32 } {
     const header = try read_header(bytes);
 
     return .{ .width = header.width, .height = header.height };
+
+}
+
+/// Upper bound on encode output size for a width×height XRGB image (filter-None + zlib store).
+pub fn max_encode_size(width: u32, height: u32) usize {
+
+    const row_stride = 1 + @as(usize, width) * 3;
+    const raw_len = row_stride * @as(usize, height);
+    const max_store = 65535;
+    const block_count = if (raw_len == 0) 0 else (raw_len + max_store - 1) / max_store;
+    const zlib_len = 2 + block_count * 5 + raw_len + 4;
+
+    // signature + IHDR(25) + IDAT(12+zlib) + IEND(12)
+    return 8 + 25 + 12 + zlib_len + 12;
+
+}
+
+/// Scratch bytes needed for the filter-None raw scanline buffer.
+pub fn raw_scratch_size(width: u32, height: u32) usize {
+
+    return (1 + @as(usize, width) * 3) * @as(usize, height);
+
+}
+
+/// Encode into caller-owned buffers (no allocator). `scratch` holds filtered scanlines;
+/// `dest` receives the complete PNG. Returns the used prefix of `dest`.
+pub fn encodeTo(dest: []u8, scratch: []u8, pixels: []const u32, width: u32, height: u32) Error![]u8 {
+
+    if (width == 0 or height == 0) return error.BadPng;
+
+    const pixel_count = @as(usize, width) * @as(usize, height);
+
+    if (pixels.len < pixel_count) return error.BadPng;
+
+    const row_stride = 1 + @as(usize, width) * 3;
+    const raw_len = row_stride * @as(usize, height);
+
+    if (scratch.len < raw_len) return error.OutOfMemory;
+    if (dest.len < max_encode_size(width, height)) return error.OutOfMemory;
+
+    const raw = scratch[0..raw_len];
+    var raw_at: usize = 0;
+    var y: u32 = 0;
+
+    while (y < height) : (y += 1) {
+
+        raw[raw_at] = 0; // filter None
+        raw_at += 1;
+
+        var x: u32 = 0;
+
+        while (x < width) : (x += 1) {
+
+            const pixel = pixels[@as(usize, y) * width + x];
+
+            raw[raw_at] = draw.red(pixel);
+            raw[raw_at + 1] = draw.green(pixel);
+            raw[raw_at + 2] = draw.blue(pixel);
+            raw_at += 3;
+
+        }
+
+    }
+
+    // Batched Adler-32 (zlib's algorithm) — avoids per-byte modulo cost.
+    const adler = adler32(raw);
+
+    const max_store = 65535;
+    const block_count = (raw_len + max_store - 1) / max_store;
+    const zlib_len = 2 + block_count * 5 + raw_len + 4;
+    const out_len = 8 + 25 + 12 + zlib_len + 12;
+
+    if (dest.len < out_len) return error.OutOfMemory;
+
+    const out = dest[0..out_len];
+    var cursor: usize = 0;
+
+    @memcpy(out[cursor..][0..8], &signature);
+    cursor += 8;
+
+    var ihdr: [13]u8 = undefined;
+
+    write_be_u32(ihdr[0..4], width);
+    write_be_u32(ihdr[4..8], height);
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = color_rgb;
+    ihdr[10] = 0;
+    ihdr[11] = 0;
+    ihdr[12] = 0;
+
+    cursor = write_chunk(out, cursor, "IHDR", &ihdr);
+
+    const idat_start = cursor;
+    const idat_data_start = idat_start + 8;
+
+    // zlib CMF/FLG: 0x78 0x01 (32K window, fastest; FCHECK makes 0x7801 % 31 == 0).
+    out[idat_data_start] = 0x78;
+    out[idat_data_start + 1] = 0x01;
+
+    var zlib_cursor = idat_data_start + 2;
+    var raw_offset: usize = 0;
+
+    while (raw_offset < raw_len) {
+
+        const chunk_len = @min(max_store, raw_len - raw_offset);
+        const final = raw_offset + chunk_len == raw_len;
+
+        // BFINAL | BTYPE=00, already byte-aligned (matches std.compress.flate store blocks).
+        out[zlib_cursor] = if (final) 0x01 else 0x00;
+        zlib_cursor += 1;
+
+        const len16: u16 = @intCast(chunk_len);
+
+        std.mem.writeInt(u16, out[zlib_cursor..][0..2], len16, .little);
+        std.mem.writeInt(u16, out[zlib_cursor + 2 ..][0..2], ~len16, .little);
+        zlib_cursor += 4;
+
+        @memcpy(out[zlib_cursor .. zlib_cursor + chunk_len], raw[raw_offset .. raw_offset + chunk_len]);
+        zlib_cursor += chunk_len;
+        raw_offset += chunk_len;
+
+    }
+
+    // Adler-32 is big-endian in the zlib stream (RFC 1950).
+    write_be_u32(out[zlib_cursor..][0..4], adler);
+    zlib_cursor += 4;
+
+    if (zlib_cursor - idat_data_start != zlib_len) return error.BadPng;
+
+    const idat_len: u32 = @intCast(zlib_len);
+
+    write_be_u32(out[idat_start..][0..4], idat_len);
+    @memcpy(out[idat_start + 4 ..][0..4], "IDAT");
+
+    const idat_crc = crc32(out[idat_start + 4 .. zlib_cursor]);
+
+    write_be_u32(out[zlib_cursor..][0..4], idat_crc);
+    cursor = zlib_cursor + 4;
+
+    cursor = write_chunk(out, cursor, "IEND", &.{});
+
+    if (cursor != out_len) return error.BadPng;
+
+    return out[0..cursor];
+
+}
+
+/// Encode a complete RGB8 PNG file (owned slice; free with allocator).
+pub fn encode(allocator: std.mem.Allocator, pixels: []const u32, width: u32, height: u32) Error![]u8 {
+
+    const scratch_len = raw_scratch_size(width, height);
+    const dest_len = max_encode_size(width, height);
+
+    const scratch = allocator.alloc(u8, scratch_len) catch return error.OutOfMemory;
+    defer allocator.free(scratch);
+
+    const dest = allocator.alloc(u8, dest_len) catch return error.OutOfMemory;
+
+    const encoded = encodeTo(dest, scratch, pixels, width, height) catch |err| {
+
+        allocator.free(dest);
+        return err;
+
+    };
+
+    if (encoded.len == dest.len) return dest;
+
+    // Prefer an exact-sized allocation so callers free the right length.
+    const trimmed = allocator.alloc(u8, encoded.len) catch return dest[0..encoded.len];
+
+    @memcpy(trimmed, encoded);
+    allocator.free(dest);
+
+    return trimmed;
+
+}
+
+fn write_chunk(out: []u8, start: usize, type_name: *const [4]u8, data: []const u8) usize {
+
+    write_be_u32(out[start..][0..4], @intCast(data.len));
+    @memcpy(out[start + 4 ..][0..4], type_name);
+    if (data.len != 0) @memcpy(out[start + 8 ..][0..data.len], data);
+
+    const crc_start = start + 4;
+    const crc_end = start + 8 + data.len;
+    const crc = crc32(out[crc_start..crc_end]);
+
+    write_be_u32(out[crc_end..][0..4], crc);
+
+    return crc_end + 4;
+
+}
+
+fn write_be_u32(dest: []u8, value: u32) void {
+
+    std.mem.writeInt(u32, dest[0..4], value, .big);
+
+}
+
+fn crc32(bytes: []const u8) u32 {
+
+    return std.hash.Crc32.hash(bytes);
+
+}
+
+/// RFC 1950 Adler-32 with the standard 5552-byte batching (fast, freestanding-safe).
+fn adler32(data: []const u8) u32 {
+
+    const base: u32 = 65521;
+    const nmax: usize = 5552;
+
+    var s1: u32 = 1;
+    var s2: u32 = 0;
+    var index: usize = 0;
+
+    while (index + nmax <= data.len) {
+
+        var n: usize = 0;
+
+        while (n < nmax) : (n += 1) {
+
+            s1 +%= data[index + n];
+            s2 +%= s1;
+
+        }
+
+        s1 %= base;
+        s2 %= base;
+        index += nmax;
+
+    }
+
+    while (index < data.len) : (index += 1) {
+
+        s1 +%= data[index];
+        s2 +%= s1;
+
+    }
+
+    s1 %= base;
+    s2 %= base;
+
+    return (s2 << 16) | s1;
 
 }
 
@@ -472,5 +719,80 @@ test "png rejects truncated and non-png input" {
 
     // Signature + partial IHDR only — not enough to decode.
     try testing.expectError(error.Truncated, decode(testing.allocator, sample_png[0..20]));
+
+}
+
+test "png encode round-trips through decode" {
+
+    const width: u32 = 3;
+    const height: u32 = 2;
+    const source = [_]u32{
+
+        draw.rgb(10, 20, 30),
+        draw.rgb(40, 50, 60),
+        draw.rgb(70, 80, 90),
+        draw.rgb(100, 110, 120),
+        draw.rgb(130, 140, 150),
+        draw.rgb(160, 170, 180),
+
+    };
+
+    const bytes = try encode(testing.allocator, &source, width, height);
+    defer testing.allocator.free(bytes);
+
+    var image = try decode(testing.allocator, bytes);
+    defer image.deinit(testing.allocator);
+
+    try testing.expectEqual(width, image.width);
+    try testing.expectEqual(height, image.height);
+
+    for (source, image.pixels) |want, got| {
+
+        try testing.expectEqual(want, got);
+
+    }
+
+}
+
+test "png encode multi-store-block canvas size" {
+
+    // Matches Chisel's 640x400 canvas — spans many zlib store blocks (>65535 bytes).
+    const width: u32 = 640;
+    const height: u32 = 400;
+    const count = @as(usize, width) * height;
+    const source = try testing.allocator.alloc(u32, count);
+    defer testing.allocator.free(source);
+
+    for (source, 0..) |*pixel, index| {
+
+        const x: u32 = @intCast(index % width);
+        const y: u32 = @intCast(index / width);
+
+        pixel.* = draw.rgb(@truncate(x), @truncate(y), @truncate(x +% y));
+
+    }
+
+    const bytes = try encode(testing.allocator, source, width, height);
+    defer testing.allocator.free(bytes);
+
+    var image = try decode(testing.allocator, bytes);
+    defer image.deinit(testing.allocator);
+
+    try testing.expectEqual(width, image.width);
+    try testing.expectEqual(height, image.height);
+    try testing.expectEqual(source[0], image.pixels[0]);
+    try testing.expectEqual(source[count / 2], image.pixels[count / 2]);
+    try testing.expectEqual(source[count - 1], image.pixels[count - 1]);
+
+    // Spot-check a full row so multi-block boundaries cannot hide corruption.
+    const row = height / 2;
+
+    for (0..width) |x| {
+
+        const index = @as(usize, row) * width + x;
+
+        try testing.expectEqual(source[index], image.pixels[index]);
+
+    }
 
 }

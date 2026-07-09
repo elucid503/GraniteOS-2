@@ -18,6 +18,7 @@ pub const stream = @import("io/stream.zig");
 pub const draw = @import("draw/draw.zig");
 pub const gfx = @import("draw/draw.zig");
 pub const ui = @import("ui/ui.zig");
+pub const file_picker = @import("ui/file_picker.zig");
 pub const prefs = @import("gfx/prefs.zig");
 pub const cursor = @import("gfx/cursor.zig");
 pub const icons = @import("gfx/icons.zig");

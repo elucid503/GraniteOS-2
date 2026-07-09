@@ -71,57 +71,122 @@ pub const Image = struct {
 
     }
 
+    /// Scale with contain-fit into `dest`: the full image is visible, letterboxed if aspect differs.
+    pub fn draw_fit(self: Image, surface: *const Surface, dest: Rect) void {
+
+        if (self.is_empty() or dest.is_empty()) return;
+
+        const fitted = fit_rect(self.width, self.height, dest);
+
+        if (fitted.is_empty()) return;
+
+        self.draw_scaled(surface, fitted);
+
+    }
+
     /// Scale with cover-fit into `dest`: the image fully covers the rect, cropped centered if needed.
     pub fn draw_cover(self: Image, surface: *const Surface, dest: Rect) void {
 
         if (self.is_empty() or dest.is_empty()) return;
 
-        const clipped = dest.intersect(surface.clip.intersect(surface.bounds()));
-
-        if (clipped.is_empty()) return;
-
         const crop = cover_crop(self.width, self.height, @intCast(dest.w), @intCast(dest.h));
 
-        // 16.16 fixed steps map destination pixels onto the cropped source without per-pixel division.
-        const step_x: i64 = @divTrunc(@as(i64, crop.w) << 16, dest.w);
-        const step_y: i64 = @divTrunc(@as(i64, crop.h) << 16, dest.h);
-        const origin_x: i64 = (@as(i64, crop.x) << 16) + (@as(i64, clipped.x - dest.x) * step_x);
-        const origin_y: i64 = (@as(i64, crop.y) << 16) + (@as(i64, clipped.y - dest.y) * step_y);
-        const max_x: u32 = self.width - 1;
-        const max_y: u32 = self.height - 1;
+        scale_blit(self, surface, dest, crop);
 
-        var y = clipped.y;
-        var src_y_fx = origin_y;
+    }
 
-        while (y < clipped.y + clipped.h) {
+    fn draw_scaled(self: Image, surface: *const Surface, dest: Rect) void {
 
-            const sy: u32 = @intCast(@min(@max(@as(i32, @intCast(src_y_fx >> 16)), 0), @as(i32, @intCast(max_y))));
-            const dy: u32 = @intCast(y);
-            const src_row = @as(usize, sy) * self.width;
-            const dst_row = @as(usize, dy) * surface.stride;
+        if (self.is_empty() or dest.is_empty()) return;
 
-            var x = clipped.x;
-            var src_x_fx = origin_x;
+        const crop = Rect{ .x = 0, .y = 0, .w = @intCast(self.width), .h = @intCast(self.height) };
 
-            while (x < clipped.x + clipped.w) {
-
-                const sx: u32 = @intCast(@min(@max(@as(i32, @intCast(src_x_fx >> 16)), 0), @as(i32, @intCast(max_x))));
-
-                surface.pixels[dst_row + @as(usize, @intCast(x))] = self.pixels[src_row + sx];
-
-                x += 1;
-                src_x_fx += step_x;
-
-            }
-
-            y += 1;
-            src_y_fx += step_y;
-
-        }
+        scale_blit(self, surface, dest, crop);
 
     }
 
 };
+
+fn scale_blit(self: Image, surface: *const Surface, dest: Rect, crop: Rect) void {
+
+    const clipped = dest.intersect(surface.clip.intersect(surface.bounds()));
+
+    if (clipped.is_empty() or crop.w <= 0 or crop.h <= 0) return;
+
+    // 16.16 fixed steps map destination pixels onto the source without per-pixel division.
+    const step_x: i64 = @divTrunc(@as(i64, crop.w) << 16, dest.w);
+    const step_y: i64 = @divTrunc(@as(i64, crop.h) << 16, dest.h);
+    const origin_x: i64 = (@as(i64, crop.x) << 16) + (@as(i64, clipped.x - dest.x) * step_x);
+    const origin_y: i64 = (@as(i64, crop.y) << 16) + (@as(i64, clipped.y - dest.y) * step_y);
+    const max_x: u32 = self.width - 1;
+    const max_y: u32 = self.height - 1;
+
+    var y = clipped.y;
+    var src_y_fx = origin_y;
+
+    while (y < clipped.y + clipped.h) {
+
+        const sy: u32 = @intCast(@min(@max(@as(i32, @intCast(src_y_fx >> 16)), 0), @as(i32, @intCast(max_y))));
+        const dy: u32 = @intCast(y);
+        const src_row = @as(usize, sy) * self.width;
+        const dst_row = @as(usize, dy) * surface.stride;
+
+        var x = clipped.x;
+        var src_x_fx = origin_x;
+
+        while (x < clipped.x + clipped.w) {
+
+            const sx: u32 = @intCast(@min(@max(@as(i32, @intCast(src_x_fx >> 16)), 0), @as(i32, @intCast(max_x))));
+
+            surface.pixels[dst_row + @as(usize, @intCast(x))] = self.pixels[src_row + sx];
+
+            x += 1;
+            src_x_fx += step_x;
+
+        }
+
+        y += 1;
+        src_y_fx += step_y;
+
+    }
+
+}
+
+/// Destination rect for contain-fit of an image of `src_w` x `src_h` into `frame`.
+pub fn fit_rect(src_w: u32, src_h: u32, frame: Rect) Rect {
+
+    if (src_w == 0 or src_h == 0 or frame.is_empty()) return Rect.empty;
+
+    const src_w_i: i64 = src_w;
+    const src_h_i: i64 = src_h;
+    const frame_w: i64 = frame.w;
+    const frame_h: i64 = frame.h;
+
+    var out_w: i32 = undefined;
+    var out_h: i32 = undefined;
+
+    if (src_w_i * frame_h > frame_w * src_h_i) {
+
+        out_w = frame.w;
+        out_h = @intCast(@divTrunc(frame_w * src_h_i, src_w_i));
+
+    } else {
+
+        out_h = frame.h;
+        out_w = @intCast(@divTrunc(frame_h * src_w_i, src_h_i));
+
+    }
+
+    return .{
+
+        .x = frame.x + @divTrunc(frame.w - out_w, 2),
+        .y = frame.y + @divTrunc(frame.h - out_h, 2),
+        .w = out_w,
+        .h = out_h,
+
+    };
+
+}
 
 /// Source crop rectangle (in image pixels) that cover-fits into a dest of `dst_w` x `dst_h`.
 pub fn cover_crop(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) Rect {

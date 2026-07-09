@@ -1,7 +1,8 @@
 // File Manager: a two-pane browser over the Strata filesystem. The left pane lists the working directory (folders
-// first, with sizes); clicking a folder descends into it and the toolbar's up button climbs back out. The right
-// pane shows details for the selected entry and a short text preview for files. It is a plain Filesystem client -
-// the same interface the shell's fs utilities speak - so it reflects exactly what is on disk.
+// first, with sizes); clicking a folder descends into it and the toolbar's up button climbs back out. Drag an entry
+// onto a folder to move it there, or onto the toolbar to move it to the parent directory. The right pane shows
+// details for the selected entry and a short text preview for files. It is a plain Filesystem client - the same
+// interface the shell's fs utilities speak - so it reflects exactly what is on disk.
 
 const std = @import("std");
 
@@ -20,6 +21,7 @@ pub const app_meta = .{
     .title = "Files",
     .description = "Browse the filesystem",
     .icon = "folder",
+    .category = "System",
 };
 
 comptime {
@@ -63,10 +65,10 @@ var preview_is_text = false;
 const MenuAction = enum {
 
     edit_notepad,
+    open_image,
     view_details,
     add_desktop,
     rename_item,
-    move_item,
     delete_item,
 
 };
@@ -81,11 +83,11 @@ const MenuRow = union(enum) {
 const menu_rows = [_]MenuRow{
 
     .{ .action = .edit_notepad },
+    .{ .action = .open_image },
     .{ .action = .view_details },
     .{ .action = .add_desktop },
     .{ .separator = {} },
     .{ .action = .rename_item },
-    .{ .action = .move_item },
     .{ .separator = {} },
     .{ .action = .delete_item },
 
@@ -103,10 +105,13 @@ const details_h: i32 = 240;
 const prompt_width: i32 = 380;
 const prompt_height: i32 = 140;
 
-const PromptKind = enum {
+const drag_threshold: i32 = 6;
 
-    rename,
-    move,
+const DropTarget = union(enum) {
+
+    none,
+    parent,
+    directory: usize,
 
 };
 
@@ -129,7 +134,6 @@ var details_status: []const u8 = "";
 var pointer_x: i32 = -1;
 
 var prompt_open = false;
-var prompt_kind: PromptKind = .rename;
 var prompt_source: [max_path]u8 = undefined;
 var prompt_source_len: usize = 0;
 var prompt_status: []const u8 = "";
@@ -137,6 +141,14 @@ var prompt_status: []const u8 = "";
 var keyboard = lib.keymap.Keyboard{};
 var name_storage: [max_path]u8 = undefined;
 var name_field = ui.EditBuffer{ .bytes = &name_storage };
+
+// Drag-to-move: press an entry, drag onto a folder or the toolbar (parent), release to drop.
+var press_index: ?usize = null;
+var press_x: i32 = 0;
+var press_y: i32 = 0;
+var drag_active = false;
+var drag_index: ?usize = null;
+var drop_target: DropTarget = .none;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -220,11 +232,15 @@ fn dispatch_batch(batch: []const events.Event) bool {
 
             events.kind_button_down => button_down(event),
 
+            events.kind_button_up => button_up(event),
+
             events.kind_key_down => {
 
                 if (prompt_open) prompt_key(event.code);
 
             },
+
+            events.kind_window_blur => cancel_press(),
 
             events.kind_prefs_changed => {
 
@@ -235,7 +251,7 @@ fn dispatch_batch(batch: []const events.Event) bool {
 
             events.kind_scroll => {
 
-                if (!menu_open and !details_open and !prompt_open) scroll_delta += event.value;
+                if (!menu_open and !details_open and !prompt_open and !drag_active) scroll_delta += event.value;
 
             },
 
@@ -262,6 +278,14 @@ fn handle_pointer_move(event: events.Event) void {
 
     if (prompt_open) {
 
+        update_cursor(event.x, event.y);
+        return;
+
+    }
+
+    if (press_index != null or drag_active) {
+
+        track_drag(event.x, event.y);
         update_cursor(event.x, event.y);
         return;
 
@@ -365,12 +389,44 @@ fn button_down(event: events.Event) void {
 
     if (event.code == events.button_right) {
 
+        cancel_press();
         open_context(event.x, event.y);
         return;
 
     }
 
-    click(event.x, event.y);
+    press_begin(event.x, event.y);
+
+}
+
+fn button_up(event: events.Event) void {
+
+    if (event.code != events.button_left) return;
+
+    if (prompt_open or details_open or menu_open) return;
+
+    if (drag_active) {
+
+        const target = resolve_drop(event.x, event.y);
+        const index = drag_index;
+        cancel_press();
+
+        if (index) |source| apply_drop(source, target);
+
+        return;
+
+    }
+
+    if (press_index) |index| {
+
+        cancel_press();
+
+        // Toolbar up is handled on press; list entries open on release so a drag can steal the gesture.
+        if (index < entry_count) open_entry(index);
+
+        return;
+
+    }
 
 }
 
@@ -528,6 +584,21 @@ fn update_cursor(x: i32, y: i32) void {
 
     }
 
+    if (drag_active) {
+
+        // Hand cursor over a valid drop; default pointer when the release would cancel.
+        const valid = switch (resolve_drop(x, y)) {
+
+            .none => false,
+            else => true,
+
+        };
+
+        lib.cursor.set(&connection, if (valid) .clicker else .pointer);
+        return;
+
+    }
+
     if (y < toolbar_height and x < 40) lib.cursor.set(&connection, .clicker)
     else if (hover_token(x, y) >= 0) lib.cursor.set(&connection, .clicker)
     else lib.cursor.set(&connection, .pointer);
@@ -594,10 +665,10 @@ fn menu_label(action: MenuAction) []const u8 {
     return switch (action) {
 
         .edit_notepad => "Edit via Notepad",
+        .open_image => "Open with Images",
         .view_details => "View Details",
         .add_desktop => "Add To Desktop",
         .rename_item => "Rename",
-        .move_item => "Move…",
         .delete_item => "Delete Item",
 
     };
@@ -688,6 +759,12 @@ fn run_menu_action(action: MenuAction, index: usize) void {
 
         },
 
+        .open_image => {
+
+            lib.wm.launch_with_path("viewer", path);
+
+        },
+
         .view_details => open_details(entry, path),
 
         .add_desktop => {
@@ -701,9 +778,7 @@ fn run_menu_action(action: MenuAction, index: usize) void {
 
         },
 
-        .rename_item => open_prompt(.rename, path, entry.name[0..entry.name_len]),
-
-        .move_item => open_prompt(.move, path, path),
+        .rename_item => open_prompt(path, entry.name[0..entry.name_len]),
 
         .delete_item => {
 
@@ -719,12 +794,12 @@ fn run_menu_action(action: MenuAction, index: usize) void {
 
 }
 
-fn open_prompt(kind: PromptKind, source_path: []const u8, initial: []const u8) void {
+fn open_prompt(source_path: []const u8, initial: []const u8) void {
 
     close_menu();
     close_details();
+    cancel_press();
 
-    prompt_kind = kind;
     prompt_status = "";
 
     prompt_source_len = @min(source_path.len, prompt_source.len);
@@ -838,28 +913,12 @@ fn confirm_prompt() void {
     }
 
     var dest_buf: [max_path]u8 = undefined;
-    const dest = switch (prompt_kind) {
+    const parent = path_parent(source);
+    const dest = lib.fs.canonicalize(parent, typed, &dest_buf) catch {
 
-        .rename => blk: {
-
-            const parent = path_parent(source);
-            break :blk lib.fs.canonicalize(parent, typed, &dest_buf) catch {
-
-                prompt_status = "Invalid name";
-                paint();
-                return;
-
-            };
-
-        },
-
-        .move => lib.fs.canonicalize(cwd, typed, &dest_buf) catch {
-
-            prompt_status = "Invalid path";
-            paint();
-            return;
-
-        },
+        prompt_status = "Invalid name";
+        paint();
+        return;
 
     };
 
@@ -1040,10 +1099,12 @@ fn toggle_details_writable() void {
 
 }
 
-fn click(x: i32, y: i32) void {
+fn press_begin(x: i32, y: i32) void {
 
     if (prompt_open) close_prompt();
     if (menu_open) close_menu();
+
+    cancel_press();
 
     if (y < toolbar_height) {
 
@@ -1055,7 +1116,185 @@ fn click(x: i32, y: i32) void {
 
     const index = entry_index_at(x, y) orelse return;
 
-    open_entry(index);
+    press_index = index;
+    press_x = x;
+    press_y = y;
+    selected = index;
+
+    const entry = entries[index];
+
+    if (entry.kind != proto.filesystem.kind_directory) load_preview(entry);
+
+    paint();
+
+}
+
+fn cancel_press() void {
+
+    press_index = null;
+    drag_active = false;
+    drag_index = null;
+    drop_target = .none;
+
+}
+
+fn track_drag(x: i32, y: i32) void {
+
+    if (drag_active) {
+
+        // Repaint every move so the ghost chip stays glued to the cursor.
+        drop_target = resolve_drop(x, y);
+        paint();
+        return;
+
+    }
+
+    const index = press_index orelse return;
+    const dx = x - press_x;
+    const dy = y - press_y;
+
+    if (dx * dx + dy * dy < drag_threshold * drag_threshold) return;
+
+    drag_active = true;
+    drag_index = index;
+    drop_target = resolve_drop(x, y);
+    last_hover = -3;
+    paint();
+
+}
+
+fn resolve_drop(x: i32, y: i32) DropTarget {
+
+    const source = drag_index orelse return .none;
+
+    // Toolbar (top strip) is the "move to parent" drop zone.
+    if (y < toolbar_height) {
+
+        if (cwd.len <= 1) return .none;
+
+        return .parent;
+
+    }
+
+    const target = entry_index_at(x, y) orelse return .none;
+
+    if (target == source) return .none;
+    if (entries[target].kind != proto.filesystem.kind_directory) return .none;
+
+    return .{ .directory = target };
+
+}
+
+fn apply_drop(source_index: usize, target: DropTarget) void {
+
+    if (source_index >= entry_count) {
+
+        paint();
+        return;
+
+    }
+
+    switch (target) {
+
+        .none => paint(),
+
+        .parent => {
+
+            if (cwd.len <= 1) {
+
+                paint();
+                return;
+
+            }
+
+            const parent = path_parent(cwd);
+            move_entry_into(source_index, parent);
+
+        },
+
+        .directory => |dir_index| {
+
+            if (dir_index >= entry_count) {
+
+                paint();
+                return;
+
+            }
+
+            const dir = entries[dir_index];
+            var dir_buf: [max_path]u8 = undefined;
+            const dir_path = lib.fs.canonicalize(cwd, dir.name[0..dir.name_len], &dir_buf) catch {
+
+                paint();
+                return;
+
+            };
+
+            move_entry_into(source_index, dir_path);
+
+        },
+
+    }
+
+}
+
+fn move_entry_into(source_index: usize, dest_dir: []const u8) void {
+
+    const handle = if (client) |*c| c else {
+
+        paint();
+        return;
+
+    };
+
+    if (source_index >= entry_count) {
+
+        paint();
+        return;
+
+    }
+
+    const entry = entries[source_index];
+    var source_buf: [max_path]u8 = undefined;
+    const source = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &source_buf) catch {
+
+        paint();
+        return;
+
+    };
+
+    // Refuse dropping a directory onto itself.
+    if (std.mem.eql(u8, source, dest_dir)) {
+
+        paint();
+        return;
+
+    }
+
+    var dest_buf: [max_path]u8 = undefined;
+    const dest = lib.fs.canonicalize(dest_dir, entry.name[0..entry.name_len], &dest_buf) catch {
+
+        paint();
+        return;
+
+    };
+
+    if (std.mem.eql(u8, source, dest)) {
+
+        paint();
+        return;
+
+    }
+
+    handle.rename(source, dest) catch {
+
+        paint();
+        return;
+
+    };
+
+    reload();
+    paint();
 
 }
 
@@ -1079,6 +1318,13 @@ fn open_entry(index: usize) void {
     var path_buffer: [max_path]u8 = undefined;
     const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch return;
 
+    if (is_image_name(entry.name[0..entry.name_len])) {
+
+        lib.wm.launch_with_path("viewer", path);
+        return;
+
+    }
+
     if (is_text_file(entry)) {
 
         lib.wm.launch_with_path("notepad", path);
@@ -1089,6 +1335,12 @@ fn open_entry(index: usize) void {
     selected = index;
     load_preview(entry);
     paint();
+
+}
+
+fn is_image_name(name: []const u8) bool {
+
+    return lib.file_picker.has_extension(name, "png");
 
 }
 
@@ -1218,11 +1470,68 @@ fn paint() void {
     paint_list(surface, height);
     paint_side_panel(surface, width, height);
 
+    if (drag_active) paint_drag_indicator(surface);
+
     if (menu_open) paint_menu(surface);
     if (details_open) paint_details_modal(surface);
     if (prompt_open) paint_prompt(surface);
 
     window.present_all() catch {};
+
+}
+
+fn paint_drag_indicator(surface: *const gfx.Surface) void {
+
+    const index = drag_index orelse return;
+
+    if (index >= entry_count) return;
+
+    const entry = entries[index];
+    const name = entry.name[0..entry.name_len];
+
+    const chip_h: i32 = 28;
+    const icon_box: i32 = 16;
+    const pad: i32 = 8;
+    const gap: i32 = 6;
+    const max_label_w: i32 = 140;
+
+    const visible = ui.truncate(&font, name, 12, max_label_w);
+    const label_w = font.text_width(visible, 12);
+    const chip_w = pad + icon_box + gap + label_w + pad;
+
+    // Sit just below-right of the pointer so the hot tip stays free for hit-testing.
+    const width: i32 = @intCast(surface.width);
+    const height: i32 = @intCast(surface.height);
+
+    var x = pointer_x + 14;
+    var y = pointer_y + 16;
+
+    if (x + chip_w > width) x = @max(0, width - chip_w);
+    if (y + chip_h > height) y = @max(0, height - chip_h);
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+
+    const rect = Rect{ .x = x, .y = y, .w = chip_w, .h = chip_h };
+
+    ui.fill_round_rect(surface, rect, 6, ui.theme.surface);
+    ui.stroke_round_rect(surface, rect, 6, 1, ui.theme.border);
+
+    const is_dir = entry.kind == proto.filesystem.kind_directory;
+    const icon = if (is_dir) lib.icons.folder else lib.icons.file;
+    const tint = if (is_dir) ui.theme.accent else ui.theme.text_dim;
+
+    lib.draw.vector.icon_in(surface, .{
+
+        .x = x + pad,
+        .y = y + @divTrunc(chip_h - icon_box, 2),
+        .w = icon_box,
+        .h = icon_box,
+
+    }, icon, tint);
+
+    const text_y = y + @divTrunc(chip_h - font.line_height(12), 2);
+
+    font.draw(surface, x + pad + icon_box + gap, text_y, 12, visible, ui.theme.text);
 
 }
 
@@ -1238,20 +1547,6 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
     });
 
-    const title: []const u8 = switch (prompt_kind) {
-
-        .rename => "Rename item",
-        .move => "Move to path",
-
-    };
-
-    const confirm_label: []const u8 = switch (prompt_kind) {
-
-        .rename => "Rename",
-        .move => "Move",
-
-    };
-
     const panel = page.box(ui.Page.root, .{
 
         .direction = .column,
@@ -1266,7 +1561,7 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
     });
 
-    _ = page.label(panel, title, .{
+    _ = page.label(panel, "Rename item", .{
 
         .height = .{ .px = 14 },
         .size = 14,
@@ -1274,7 +1569,7 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
     });
 
-    _ = page.field(panel, &name_field, if (prompt_kind == .rename) "new name" else "destination path", true, .{
+    _ = page.field(panel, &name_field, "new name", true, .{
 
         .width = .{ .grow = 1 },
         .height = .{ .px = 28 },
@@ -1302,7 +1597,7 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
     });
 
-    _ = page.button(buttons, 1, confirm_label, .{
+    _ = page.button(buttons, 1, "Rename", .{
 
         .width = .{ .px = 100 },
         .height = .{ .px = 32 },
@@ -1326,12 +1621,25 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
 fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
 
-    surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_height }, ui.theme.surface_alt);
+    const parent_hot = drag_active and drop_target == .parent;
+
+    surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_height }, if (parent_hot) ui.theme.accent_dim else ui.theme.surface_alt);
     surface.fill_rect(.{ .x = 0, .y = toolbar_height, .w = width, .h = 1 }, ui.theme.border);
 
     lib.draw.vector.icon_in(surface, .{ .x = 8, .y = 7, .w = 24, .h = 24 }, lib.icons.arrow_up, ui.theme.text);
 
-    text_in(surface, .{ .x = 44, .y = 0, .w = width - 52, .h = toolbar_height }, 0, 13, cwd, ui.theme.text);
+    if (drag_active and cwd.len > 1) {
+
+        // While dragging, the whole top strip is the parent drop target.
+        const hint: []const u8 = if (parent_hot) "Drop to move up" else "Drag here to move up";
+
+        text_in(surface, .{ .x = 44, .y = 0, .w = width - 52, .h = toolbar_height }, 0, 13, hint, ui.theme.text);
+
+    } else {
+
+        text_in(surface, .{ .x = 44, .y = 0, .w = width - 52, .h = toolbar_height }, 0, 13, cwd, ui.theme.text);
+
+    }
 
 }
 
@@ -1382,11 +1690,21 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
         const rect = Rect{ .x = 0, .y = y, .w = content_w, .h = row_height };
 
         const is_selected = selected != null and selected.? == index;
-        const hovered = pointer_y >= y and pointer_y < y + row_height;
+        const is_drop = switch (drop_target) {
 
-        if (is_selected) {
+            .directory => |dir| dir == index,
+            else => false,
+
+        };
+        const hovered = !drag_active and pointer_y >= y and pointer_y < y + row_height and pointer_x < width;
+
+        if (is_drop) {
 
             ui.fill_round_rect(surface, rect.inset(3), 5, ui.theme.accent_dim);
+
+        } else if (is_selected) {
+
+            ui.fill_round_rect(surface, rect.inset(3), 5, if (drag_active) ui.theme.hover else ui.theme.accent_dim);
 
         } else if (hovered) {
 

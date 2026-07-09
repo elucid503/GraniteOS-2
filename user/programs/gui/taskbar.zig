@@ -1,7 +1,4 @@
-// Taskbar: the desktop's persistent panel. It docks a compositor panel window to the screen bottom, shows a button
-// per open window (polled from the compositor's window list), a live clock, and a launcher button that opens a
-// searchable menu of applications. Selecting an app asks the launcher server to spawn it - the taskbar itself holds
-// no spawn authority. A worker thread ticks twice a second so the clock and window list stay current without input.
+// Taskbar: the desktop's persistent panel.
 
 const std = @import("std");
 
@@ -62,7 +59,13 @@ fn button_gap() i32 {
 
 fn menu_width() u32 {
 
-    return @intCast(340);
+    return @intCast(category_col_width() + 280);
+
+}
+
+fn category_col_width() i32 {
+
+    return 190;
 
 }
 
@@ -79,6 +82,7 @@ fn search_height() i32 {
 }
 
 const max_apps = 32;
+const max_categories = 12;
 
 var font: lib.draw.text.Face = undefined;
 var bundle: lib.bundle.Bundle = undefined;
@@ -96,6 +100,11 @@ var window_count: usize = 0;
 var apps: [max_apps]lib.wm.App = undefined;
 var app_count: usize = 0;
 
+// Categories are derived from the apps' `category` metadata; the menu lists them and flies the active category's apps out to the side. Searching bypasses the grouping and matches across every app.
+var categories: [max_categories][]const u8 = undefined;
+var category_count: usize = 0;
+var active_category: usize = 0;
+
 var launch_endpoint: cap.Handle = 0;
 
 var keyboard = lib.keymap.Keyboard{};
@@ -103,6 +112,7 @@ var search_storage: [48]u8 = undefined;
 var search = ui.EditBuffer{ .bytes = &search_storage };
 
 var bar_ptr_x: i32 = -1;
+var menu_ptr_x: i32 = -1;
 var menu_ptr_y: i32 = -1;
 
 // Which element the pointer last hovered, so a move only repaints when the highlight would actually change.
@@ -138,6 +148,7 @@ fn run() !void {
     bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel, "taskbar");
 
     app_count = lib.wm.load_apps(&bundle, apps[0..]);
+    build_categories();
     launch_endpoint = lib.stream.lookup_endpoint("launch") catch 0;
 
     refresh_windows();
@@ -201,10 +212,10 @@ fn update_bar_cursor(x: i32) void {
 
 }
 
-fn update_menu_cursor(y: i32) void {
+fn update_menu_cursor(x: i32, y: i32) void {
 
     if (y < search_height()) lib.cursor.set(&connection, .selector)
-    else if (menu_hover_token(y) >= 0) lib.cursor.set(&connection, .clicker)
+    else if (menu_hover_token(x, y) >= 0) lib.cursor.set(&connection, .clicker)
     else lib.cursor.set(&connection, .pointer);
 
 }
@@ -328,24 +339,45 @@ fn handle_menu(event: events.Event) void {
 
         events.kind_button_down => {
 
-            if (event.code == events.button_left) menu_click(event.y);
+            if (event.code == events.button_left) menu_click(event.x, event.y);
 
         },
 
         events.kind_pointer_move => {
 
+            menu_ptr_x = event.x;
             menu_ptr_y = event.y;
 
-            const token = menu_hover_token(event.y);
+            var need = false;
+
+            // Hovering a category flies its apps out to the side, so the active group tracks the pointer.
+            if (!searching() and event.x < category_col_width()) {
+
+                if (category_at(event.y)) |index| {
+
+                    if (index != active_category) {
+
+                        active_category = index;
+                        need = true;
+
+                    }
+
+                }
+
+            }
+
+            const token = menu_hover_token(event.x, event.y);
 
             if (token != last_menu_hover) {
 
                 last_menu_hover = token;
-                paint_menu();
+                need = true;
 
             }
 
-            update_menu_cursor(event.y);
+            if (need) paint_menu();
+
+            update_menu_cursor(event.x, event.y);
 
         },
 
@@ -423,12 +455,218 @@ fn menu_key(code: u16) void {
 
 }
 
-fn menu_click(y: i32) void {
+fn menu_click(x: i32, y: i32) void {
 
-    const app = menu_app_at_y(y) orelse return;
+    if (y < search_height()) return;
 
-    launch(app.program);
-    close_menu();
+    if (searching()) {
+
+        if (search_app_at(y)) |app| {
+
+            launch(app.program);
+            close_menu();
+
+        }
+
+        return;
+
+    }
+
+    if (x < category_col_width()) {
+
+        if (category_at(y)) |index| {
+
+            if (index != active_category) {
+
+                active_category = index;
+                paint_menu();
+
+            }
+
+        }
+
+        return;
+
+    }
+
+    if (browse_app_at(y)) |app| {
+
+        launch(app.program);
+        close_menu();
+
+    }
+
+}
+
+fn searching() bool {
+
+    return search.slice().len != 0;
+
+}
+
+fn app_category(app: lib.wm.App) []const u8 {
+
+    return if (app.category.len == 0) "Other" else app.category;
+
+}
+
+// Collect the distinct category names in alphabetical order so grouping is stable across launches.
+fn build_categories() void {
+
+    category_count = 0;
+
+    for (apps[0..app_count]) |app| {
+
+        const name = app_category(app);
+        var seen = false;
+
+        for (categories[0..category_count]) |existing| {
+
+            if (std.mem.eql(u8, existing, name)) {
+
+                seen = true;
+                break;
+
+            }
+
+        }
+
+        if (!seen and category_count < max_categories) {
+
+            categories[category_count] = name;
+            category_count += 1;
+
+        }
+
+    }
+
+    var i: usize = 0;
+
+    while (i < category_count) : (i += 1) {
+
+        var j = i + 1;
+
+        while (j < category_count) : (j += 1) {
+
+            if (std.mem.order(u8, categories[j], categories[i]) == .lt) {
+
+                const tmp = categories[i];
+                categories[i] = categories[j];
+                categories[j] = tmp;
+
+            }
+
+        }
+
+    }
+
+    if (active_category >= category_count) active_category = 0;
+
+}
+
+fn category_size(index: usize) usize {
+
+    if (index >= category_count) return 0;
+
+    const name = categories[index];
+    var count: usize = 0;
+
+    for (apps[0..app_count]) |app| {
+
+        if (std.mem.eql(u8, app_category(app), name)) count += 1;
+
+    }
+
+    return count;
+
+}
+
+fn category_app(index: usize, nth: usize) ?lib.wm.App {
+
+    if (index >= category_count) return null;
+
+    const name = categories[index];
+    var k: usize = 0;
+
+    for (apps[0..app_count]) |app| {
+
+        if (!std.mem.eql(u8, app_category(app), name)) continue;
+
+        if (k == nth) return app;
+
+        k += 1;
+
+    }
+
+    return null;
+
+}
+
+fn match_count() usize {
+
+    var count: usize = 0;
+
+    for (apps[0..app_count]) |app| {
+
+        if (matches(app)) count += 1;
+
+    }
+
+    return count;
+
+}
+
+fn search_app(nth: usize) ?lib.wm.App {
+
+    var k: usize = 0;
+
+    for (apps[0..app_count]) |app| {
+
+        if (!matches(app)) continue;
+
+        if (k == nth) return app;
+
+        k += 1;
+
+    }
+
+    return null;
+
+}
+
+fn row_at(y: i32) ?usize {
+
+    if (y < search_height()) return null;
+
+    const row = @divTrunc(y - search_height(), row_height());
+
+    if (row < 0) return null;
+
+    return @intCast(row);
+
+}
+
+fn category_at(y: i32) ?usize {
+
+    const row = row_at(y) orelse return null;
+
+    return if (row < category_count) row else null;
+
+}
+
+fn browse_app_at(y: i32) ?lib.wm.App {
+
+    const row = row_at(y) orelse return null;
+
+    return category_app(active_category, row);
+
+}
+
+fn search_app_at(y: i32) ?lib.wm.App {
+
+    const row = row_at(y) orelse return null;
+
+    return search_app(row);
 
 }
 
@@ -462,15 +700,60 @@ fn toggle_menu() void {
 
 }
 
+// Browse view is sized to the tallest column so hovering between categories never resizes the window;
+// only the browse/search transition (and a changing result count) moves it.
+fn browse_rows() usize {
+
+    var rows = category_count;
+    var i: usize = 0;
+
+    while (i < category_count) : (i += 1) {
+
+        rows = @max(rows, category_size(i));
+
+    }
+
+    return rows;
+
+}
+
+fn view_rows() usize {
+
+    return if (searching()) match_count() else browse_rows();
+
+}
+
 fn menu_height() u32 {
 
-    return @intCast(search_height() + @as(i32, @intCast(app_count)) * row_height() + 8);
+    const rows: i32 = @intCast(@max(view_rows(), 1));
+
+    return @intCast(search_height() + rows * row_height() + 8);
+
+}
+
+fn sync_menu_size() void {
+
+    if (menu) |*menu_window| {
+
+        const height = menu_height();
+
+        if (menu_window.surface.height == height) return;
+
+        menu_window.resize(menu_width(), height) catch {};
+
+        if (lib.wm.screen_info(&connection)) |screen| {
+
+            lib.wm.move_window(&connection, menu_window.id, 0, menu_y(screen.height)) catch {};
+
+        } else |_| {}
+
+    }
 
 }
 
 fn menu_y(screen_height: u32) i32 {
 
-    return @as(i32, @intCast(screen_height)) - bar_height() - @as(i32, @intCast(menu_height()));
+    return @as(i32, @intCast(screen_height)) - bar_height() - @as(i32, @intCast(menu_height())) - 10;
 
 }
 
@@ -498,24 +781,31 @@ fn open_menu() void {
 
     ensure_menu() catch return;
 
-    const menu_window = menu orelse return;
-
     search.clear();
+    active_category = 0;
+    menu_ptr_x = -1;
     menu_ptr_y = -1;
     last_menu_hover = -3;
 
+    // Reopen at the browse size; a prior session may have left the window expanded for search results.
+    sync_menu_size();
+
+    const menu_window = menu orelse return;
+
     if (lib.wm.screen_info(&connection)) |screen| {
 
-        lib.wm.move_window(&connection, menu_window.id, 0, menu_y(screen.height)) catch {};
+        lib.wm.move_window(&connection, menu_window.id, 10, menu_y(screen.height)) catch {};
 
     } else |_| {}
 
     menu_open = true;
 
     paint_menu_content();
+
     gfx.fence();
     lib.wm.restore(&connection, menu_window.id) catch {};
     menu_window.present_all() catch {};
+
     paint_bar();
 
 }
@@ -556,49 +846,25 @@ fn launch(program: []const u8) void {
 
 }
 
-fn menu_hover_token(y: i32) i32 {
+// A stable token per hovered element so a pointer move only repaints when the highlight actually changes.
+fn menu_hover_token(x: i32, y: i32) i32 {
 
-    if (y < search_height()) return -1;
+    const row = row_at(y) orelse return -1;
+    const index: i32 = @intCast(row);
 
-    var row: i32 = 0;
+    if (searching()) {
 
-    for (apps[0..app_count]) |app| {
-
-        if (!matches(app)) continue;
-
-        const top = search_height() + row * row_height();
-        const rect = Rect{ .x = 4, .y = top, .w = @as(i32, @intCast(menu_width())) - 8, .h = row_height() - 4 };
-
-        if (y >= rect.y and y < rect.y + rect.h) return row;
-
-        row += 1;
+        return if (row < match_count()) 3000 + index else -2;
 
     }
 
-    return -2;
+    if (x < category_col_width()) {
 
-}
-
-fn menu_app_at_y(y: i32) ?lib.wm.App {
-
-    if (y < search_height()) return null;
-
-    var row: i32 = 0;
-
-    for (apps[0..app_count]) |app| {
-
-        if (!matches(app)) continue;
-
-        const top = search_height() + row * row_height();
-        const rect = Rect{ .x = 4, .y = top, .w = @as(i32, @intCast(menu_width())) - 8, .h = row_height() - 4 };
-
-        if (y >= rect.y and y < rect.y + rect.h) return app;
-
-        row += 1;
+        return if (row < category_count) 1000 + index else -2;
 
     }
 
-    return null;
+    return if (row < category_size(active_category)) 2000 + index else -2;
 
 }
 
@@ -684,6 +950,7 @@ fn paint_bar() void {
         .h = hover_h,
 
     };
+
     const launcher_hovered = bar_ptr_x >= 0 and bar_ptr_x < launcher_width();
 
     if (menu_open) {
@@ -774,6 +1041,7 @@ fn paint_clock(surface: *const gfx.Surface, width: i32) void {
 
 fn paint_menu() void {
 
+    sync_menu_size();
     paint_menu_content();
 
     if (menu) |menu_window| menu_window.present_all() catch {};
@@ -788,7 +1056,22 @@ fn paint_menu_content() void {
 
     panel(surface, surface.bounds(), ui.theme.window_bg);
 
-    // Search box.
+    paint_search_box(surface, width);
+
+    if (searching()) {
+
+        paint_search_results(surface, width);
+
+    } else {
+
+        paint_categories(surface);
+        paint_category_apps(surface, width);
+
+    }
+
+}
+
+fn paint_search_box(surface: *const gfx.Surface, width: i32) void {
 
     const search_rect = Rect{ .x = 8, .y = 8, .w = width - 16, .h = search_height() - 12 };
 
@@ -823,7 +1106,71 @@ fn paint_menu_content() void {
 
     surface.fill_rect(.{ .x = caret_x, .y = caret_y, .w = 1, .h = caret_h }, ui.theme.text);
 
-    // Filtered application rows.
+}
+
+fn paint_categories(surface: *const gfx.Surface) void {
+
+    const col_w = category_col_width();
+
+    // Divider between the category column and the app flyout.
+    surface.fill_rect(.{ .x = col_w, .y = search_height(), .w = 1, .h = @as(i32, @intCast(surface.height)) - search_height() }, ui.theme.border);
+
+    for (categories[0..category_count], 0..) |name, index| {
+
+        const top = search_height() + @as(i32, @intCast(index)) * row_height();
+        const rect = Rect{ .x = 6, .y = top + 3, .w = col_w - 12, .h = row_height() - 6 };
+        const hovered = menu_ptr_x >= 0 and menu_ptr_x < col_w and menu_ptr_y >= rect.y and menu_ptr_y < rect.y + rect.h;
+        const is_active = index == active_category;
+
+        if (is_active) {
+
+            ui.fill_round_rect(surface, rect, 6, ui.theme.accent_dim);
+
+        } else if (hovered) {
+
+            row_hover(surface, rect);
+
+        }
+
+        lib.draw.vector.icon_in(surface, .{ .x = rect.x + 10, .y = rect.y + @divTrunc(rect.h - 22, 2), .w = 22, .h = 22 }, lib.icons.apps, ui.theme.accent);
+
+        text_in(surface, .{ .x = rect.x + 40, .y = rect.y, .w = rect.w - 56, .h = rect.h }, 0, 14, name, ui.theme.text);
+
+        // Chevron marking that the category opens its apps to the side.
+        draw_chevron(surface, rect.x + rect.w - 20, rect.y + @divTrunc(rect.h, 2), ui.theme.text_dim);
+
+    }
+
+}
+
+fn paint_category_apps(surface: *const gfx.Surface, width: i32) void {
+
+    const left = category_col_width();
+    const count = category_size(active_category);
+
+    if (count == 0) {
+
+        draw_text(surface, left + 16, search_height() + 14, 13, "No applications", ui.theme.text_dim);
+        return;
+
+    }
+
+    var index: usize = 0;
+
+    while (index < count) : (index += 1) {
+
+        const app = category_app(active_category, index) orelse break;
+        const top = search_height() + @as(i32, @intCast(index)) * row_height();
+        const rect = Rect{ .x = left + 6, .y = top + 3, .w = width - left - 12, .h = row_height() - 6 };
+        const hovered = menu_ptr_x >= left and menu_ptr_y >= rect.y and menu_ptr_y < rect.y + rect.h;
+
+        paint_app_row(surface, rect, app, hovered);
+
+    }
+
+}
+
+fn paint_search_results(surface: *const gfx.Surface, width: i32) void {
 
     var y = search_height();
     var any = false;
@@ -834,15 +1181,10 @@ fn paint_menu_content() void {
 
         any = true;
 
-        const rect = Rect{ .x = 4, .y = y, .w = width - 8, .h = row_height() - 4 };
+        const rect = Rect{ .x = 6, .y = y + 3, .w = width - 12, .h = row_height() - 6 };
         const hovered = menu_ptr_y >= rect.y and menu_ptr_y < rect.y + rect.h;
 
-        if (hovered) row_hover(surface, rect);
-
-        lib.draw.vector.icon_in(surface, .{ .x = 14, .y = y + 14, .w = 26, .h = 26 }, app.icon, ui.theme.accent);
-
-        draw_text(surface, 52, y + 9, 15, app.title, ui.theme.text);
-        draw_text(surface, 52, y + 30, 12, app.description, ui.theme.text_dim);
+        paint_app_row(surface, rect, app, hovered);
 
         y += row_height();
 
@@ -851,6 +1193,31 @@ fn paint_menu_content() void {
     if (!any) {
 
         draw_text(surface, 20, search_height() + 12, 13, "No matching applications", ui.theme.text_dim);
+
+    }
+
+}
+
+fn paint_app_row(surface: *const gfx.Surface, rect: Rect, app: lib.wm.App, hovered: bool) void {
+
+    if (hovered) row_hover(surface, rect);
+
+    lib.draw.vector.icon_in(surface, .{ .x = rect.x + 10, .y = rect.y + @divTrunc(rect.h - 26, 2), .w = 26, .h = 26 }, app.icon, ui.theme.accent);
+
+    draw_text(surface, rect.x + 48, rect.y + 7, 15, app.title, ui.theme.text);
+    draw_text(surface, rect.x + 48, rect.y + 28, 12, app.description, ui.theme.text_dim);
+
+}
+
+// Small right-pointing chevron drawn from pixels so it needs no font glyph.
+fn draw_chevron(surface: *const gfx.Surface, cx: i32, cy: i32, color: gfx.Color) void {
+
+    var i: i32 = 0;
+
+    while (i < 4) : (i += 1) {
+
+        surface.fill_rect(.{ .x = cx - 1 + i, .y = cy - 4 + i, .w = 1, .h = 2 }, color);
+        surface.fill_rect(.{ .x = cx - 1 + i, .y = cy + 3 - i, .w = 1, .h = 2 }, color);
 
     }
 
