@@ -13,6 +13,9 @@ const child_budget = 4 * 1024 * 1024;
 const files_budget = 8 * 1024 * 1024;
 const marble_budget = 16 * 1024 * 1024;
 
+// Desktop wallpaper decode needs a multi-megabyte pixel buffer (1920x1080 XRGB plus inflate scratch).
+const context_budget = 32 * 1024 * 1024;
+
 // The compositor allocates the back buffer and every window surface, so its budget scales with the display.
 const compositor_budget = 64 * 1024 * 1024;
 
@@ -584,8 +587,14 @@ fn spawn_launcher() !void {
 
 fn spawn_gui_program(name: []const u8, id: u64) !void {
 
+    try spawn_gui_program_budget(name, id, child_budget);
+
+}
+
+fn spawn_gui_program_budget(name: []const u8, id: u64, budget: u64) !void {
+
     const image = bundle.find(name) orelse return error.NotFound;
-    const memory = try sys.create(.memory_authority, child_budget, cap.flint.memory);
+    const memory = try sys.create(.memory_authority, budget, cap.flint.memory);
     const init_endpoint = try sys.create(.endpoint, 0, 0);
     const report = try sys.copy(supervisor_endpoint, id);
 
@@ -650,7 +659,7 @@ fn spawn_taskbar() !void {
 
 fn spawn_context() !void {
 
-    try spawn_gui_program("context", context_id);
+    try spawn_gui_program_budget("context", context_id, context_budget);
 
 }
 

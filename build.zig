@@ -128,6 +128,13 @@ pub fn build(b: *std.Build) void {
     add_module(bundle_run, "font-ttf", b.path("user/fonts/InterVariable.ttf"));
     add_module(bundle_run, "font-console", b.path("user/fonts/spleen-8x16.psfu"));
 
+    // Theme wallpapers (user/images/wallpaper/default); one PNG per color theme.
+    add_module(bundle_run, "wp-monochrome", b.path("user/images/wallpaper/default/monochrome.png"));
+    add_module(bundle_run, "wp-ocean", b.path("user/images/wallpaper/default/ocean.png"));
+    add_module(bundle_run, "wp-forest", b.path("user/images/wallpaper/default/forest.png"));
+    add_module(bundle_run, "wp-sunset", b.path("user/images/wallpaper/default/sunset.png"));
+    add_module(bundle_run, "wp-grape", b.path("user/images/wallpaper/default/grape.png"));
+
     b.installArtifact(kernel);
     b.getInstallStep().dependOn(&b.addInstallBinFile(kernel_image, "granite-kernel.bin").step);
     b.getInstallStep().dependOn(&b.addInstallBinFile(flint_image, "flint.bin").step);

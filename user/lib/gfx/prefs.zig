@@ -180,6 +180,39 @@ pub fn wallpaper() Color {
 
 }
 
+/// On-disk / source path for the single wallpaper set (one PNG per theme).
+pub const wallpaper_dir = "/root/user/images/wallpaper/default";
+
+/// File stem for the active theme's wallpaper PNG (matches files under wallpaper_dir).
+pub fn wallpaper_file_stem(id: ThemeId) []const u8 {
+
+    return switch (id) {
+
+        .mono => "monochrome",
+        .ocean => "ocean",
+        .forest => "forest",
+        .sunset => "sunset",
+        .grape => "grape",
+
+    };
+
+}
+
+/// Module-bundle name for the theme wallpaper (`wp-<stem>`).
+pub fn wallpaper_bundle_name(id: ThemeId) []const u8 {
+
+    return switch (id) {
+
+        .mono => "wp-monochrome",
+        .ocean => "wp-ocean",
+        .forest => "wp-forest",
+        .sunset => "wp-sunset",
+        .grape => "wp-grape",
+
+    };
+
+}
+
 pub fn chrome() Chrome {
 
     const palette = palettes[@intFromEnum(active_theme)];

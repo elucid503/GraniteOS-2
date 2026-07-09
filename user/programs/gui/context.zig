@@ -8,6 +8,7 @@ const cap = lib.cap;
 const events = lib.events;
 const gfx = lib.gfx;
 const proto = lib.proto;
+const sys = lib.sys;
 const ui = lib.ui;
 
 const Rect = gfx.Rect;
@@ -20,6 +21,9 @@ comptime {
 }
 
 const home_dir = "/root/user";
+
+// Decode arena: IDAT (~160 KiB) + full-res XRGB pixels (~8 MiB at 1920x1080) + row scratch.
+const wallpaper_arena_bytes = 12 * 1024 * 1024;
 
 const MenuAction = enum {
 
@@ -69,9 +73,14 @@ const pin_margin: i32 = 24;
 const pin_gap: i32 = 12;
 
 var font: lib.draw.text.Face = undefined;
+var bundle: lib.bundle.Bundle = undefined;
 
 var connection: lib.window.Connection = undefined;
 var desktop: lib.window.Window = undefined;
+
+var wallpaper_image: ?lib.draw.png.Image = null;
+var wallpaper_theme: ?lib.prefs.ThemeId = null;
+var wallpaper_arena: []u8 = &.{};
 
 var menu_open = false;
 var menu_x: i32 = 0;
@@ -120,7 +129,7 @@ fn run() !void {
 
     lib.prefs.refresh();
 
-    var bundle = try lib.desktop.open_bundle();
+    bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
@@ -137,6 +146,7 @@ fn run() !void {
 
     } else |_| {}
 
+    reload_wallpaper();
     reload_pins();
     paint_desktop();
 
@@ -270,6 +280,7 @@ fn handle_desktop(event: events.Event) void {
         events.kind_prefs_changed => {
 
             lib.prefs.refresh();
+            reload_wallpaper();
             reload_pins();
             paint_desktop();
 
@@ -722,7 +733,7 @@ fn paint_desktop() void {
 
     const surface = &desktop.surface;
 
-    surface.fill(lib.prefs.wallpaper());
+    paint_wallpaper(surface, null);
     paint_pins(surface);
 
     if (menu_open) paint_menu(surface);
@@ -730,6 +741,76 @@ fn paint_desktop() void {
     if (prompt_open) paint_prompt(surface);
 
     desktop.present_all() catch {};
+
+}
+
+/// Decode the active theme's wallpaper from the module bundle (one PNG under wallpaper/default).
+fn reload_wallpaper() void {
+
+    const theme = lib.prefs.active_theme;
+
+    if (wallpaper_theme) |current| {
+
+        if (current == theme and wallpaper_image != null) return;
+
+    }
+
+    wallpaper_image = null;
+    wallpaper_theme = theme;
+
+    ensure_wallpaper_arena() catch return;
+
+    var fba = std.heap.FixedBufferAllocator.init(wallpaper_arena);
+    const bytes = bundle.find(lib.prefs.wallpaper_bundle_name(theme)) orelse return;
+
+    wallpaper_image = lib.draw.png.decode(fba.allocator(), bytes) catch null;
+
+}
+
+fn ensure_wallpaper_arena() !void {
+
+    if (wallpaper_arena.len != 0) return;
+
+    const region = try sys.create(.region, wallpaper_arena_bytes, cap.memory);
+    const base = try sys.map(cap.self_space, region, 0, sys.read | sys.write);
+
+    wallpaper_arena = @as([*]u8, @ptrFromInt(base))[0..wallpaper_arena_bytes];
+
+}
+
+/// Fill `rect` (or the full surface) with the cover-fitted wallpaper, or the theme solid color if missing.
+fn paint_wallpaper(surface: *const gfx.Surface, rect: ?Rect) void {
+
+    if (wallpaper_image) |image| {
+
+        const view = lib.draw.image.Image.from_png(image);
+        const full = surface.bounds();
+
+        if (rect) |region| {
+
+            var clipped = surface.clipped(region);
+
+            view.draw_cover(&clipped, full);
+
+        } else {
+
+            view.draw_cover(surface, full);
+
+        }
+
+        return;
+
+    }
+
+    if (rect) |region| {
+
+        surface.fill_rect(region, lib.prefs.wallpaper());
+
+    } else {
+
+        surface.fill(lib.prefs.wallpaper());
+
+    }
 
 }
 
@@ -794,7 +875,7 @@ fn paint_one_pin(surface: *const gfx.Surface, index: usize) void {
 
     const cell = pin_cell(index);
 
-    surface.fill_rect(cell, lib.prefs.wallpaper());
+    paint_wallpaper(surface, cell);
 
     const hovered = pin_hover != null and pin_hover.? == index;
 

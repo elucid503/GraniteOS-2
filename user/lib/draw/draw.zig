@@ -1,13 +1,15 @@
 // The drawing library root (M10 GUI rewrite): pixel surfaces, colors, and rectangles. Every visual element in
-// the system - window chrome, text, icons, charts - renders through this module and its companions (path.zig,
-// raster.zig, stroke.zig, text.zig, vector.zig). All arithmetic is integer fixed-point: the kernel does not
-// preserve FP/SIMD state across context switches, so user space never touches floats.
+// the system - window chrome, text, icons, charts, images - renders through this module and its companions
+// (path.zig, raster.zig, stroke.zig, text.zig, vector.zig, png.zig, image.zig). All arithmetic is integer
+// fixed-point: the kernel does not preserve FP/SIMD state across context switches, so user space never touches floats.
 
 const std = @import("std");
 const builtin = @import("builtin");
 
 pub const bitmap = @import("bitmap.zig");
+pub const image = @import("image.zig");
 pub const path = @import("path.zig");
+pub const png = @import("png.zig");
 pub const raster = @import("raster.zig");
 pub const round = @import("round.zig");
 pub const stroke = @import("stroke.zig");
