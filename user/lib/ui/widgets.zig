@@ -153,8 +153,7 @@ pub fn label_in(surface: *const Surface, font: *const Face, rect: Rect, label: [
 
 }
 
-/// The equal-width top tab strip shared by Status and Timer: active pill, hover pill, and a bottom border
-/// with a gap under the active tab. Feed pointer events through `pointer_move`/`leave` and repaint on true.
+/// The equal-width top tab strip shared by Status and Timer: active pill, hover pill, and a bottom border with a gap under the active tab. Feed pointer events through `pointer_move`/`leave` and repaint on true.
 pub const TabStrip = struct {
 
     pub const Item = struct {
