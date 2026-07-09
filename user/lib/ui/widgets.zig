@@ -1,5 +1,4 @@
-// Freeform widgets for canvas-style layouts (toolbars, tab strips, button grids, popup menus) that live outside
-// Page's flex tree. Apps register hit rects while painting and query them on events, so layout math exists once.
+// Freeform widgets for canvas-style layouts (toolbars, tab strips, button grids, popup menus) that live outside Page's flex tree. Apps register hit rects while painting and query them on events, so layout math exists once.
 
 const draw = @import("../draw/draw.zig");
 const text_mod = @import("../draw/text.zig");
@@ -13,8 +12,6 @@ const Rect = draw.Rect;
 const Surface = draw.Surface;
 
 /// Freeform hover/hit tracking: rects registered during paint (topmost last), queried on pointer events.
-/// Ids are app-defined and nonzero; 0 means "nothing". The repaint-on-hover-change convention is built in:
-/// `pointer_move` returns true only when the hovered id actually changed.
 pub const HitRegions = struct {
 
     pub const max_regions = 96;
