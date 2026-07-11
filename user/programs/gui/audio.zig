@@ -52,8 +52,7 @@ var wave: ?lib.wav.Wave = null;
 var status: []const u8 = "Open a WAV file";
 var playback_state: u32 = playback_idle;
 
-// Playback controls shared with the worker thread. The worker publishes `playback_cursor` (bytes into
-// the sample data) and reads `volume_gain` per chunk; the UI thread posts a frame-aligned `seek_target`.
+// Playback controls shared with the worker thread. The worker publishes `playback_cursor` (bytes into the sample data) and reads `volume_gain` per chunk; the UI thread posts a frame-aligned `seek_target`.
 var playback_cursor: usize = 0;
 var seek_target: i64 = -1;
 var volume_gain: u32 = 200;
@@ -111,10 +110,7 @@ fn run() !void {
     var shown_playback_state = @atomicLoad(u32, &playback_state, .acquire);
     var shown_cursor = @atomicLoad(usize, &playback_cursor, .acquire);
 
-    // Coalesce repaints: event handlers only mark `dirty`, and a single present happens once the event
-    // ring drains. A fast drag floods the ring with pointer-moves; painting each would back up on the
-    // compositor's synchronous present, so we collapse the whole batch into one frame.
-    var dirty = true;
+    var dirty = true; // Coalesces repaints
 
     while (true) {
 
@@ -528,7 +524,6 @@ fn paint() void {
 
     if (wave) |loaded| {
 
-        // Header: the icon and the file's own name, not a generic label.
         const name = base_name(file_path);
 
         lib.draw.vector.icon_in(surface, .{ .x = content_x, .y = pane.y + 26, .w = 22, .h = 22 }, lib.icons.music, ui.theme.accent);
@@ -538,13 +533,11 @@ fn paint() void {
         font.draw(surface, content_x + 32, pane.y + 29, 18, ui.truncate(&font, name, 18, name_max), ui.theme.text);
 
         var info: [128]u8 = undefined;
-        const text = std.fmt.bufPrint(&info, "{d} Hz   {d} channel{s}   {d}-bit PCM   {d}:{d:0>2}", .{
+        const text = std.fmt.bufPrint(&info, "{d} Hz   {d} channel{s}   {d}-bit PCM", .{
             loaded.format.sample_rate,
             loaded.format.channels,
             if (loaded.format.channels == 1) "" else "s",
             loaded.format.bits_per_sample,
-            loaded.duration_ms() / 60_000,
-            (loaded.duration_ms() / 1000) % 60,
         }) catch "";
 
         font.draw(surface, content_x, pane.y + 64, 13, text, ui.theme.text_dim);
