@@ -10,6 +10,8 @@ const Handle = cap.Handle;
 
 const page_size = 4096;
 const child_budget = 4 * 1024 * 1024;
+// Virtio-sound pulls a larger image/BSS than the other MMIO drivers; keep headroom for DMA + console log session.
+const audio_budget = 8 * 1024 * 1024;
 const files_budget = 8 * 1024 * 1024;
 const marble_budget = 16 * 1024 * 1024;
 
@@ -32,6 +34,7 @@ var console_endpoint: Handle = 0;
 var naming_endpoint: Handle = 0;
 var supervisor_endpoint: Handle = 0;
 var block_endpoint: Handle = 0;
+var audio_endpoint: Handle = 0;
 var files_endpoint: Handle = 0;
 var display_endpoint: Handle = 0;
 var input_endpoint: Handle = 0;
@@ -40,6 +43,7 @@ var launcher_endpoint: Handle = 0;
 
 var console_uart: lib.dtb.Uart = undefined;
 var block_device: ?lib.dtb.Device = null;
+var audio_device: ?lib.dtb.Device = null;
 
 // The graphical stack is optional by hardware presence (08-roadmap.md M9): it spawns only when the DTB
 // probe finds a virtio-gpu transport, exactly as the filesystem hinges on a block device.
@@ -62,6 +66,7 @@ const welcome_id: u64 = 9;
 const launcher_id: u64 = 11;
 const taskbar_id: u64 = 12;
 const context_id: u64 = 13;
+const audio_id: u64 = 14;
 
 // The filesystem attaches its block session under this badge; badge 0 stays the shared console/logging session.
 
@@ -111,6 +116,7 @@ fn run(arg: u64) !void {
     console_endpoint = try sys.create(.endpoint, 0, 0);
     supervisor_endpoint = try sys.create(.endpoint, 0, 0);
     block_endpoint = try sys.create(.endpoint, 0, 0);
+    audio_endpoint = try sys.create(.endpoint, 0, 0);
     files_endpoint = try sys.create(.endpoint, 0, 0);
     display_endpoint = try sys.create(.endpoint, 0, 0);
     input_endpoint = try sys.create(.endpoint, 0, 0);
@@ -133,6 +139,14 @@ fn run(arg: u64) !void {
     // (07-userspace-ddd.md Section 7.2), and the shell still comes up.
 
     try spawn_files();
+
+    if (audio_device != null) {
+
+        // The driver registers "audio" itself after a successful bind so a failed init never leaves a
+        // dead name that hangs clients forever on attach.
+        try spawn_audio();
+
+    }
 
     try spawn_marble();
 
@@ -182,6 +196,7 @@ const virtio_magic: u32 = 0x7472_6976;
 const device_id_block: u32 = 2;
 const device_id_gpu: u32 = 16;
 const device_id_input: u32 = 18;
+const device_id_sound: u32 = 25;
 const max_transports = 64;
 
 fn find_virtio_devices(dtb: usize) void {
@@ -213,6 +228,12 @@ fn find_virtio_devices(dtb: usize) void {
                     input_count += 1;
 
                 }
+
+            },
+
+            device_id_sound => {
+
+                if (audio_device == null) audio_device = node;
 
             },
 
@@ -385,6 +406,44 @@ fn spawn_files() !void {
         .data3 = if (block_device != null) 1 else 0,
 
     }, &.{ memory, init_endpoint, report, block });
+
+}
+
+fn spawn_audio() !void {
+
+    const device = audio_device orelse return error.NotFound;
+    const image = bundle.find("audio") orelse return error.NotFound;
+    const page = device.base & ~@as(usize, page_size - 1);
+    const window = try sys.create_device_region(page, page_size, cap.flint.devices);
+    const interrupt = try sys.create(.interrupt, device.interrupt_line, cap.flint.interrupts);
+    const memory = try sys.create(.memory_authority, audio_budget, cap.flint.memory);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
+    const report = try sys.copy(supervisor_endpoint, audio_id);
+
+    const grants = [_]Handle{
+
+        audio_endpoint,
+        audio_endpoint,
+        audio_endpoint,
+        naming_endpoint,
+        memory,
+        init_endpoint,
+        report,
+        window,
+        interrupt,
+        cap.flint.dma,
+
+    };
+
+    try spawn_detached(.{
+
+        .image = image,
+        .authority = memory,
+        .args = &.{"audio"},
+        .grants = &grants,
+        .data3 = device.base - page,
+
+    }, &.{ window, interrupt, memory, init_endpoint, report });
 
 }
 
@@ -707,6 +766,12 @@ fn restart(who: u64) !void {
         block_id => {
 
             if (block_device != null) try spawn_block();
+
+        },
+
+        audio_id => {
+
+            if (audio_device != null) try spawn_audio();
 
         },
 

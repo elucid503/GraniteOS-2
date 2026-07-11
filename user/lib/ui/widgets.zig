@@ -1,5 +1,7 @@
 // Freeform widgets for canvas-style layouts (toolbars, tab strips, button grids, popup menus) that live outside Page's flex tree. Apps register hit rects while painting and query them on events, so layout math exists once.
 
+const std = @import("std");
+
 const draw = @import("../draw/draw.zig");
 const text_mod = @import("../draw/text.zig");
 const vector = @import("../draw/vector.zig");
@@ -488,6 +490,112 @@ pub const Grid = struct {
             .h = cell_h,
 
         };
+
+    }
+
+};
+
+// Horizontal slider: a draggable knob over a track with a filled lead. Value is carried as permille of
+// `span` (default 1000) so callers map it onto any domain — volume, seek position, brightness — without
+// overflow. App-wide: feed button-down through `press`, pointer-move through `drag`, button-up to `release`.
+
+pub const Slider = struct {
+
+    value: i32 = 0,
+    span: i32 = 1000,
+    dragging: bool = false,
+
+    knob: i32 = 12,
+    track: i32 = 4,
+
+    fn knob_center(self: *const Slider, rect: Rect) i32 {
+
+        if (self.span <= 0) return rect.x;
+
+        return rect.x + @divTrunc(std.math.clamp(self.value, 0, self.span) * rect.w, self.span);
+
+    }
+
+    /// Generous hit test around the track so the knob stays easy to grab.
+    pub fn contains(self: *const Slider, rect: Rect, x: i32, y: i32) bool {
+
+        const reach = @divTrunc(self.knob, 2) + 2;
+        const mid = rect.y + @divTrunc(rect.h, 2);
+
+        return x >= rect.x - reach and x <= rect.x + rect.w + reach and
+            y >= mid - self.knob and y <= mid + self.knob;
+
+    }
+
+    /// Set the value from a pointer x within `rect`; true when it changed (repaint).
+    pub fn set_from_x(self: *Slider, rect: Rect, x: i32) bool {
+
+        if (rect.w <= 0) return false;
+
+        const clamped = std.math.clamp(x, rect.x, rect.x + rect.w);
+        const next = @divTrunc((clamped - rect.x) * self.span + @divTrunc(rect.w, 2), rect.w);
+
+        if (next == self.value) return false;
+
+        self.value = next;
+
+        return true;
+
+    }
+
+    /// Position the knob from an external fraction (numerator/denominator) unless the user is dragging.
+    pub fn set_fraction(self: *Slider, numerator: i64, denominator: i64) void {
+
+        if (self.dragging) return;
+
+        self.value = if (denominator <= 0) 0 else @intCast(@divTrunc(numerator * self.span, denominator));
+
+    }
+
+    /// Begin a drag if the press landed on the slider; true when the press was consumed.
+    pub fn press(self: *Slider, rect: Rect, x: i32, y: i32) bool {
+
+        if (!self.contains(rect, x, y)) return false;
+
+        self.dragging = true;
+        _ = self.set_from_x(rect, x);
+
+        return true;
+
+    }
+
+    pub fn drag(self: *Slider, rect: Rect, x: i32) bool {
+
+        if (!self.dragging) return false;
+
+        return self.set_from_x(rect, x);
+
+    }
+
+    pub fn release(self: *Slider) void {
+
+        self.dragging = false;
+
+    }
+
+    pub fn paint(self: *const Slider, surface: *const Surface, rect: Rect, filled: Color, rail: Color, knob: Color) void {
+
+        const mid = rect.y + @divTrunc(rect.h, 2);
+        const radius = @divTrunc(self.track, 2);
+        const track_rect = Rect{ .x = rect.x, .y = mid - radius, .w = rect.w, .h = self.track };
+        const center = self.knob_center(rect);
+
+        ui.fill_round_rect(surface, track_rect, radius, rail);
+
+        if (center > rect.x) {
+
+            ui.fill_round_rect(surface, .{ .x = rect.x, .y = track_rect.y, .w = center - rect.x, .h = self.track }, radius, filled);
+
+        }
+
+        const box = Rect{ .x = center - @divTrunc(self.knob, 2), .y = mid - @divTrunc(self.knob, 2), .w = self.knob, .h = self.knob };
+
+        ui.fill_round_rect(surface, box, @divTrunc(self.knob, 2), knob);
 
     }
 

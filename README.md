@@ -18,7 +18,7 @@ ships with a persistent on-disk filesystem plus an optional (but highly reccomen
 ```sh
 zig build # kernel image + user module bundle + persistent disk seed (zig-out/bin)
 zig build qemu # boot the full system under QEMU virt (interactive; quit with Ctrl-A x)
-zig build qemu-gui # same, with an SDL window (virtio-gpu + virtio-input)
+zig build qemu-gui # SDL desktop with virtio GPU, input, and sound
 zig build qemu-nodisk # boot without a virtio-blk disk (the filesystem reports unavailable)
 zig build qemu-bare # boot the kernel alone; halts after initialization
 zig build qemu-debug # boot halted with a gdb stub on :1234
@@ -38,7 +38,9 @@ interactive shell), and utilities (`echo`, `cat`, `help`, `ls`, `write`, …).
 When a virtio-blk disk is present, programs are also installed on the persistent
 filesystem. If virtio-gpu hardware is present (`zig build qemu-gui`), Flint
 starts the display and input drivers, the compositor, the launcher, and a
-welcome desktop with taskbar chrome. Type `exit` at the `marble [/] >` prompt
+welcome desktop with taskbar chrome. GUI boots also expose a VirtIO Sound output;
+the Audio app and `play <file.wav>` support PCM WAV files with 8- or 16-bit mono
+or stereo samples at standard VirtIO sample rates. Type `exit` at the `marble [/] >` prompt
 to watch the supervisor restart Marble; quit QEMU with `Ctrl-A` then `x`.
 `scripts/m6.sh` drives Marble over serial; `scripts/m9.sh` tests the GUI
 stack.
@@ -134,6 +136,7 @@ user/
   drivers/console/        PL011 console driver
   drivers/block/          virtio-blk block driver
   drivers/display/        virtio-gpu display driver
+  drivers/audio/          virtio-sound PCM output driver
   servers/naming/         name service
   servers/filesystem/     on-disk filesystem server
   servers/display/        compositor and window manager

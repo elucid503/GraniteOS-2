@@ -226,7 +226,7 @@ fn init_device() !void {
         reg_write(reg_device_features_sel, 1);
         _ = reg_read(reg_device_features);
         reg_write(reg_driver_features_sel, 1);
-        reg_write(reg_driver_features, 0);
+        reg_write(reg_driver_features, 1); // VIRTIO_F_VERSION_1 (feature bit 32)
 
         reg_write(reg_status, status_acknowledge | status_driver | status_features_ok);
 

@@ -15,6 +15,7 @@ pub const HitRegions = widgets.HitRegions;
 pub const TabStrip = widgets.TabStrip;
 pub const Menu = widgets.Menu;
 pub const Grid = widgets.Grid;
+pub const Slider = widgets.Slider;
 pub const ButtonState = widgets.ButtonState;
 pub const ButtonStyle = widgets.ButtonStyle;
 

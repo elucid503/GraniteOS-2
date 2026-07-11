@@ -1321,6 +1321,13 @@ fn open_entry(index: usize) void {
 
     }
 
+    if (lib.file_picker.has_extension(entry.name[0..entry.name_len], "wav")) {
+
+        lib.wm.launch_with_path("audio-gui", path);
+        return;
+
+    }
+
     if (is_text_file(entry)) {
 
         lib.wm.launch_with_path("notepad", path);

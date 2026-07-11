@@ -126,6 +126,16 @@ pub const image =
     \\</svg>
 ;
 
+pub const music =
+    \\<svg viewBox="0 0 24 24">
+    \\<circle cx="7" cy="18" r="2.5"/>
+    \\<circle cx="17" cy="16" r="2.5"/>
+    \\<line x1="9" y1="18" x2="9" y2="6"/>
+    \\<line x1="19" y1="16" x2="19" y2="4"/>
+    \\<line x1="9" y1="6" x2="19" y2="4"/>
+    \\</svg>
+;
+
 // Lucide mouse-pointer-2 — default arrow cursor.
 pub const pointer =
     \\<svg viewBox="0 0 24 24">

@@ -44,6 +44,8 @@ const bundle_overrides = std.StaticStringMap([]const u8).initComptime(.{
     .{ "servers/display", "compositor" },
     .{ "programs/gui/status", "status-gui" },
     .{ "programs/gui/about", "about-gui" },
+    // Keep the virtio-sound driver as plain "audio"; the Media app must not steal that name.
+    .{ "programs/gui/audio", "audio-gui" },
 
 });
 
@@ -76,6 +78,7 @@ const default_descriptions = std.StaticStringMap([]const u8).initComptime(.{
     .{ "delete", "Remove a file or empty directory" },
     .{ "rename", "Move a file or directory" },
     .{ "perms", "Set file write permission" },
+    .{ "play", "Play a PCM WAV audio file" },
 
 });
 

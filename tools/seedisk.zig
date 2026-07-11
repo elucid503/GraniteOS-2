@@ -52,7 +52,7 @@ pub fn main() !void {
 
     if (args.len < 3 or (args.len - 3) % 2 != 0) {
 
-        std.debug.print("usage: seedisk <path> <size-bytes> [<name> <elf-path>]...\n", .{});
+        std.debug.print("usage: seedisk <path> <size-bytes> [<name-or-absolute-path> <host-path>]...\n", .{});
         return error.Usage;
 
     }
@@ -98,17 +98,18 @@ pub fn main() !void {
     _ = try volume.create("/root", .directory);
     _ = try volume.create("/root/programs", .directory);
     _ = try volume.create("/root/user", .directory);
+    _ = try volume.create("/root/user/demos", .directory);
 
     var index: usize = 3;
 
     while (index + 1 < args.len) : (index += 2) {
 
         const name = args[index];
-        const elf_path = args[index + 1];
-        const image = try std.fs.cwd().readFileAlloc(arena, elf_path, 64 * 1024 * 1024);
+        const host_path = args[index + 1];
+        const image = try std.fs.cwd().readFileAlloc(arena, host_path, 64 * 1024 * 1024);
 
         var path_buffer: [format.max_name + 32]u8 = undefined;
-        const file_path = try std.fmt.bufPrint(&path_buffer, "/root/programs/{s}", .{name});
+        const file_path = if (name.len > 0 and name[0] == '/') name else try std.fmt.bufPrint(&path_buffer, "/root/programs/{s}", .{name});
 
         const inode = try volume.create(file_path, .file);
 

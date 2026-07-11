@@ -1,6 +1,7 @@
 // Build the aarch64 freestanding kernel, M7 user module bundle, the persistent disk image, and QEMU `virt` run steps.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const discover = @import("build/discover.zig");
 
@@ -157,6 +158,9 @@ pub fn build(b: *std.Build) void {
         add_seed_program(seedisk_run, module.bundle_name, exe);
 
     }
+
+    seedisk_run.addArg("/root/user/demos/demo.wav");
+    seedisk_run.addFileArg(b.path("user/audio/demo.wav"));
 
     seedisk_run.has_side_effects = true;
 
@@ -416,6 +420,12 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
         "-m",       b.fmt("{d}M", .{step.memory}),
     });
 
+    // VirtIO Sound needs a modern MMIO transport (VIRTIO_F_VERSION_1 / config version 2). QEMU's
+    // virtio-mmio defaults to force-legacy=on, which only exposes the legacy v1 register set and
+    // prevents the audio driver from binding. GPU/input/block already handle modern queues.
+
+    run.addArgs(&.{ "-global", "virtio-mmio.force-legacy=false" });
+
     // GUI boots open a host display window with the serial console on stdio; everything else is headless.
 
     if (step.gui) {
@@ -424,6 +434,12 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
         run.addArgs(&.{ "-device", "virtio-gpu-device" });
         run.addArgs(&.{ "-device", "virtio-keyboard-device" });
         run.addArgs(&.{ "-device", "virtio-tablet-device" });
+        const audio_backend = if (builtin.os.tag == .windows) "dsound,id=granite-audio" else "sdl,id=granite-audio";
+
+        run.addArgs(&.{ "-audiodev", audio_backend });
+        // streams=1: playback only. The default (2) also opens a capture stream, which fails on
+        // backends without host input (wav, some dsound setups) and is unused by GraniteOS.
+        run.addArgs(&.{ "-device", "virtio-sound-device,audiodev=granite-audio,streams=1" });
         run.addArgs(&.{ "-serial", "mon:stdio" });
 
     } else {

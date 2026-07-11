@@ -220,6 +220,7 @@ pub fn icon_by_name(name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "timer")) return icons.timer;
     if (std.mem.eql(u8, name, "paint")) return icons.paint;
     if (std.mem.eql(u8, name, "image")) return icons.image;
+    if (std.mem.eql(u8, name, "music")) return icons.music;
 
     return icons.apps;
 

@@ -31,7 +31,8 @@ const max_path = 512;
 // A whole ELF image is loaded before the loader picks out its segments; sized comfortably above the largest program.
 
 const max_program = 1024 * 1024;
-const child_budget = 1 * 1024 * 1024;
+// Image (~0.3 MiB) + largest typical media buffer + FS/audio session regions must fit under this.
+const child_budget = 4 * 1024 * 1024;
 const pipe_capacity = 4096;
 
 const Stage = struct {

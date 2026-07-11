@@ -67,6 +67,24 @@ pub const block = struct {
 
 };
 
+// Audio output interface. Clients attach one shared buffer and submit interleaved PCM frames from it.
+
+pub const audio = struct {
+
+    pub const interface_id: u32 = 0x4155_4449; // "AUDI"
+    pub const version: u32 = 1;
+
+    pub const configure: u16 = 1; // request: rate, channels, sample bits   reply: status
+    pub const write: u16 = 2; // request: offset, byte length             reply: bytes consumed
+    pub const drain: u16 = 3; // request: -                               reply: status
+    pub const stop: u16 = 4; // request: -                               reply: status
+    pub const attach: u16 = 5; // request: capacity, buffer Region         reply: status
+
+    pub const format_s16_le: u64 = 16;
+    pub const max_write: usize = 16 * 1024;
+
+};
+
 // Filesystem interface (07-userspace-ddd.md Section 10.3). Paths, file data, and result records ride in the
 // per-session shared buffer as (offset, length) pairs; `attach` (appended) shares that buffer once.
 

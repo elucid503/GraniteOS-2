@@ -27,6 +27,7 @@ pub const Filter = enum {
 
     all,
     png,
+    wav,
 
 };
 
@@ -556,6 +557,7 @@ pub const FilePicker = struct {
 
             .all => true,
             .png => has_extension(name, "png"),
+            .wav => has_extension(name, "wav"),
 
         };
 
