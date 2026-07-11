@@ -662,6 +662,25 @@ pub const Manager = struct {
 
     }
 
+    pub fn by_title(self: *Manager, title: []const u8) ?*Window {
+
+        var cursor = self.count;
+
+        while (cursor > 0) {
+
+            cursor -= 1;
+
+            const window = &self.windows[self.order[cursor]];
+
+            if (!window.is_taskbar_listed()) continue;
+            if (std.ascii.eqlIgnoreCase(window.title[0..window.title_length], title)) return window;
+
+        }
+
+        return null;
+
+    }
+
     pub fn focused(self: *Manager) ?*Window {
 
         if (self.focus == 0) return null;

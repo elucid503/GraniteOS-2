@@ -1028,6 +1028,29 @@ pub const Scroll = struct {
 
     }
 
+    pub fn wheel(self: Scroll, delta: i64, step: i32) i32 {
+
+        const direction: i32 = if (delta < 0) 1 else if (delta > 0) -1 else 0;
+
+        return std.math.clamp(self.clamped() + direction * @max(0, step), 0, self.max_offset());
+
+    }
+
+    pub fn offset_at(self: Scroll, track: i32, pointer: i32) i32 {
+
+        if (!self.overflowing() or track <= 0) return 0;
+
+        const current_thumb = self.thumb(track);
+        const span = track - current_thumb.len;
+
+        if (span <= 0) return 0;
+
+        const position = std.math.clamp(pointer - @divTrunc(current_thumb.len, 2), 0, span);
+
+        return @intCast(@divTrunc(@as(i64, position) * @as(i64, self.max_offset()), @as(i64, span)));
+
+    }
+
     const Thumb = struct {
 
         pos: i32,
@@ -1097,5 +1120,8 @@ test "scroll clamps its offset and sizes the thumb" {
     const bottom_thumb = bottom.thumb(100);
 
     try testing.expectEqual(@as(i32, 100), bottom_thumb.pos + bottom_thumb.len);
+    try testing.expectEqual(@as(i32, 60), over.wheel(-1, 10));
+    try testing.expectEqual(@as(i32, 50), (Scroll{ .offset = 60, .content = 100, .viewport = 40 }).wheel(1, 10));
+    try testing.expectEqual(@as(i32, 60), over.offset_at(100, 100));
 
 }

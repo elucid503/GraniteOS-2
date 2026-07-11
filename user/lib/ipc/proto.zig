@@ -215,6 +215,8 @@ pub const window = struct {
     pub const subscribe_list: u16 = 13; // request: info Region in handle 0, Notification in handle 1   reply: window count (and later notifications on changes)
     pub const notify_prefs: u16 = 14; // request: -                                    reply: status (broadcasts prefs_changed to every connected client)
     pub const set_cursor: u16 = 15; // request: cursor kind (0=pointer, 1=clicker, 2=selector)   reply: status
+    pub const activate_title: u16 = 16; // request: title in words 1-3                    reply: status
+    pub const close_title: u16 = 17; // request: title in words 1-3                       reply: status
 
     pub const flag_undecorated: u64 = 1; // no title bar or border
     pub const flag_fullscreen: u64 = 2; // sized to the screen, tracks mode changes

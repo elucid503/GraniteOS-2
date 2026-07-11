@@ -40,6 +40,9 @@ var client: ?lib.fs.Client = null;
 var content: [max_content]u8 = undefined;
 var content_len: usize = 0;
 var cursor: usize = 0;
+var selection_anchor: ?usize = null;
+var selecting = false;
+var dragging_scrollbar = false;
 var scroll_row: usize = 0;
 var dirty = false;
 
@@ -48,7 +51,6 @@ var file_path: []const u8 = "untitled.txt";
 
 var keyboard = lib.keymap.Keyboard{};
 
-var caret_tick: u32 = 0;
 var caret_on = true;
 
 pub fn main(_: []const []const u8) u8 {
@@ -103,11 +105,21 @@ fn run() !void {
 
             events.kind_button_down => {
 
-                if (event.code == events.button_left) click(event.x, event.y);
+                if (event.code == events.button_left) mouse_down(event.x, event.y);
+
+            },
+            events.kind_button_up => {
+
+                if (event.code == events.button_left) {
+
+                    selecting = false;
+                    dragging_scrollbar = false;
+
+                }
 
             },
 
-            events.kind_pointer_move => update_cursor(event.x, event.y),
+            events.kind_pointer_move => mouse_move(event.x, event.y),
 
             events.kind_scroll => {
 
@@ -123,15 +135,6 @@ fn run() !void {
             },
 
             else => {},
-
-        }
-
-        caret_tick += 1;
-
-        if (caret_tick % 30 == 0) {
-
-            caret_on = !caret_on;
-            paint();
 
         }
 
@@ -156,6 +159,8 @@ fn load_file() void {
 
     content_len = 0;
     cursor = 0;
+    selection_anchor = null;
+    selecting = false;
     scroll_row = 0;
     dirty = false;
 
@@ -231,9 +236,9 @@ fn key_down(code: u16) void {
 
     if (bytes.len == 0) return;
 
-    if (bytes.len == 1 and bytes[0] == '\r') return;
-
     if (bytes.len == 3 and bytes[0] == 0x1b and bytes[1] == '[') {
+
+        clear_selection();
 
         switch (bytes[2]) {
 
@@ -261,7 +266,7 @@ fn key_down(code: u16) void {
 
             0x08, 0x7f => delete_before(),
 
-            '\n' => insert_char('\n'),
+            '\r', '\n' => insert_char('\n'),
 
             else => {
 
@@ -280,6 +285,8 @@ fn key_down(code: u16) void {
 
 fn insert_char(ch: u8) void {
 
+    _ = delete_selection();
+
     if (content_len >= max_content) return;
 
     var index = content_len;
@@ -295,6 +302,8 @@ fn insert_char(ch: u8) void {
 
 fn delete_before() void {
 
+    if (delete_selection()) return;
+
     if (cursor == 0) return;
 
     var index = cursor - 1;
@@ -304,6 +313,45 @@ fn delete_before() void {
     content_len -= 1;
     cursor -= 1;
     dirty = true;
+
+}
+
+fn selection_bounds() ?struct { start: usize, end: usize } {
+
+    const anchor = selection_anchor orelse return null;
+
+    if (anchor == cursor) return null;
+
+    return .{ .start = @min(anchor, cursor), .end = @max(anchor, cursor) };
+
+}
+
+fn clear_selection() void {
+
+    selection_anchor = null;
+
+}
+
+fn delete_selection() bool {
+
+    const selection = selection_bounds() orelse {
+
+        clear_selection();
+        return false;
+
+    };
+
+    const removed = selection.end - selection.start;
+    var index = selection.start;
+
+    while (index + removed < content_len) : (index += 1) content[index] = content[index + removed];
+
+    content_len -= removed;
+    cursor = selection.start;
+    clear_selection();
+    dirty = true;
+
+    return true;
 
 }
 
@@ -402,7 +450,17 @@ fn row_len(target: usize) usize {
 
 }
 
-fn click(x: i32, y: i32) void {
+fn mouse_down(x: i32, y: i32) void {
+
+    if (notepad_scrollbar_rect().contains(x, y) and total_rows() > visible_rows()) {
+
+        dragging_scrollbar = true;
+        selecting = false;
+        _ = drag_scrollbar(y);
+        paint();
+        return;
+
+    }
 
     if (y < toolbar_height) {
 
@@ -420,9 +478,40 @@ fn click(x: i32, y: i32) void {
     }
 
     place_cursor_at(x, y);
+    selection_anchor = cursor;
+    selecting = true;
     caret_on = true;
     clamp_scroll();
     paint();
+
+}
+
+fn mouse_move(x: i32, y: i32) void {
+
+    if (dragging_scrollbar) {
+
+        const changed = drag_scrollbar(y);
+        lib.cursor.set(&connection, .pointer);
+        if (changed) paint();
+        return;
+
+    }
+
+    update_cursor(x, y);
+
+    if (!selecting) return;
+
+    const text_y = toolbar_height + 8;
+    const height: i32 = @intCast(window.surface.height);
+    const before_cursor = cursor;
+    const before_scroll = scroll_row;
+
+    if (y < text_y and scroll_row > 0) scroll_row -= 1;
+    if (y >= height - 4 and scroll_row < max_scroll()) scroll_row += 1;
+
+    place_cursor_at(x, std.math.clamp(y, text_y, @max(text_y, height - 5)));
+    caret_on = true;
+    if (cursor != before_cursor or scroll_row != before_scroll) paint();
 
 }
 
@@ -541,26 +630,14 @@ fn clamp_scroll() void {
 
 }
 
-/// Wheel scrolling, one row per notch; true when the view moved (repaint).
+/// Wheel scrolling in small page-like steps; true when the view moved.
 fn wheel(delta: i64) bool {
 
-    if (delta < 0 and scroll_row < max_scroll()) {
+    const before = scroll_row;
 
-        scroll_row += 1;
+    scroll_row = @intCast(scroll_model().wheel(delta, 3));
 
-        return true;
-
-    }
-
-    if (delta > 0 and scroll_row > 0) {
-
-        scroll_row -= 1;
-
-        return true;
-
-    }
-
-    return false;
+    return scroll_row != before;
 
 }
 
@@ -583,6 +660,8 @@ fn paint() void {
     var shown: usize = 0;
     var line_start: usize = 0;
     var index: usize = 0;
+    const caret_row = cursor_row();
+    const selection = selection_bounds();
 
     while (index <= content_len and shown < visible_rows()) : (index += 1) {
 
@@ -594,7 +673,25 @@ fn paint() void {
 
                 const line_y = text_y + @as(i32, @intCast(shown)) * line_h;
 
-                if (row == cursor_row() and caret_on) {
+                if (selection) |selected_range| {
+
+                    const selected_start = @max(selected_range.start, line_start);
+                    const selected_end = @min(selected_range.end, index);
+
+                    if (selected_start < selected_end) {
+
+                        const before = content[line_start..selected_start];
+                        const selected = content[line_start..selected_end];
+                        const highlight_x = text_x + font.text_width(before, font_size);
+                        const highlight_w = font.text_width(selected, font_size) - font.text_width(before, font_size);
+
+                        surface.fill_rect(.{ .x = highlight_x, .y = line_y, .w = @max(1, highlight_w), .h = line_h - 2 }, ui.theme.accent_dim);
+
+                    }
+
+                }
+
+                if (row == caret_row and caret_on) {
 
                     const before = content[line_start..@min(cursor, index)];
                     const caret_x = text_x + font.text_width(before, font_size);
@@ -627,24 +724,47 @@ fn paint() void {
 
     }
 
-    const height: i32 = @intCast(surface.height);
+    ui.scrollbar(surface, notepad_scrollbar_rect(), scroll_model());
 
-    ui.scrollbar(surface, .{
+    window.present_all() catch {};
 
-        .x = width - ui.scrollbar_width - 2,
+}
+
+fn notepad_scrollbar_rect() Rect {
+
+    const text_y = toolbar_height + 8;
+
+    return .{
+
+        .x = @as(i32, @intCast(window.surface.width)) - ui.scrollbar_width - 2,
         .y = text_y,
         .w = ui.scrollbar_width,
-        .h = height - text_y - 4,
+        .h = @max(0, @as(i32, @intCast(window.surface.height)) - text_y - 4),
 
-    }, .{
+    };
+
+}
+
+fn scroll_model() ui.Scroll {
+
+    return .{
 
         .offset = @intCast(scroll_row),
         .content = @intCast(total_rows()),
         .viewport = @intCast(visible_rows()),
 
-    });
+    };
 
-    window.present_all() catch {};
+}
+
+fn drag_scrollbar(y: i32) bool {
+
+    const track = notepad_scrollbar_rect();
+    const before = scroll_row;
+
+    scroll_row = @intCast(scroll_model().offset_at(track.h, y - track.y));
+
+    return scroll_row != before;
 
 }
 

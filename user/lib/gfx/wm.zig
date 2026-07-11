@@ -165,6 +165,22 @@ pub fn restore(connection: *window.Connection, id: u64) Error!void {
 
 }
 
+pub fn activate_title(connection: *window.Connection, title: []const u8) Error!void {
+
+    const title_words = window.pack_title(title);
+
+    _ = try ipc.request(connection.endpoint, proto.window.activate_title, &.{ title_words[0], title_words[1], title_words[2] }, &.{});
+
+}
+
+pub fn close_title(connection: *window.Connection, title: []const u8) Error!void {
+
+    const title_words = window.pack_title(title);
+
+    _ = try ipc.request(connection.endpoint, proto.window.close_title, &.{ title_words[0], title_words[1], title_words[2] }, &.{});
+
+}
+
 pub fn load_apps(bundle: *const bundle_mod.Bundle, out: []App) usize {
 
     const bytes = bundle.find("app-catalog") orelse return 0;

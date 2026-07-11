@@ -438,10 +438,38 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.window.subscribe_list => subscribe_list(badge, in, out),
         proto.window.notify_prefs => notify_prefs_changed(),
         proto.window.set_cursor => set_client_cursor(in.data[1]),
+        proto.window.activate_title => activate_title(in),
+        proto.window.close_title => close_title(in),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
 
     };
+
+}
+
+fn requested_title(in: *const Message, out: *[proto.window.max_title]u8) []const u8 {
+
+    return lib.window.unpack_title(.{ in.data[1], in.data[2], in.data[3] }, out);
+
+}
+
+fn activate_title(in: *const Message) i64 {
+
+    var buffer: [proto.window.max_title]u8 = undefined;
+    const target = manager.by_title(requested_title(in, &buffer)) orelse return -6;
+
+    return activate_window(target.id);
+
+}
+
+fn close_title(in: *const Message) i64 {
+
+    var buffer: [proto.window.max_title]u8 = undefined;
+    const target = manager.by_title(requested_title(in, &buffer)) orelse return -6;
+
+    send_to_owner(target, window_event(events.kind_window_close, target.id, 0, 0));
+
+    return 0;
 
 }
 
