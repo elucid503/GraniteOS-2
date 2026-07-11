@@ -73,8 +73,7 @@ pub const Client = struct {
 
     }
 
-    /// End a stream cleanly: push a short tail of silence so an underrun after the last real
-    /// frame plays as silence rather than a repeated period, then wait for the device to catch up.
+    /// Pushes a short tail of silence so an underrun after the last real frame plays as silence rather than a repeated period, then wait for the device to catch up. Still needs some improvement.
     pub fn flush(self: *Client) !void {
 
         const tail = 4096;
@@ -102,9 +101,7 @@ pub const Chunk = struct {
 
 };
 
-/// Convert up to one `max_write` chunk of `wave` at byte `offset` into signed 16-bit little-endian,
-/// applying `gain` (256 = unity). 16-bit input at unity gain is returned as a zero-copy slice of the
-/// source; every other case is materialized into `scratch`.
+/// Convert up to one `max_write` chunk of `wave` at byte `offset` into signed 16-bit little-endian.
 pub fn convert(wave_data: wav.Wave, offset: usize, scratch: []u8, gain: u32) Chunk {
 
     const block = wave_data.format.block_align;

@@ -46,7 +46,6 @@ var block_device: ?lib.dtb.Device = null;
 var audio_device: ?lib.dtb.Device = null;
 
 // The graphical stack is optional by hardware presence (08-roadmap.md M9): it spawns only when the DTB
-// probe finds a virtio-gpu transport, exactly as the filesystem hinges on a block device.
 
 const max_input_devices = 4;
 
@@ -142,8 +141,7 @@ fn run(arg: u64) !void {
 
     if (audio_device != null) {
 
-        // The driver registers "audio" itself after a successful bind so a failed init never leaves a
-        // dead name that hangs clients forever on attach.
+        // The driver registers "audio" itself after a successful bind so a failed init never leaves a dead name that hangs clients forever on attach.
         try spawn_audio();
 
     }

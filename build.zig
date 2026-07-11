@@ -420,10 +420,7 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
         "-m",       b.fmt("{d}M", .{step.memory}),
     });
 
-    // VirtIO Sound needs a modern MMIO transport (VIRTIO_F_VERSION_1 / config version 2). QEMU's
-    // virtio-mmio defaults to force-legacy=on, which only exposes the legacy v1 register set and
-    // prevents the audio driver from binding. GPU/input/block already handle modern queues.
-
+    // VirtIO Sound needs a modern MMIO transport (VIRTIO_F_VERSION_1 / config version 2).
     run.addArgs(&.{ "-global", "virtio-mmio.force-legacy=false" });
 
     // GUI boots open a host display window with the serial console on stdio; everything else is headless.
@@ -437,8 +434,7 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
         const audio_backend = if (builtin.os.tag == .windows) "dsound,id=granite-audio" else "sdl,id=granite-audio";
 
         run.addArgs(&.{ "-audiodev", audio_backend });
-        // streams=1: playback only. The default (2) also opens a capture stream, which fails on
-        // backends without host input (wav, some dsound setups) and is unused by GraniteOS.
+        // streams=1: playback only. No capture stream, yet...
         run.addArgs(&.{ "-device", "virtio-sound-device,audiodev=granite-audio,streams=1" });
         run.addArgs(&.{ "-serial", "mon:stdio" });
 
