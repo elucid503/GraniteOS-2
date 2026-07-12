@@ -694,7 +694,7 @@ fn push_damage(x: u32, y: u32, w: u32, h: u32) !void {
     barrier();
 
     const rect = GpuRect{ .x = clamped_x, .y = clamped_y, .width = clamped_w, .height = clamped_h };
-    const offset = (@as(u64, clamped_y) * mode_width + clamped_x) * 4;
+    const offset = (@as(u64, clamped_y) * mode_width + clamped_x) * @sizeOf(u32);
 
     try check_ok(try command(TransferToHost2d, .{
 

@@ -134,18 +134,6 @@ var resize_dy: i32 = 0;
 var damage = damage_module.List{};
 var resize_damage: [manager_module.max_windows]Rect = [_]Rect{Rect.empty} ** manager_module.max_windows;
 
-const max_present_replies = 64;
-
-const PresentReply = struct {
-
-    handle: Handle,
-    status: i64,
-
-};
-
-var present_replies: [max_present_replies]PresentReply = undefined;
-var present_reply_count: usize = 0;
-
 const ListWatch = struct {
 
     badge: u64 = 0,
@@ -213,7 +201,6 @@ fn run() !void {
         }
 
         composite() catch {};
-        reply_to_presents();
 
     }
 
@@ -235,15 +222,11 @@ fn process_message(badge: u64, in: *const Message) void {
 
         if (in.data[0] == proto.window.present) {
 
-            if (present_reply_count == present_replies.len) {
+            composite() catch {};
 
-                composite() catch {};
-                reply_to_presents();
+            out.data[0] = @bitCast(status);
+            sys.reply(in.reply, &out) catch {};
 
-            }
-
-            present_replies[present_reply_count] = .{ .handle = in.reply, .status = status };
-            present_reply_count += 1;
             return;
 
         }
@@ -253,21 +236,6 @@ fn process_message(badge: u64, in: *const Message) void {
         sys.reply(in.reply, &out) catch {};
 
     }
-
-}
-
-fn reply_to_presents() void {
-
-    for (present_replies[0..present_reply_count]) |pending| {
-
-        var out = Message.zeroed;
-        out.data[0] = @bitCast(pending.status);
-
-        sys.reply(pending.handle, &out) catch {};
-
-    }
-
-    present_reply_count = 0;
 
 }
 

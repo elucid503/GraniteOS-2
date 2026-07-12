@@ -98,6 +98,9 @@ export fn kernel_fp_trap() callconv(.c) *context.Context {
 
 export fn kernel_trap(frame: *const TrapFrame) callconv(.c) noreturn {
 
+    // A userspace fault retires only its thread; EL1 faults still expose kernel corruption.
+    if (frame.spsr & 0xf == 0) scheduler.exit_current();
+
     panic.fault("unhandled exception", .{
 
         .esr = frame.esr,

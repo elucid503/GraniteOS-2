@@ -1,6 +1,4 @@
-// Client side of the Window interface (07-userspace-ddd.md Section 10.7): connect to the compositor, create
-// windows backed by shared surface Regions, present damage, and drain the per-client event ring. The compositor
-// is found through the name service ("window"), so any spawned program can open a window with no special grants.
+// Client side of the Window interface (07-userspace-ddd.md Section 10.7)
 
 const std = @import("std");
 
@@ -217,6 +215,8 @@ pub const Window = struct {
     }
 
     pub fn present(self: *const Window, rect: gfx.Rect) Error!void {
+
+        gfx.fence();
 
         _ = try ipc.request(self.connection.endpoint, proto.window.present, &.{
 

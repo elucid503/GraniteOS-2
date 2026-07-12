@@ -205,7 +205,7 @@ pub const window = struct {
     pub const version: u32 = 1;
 
     pub const create: u16 = 1; // request: (w<<32)|h, flags, title in words 3-5   reply: window id, (w<<32)|h, stride bytes, surface Region in handle 0
-    pub const present: u16 = 2; // request: window id, (x<<32)|y, (w<<32)|h        reply: status
+    pub const present: u16 = 2; // request: window id, (x<<32)|y, (w<<32)|h        reply: snapshot complete
     pub const set_title: u16 = 3; // request: window id, title in words 3-5          reply: status
     pub const destroy: u16 = 4; // request: window id                              reply: status
     pub const attach_events: u16 = 5; // request: ring capacity in events, ring Region in handle 0, Notification in handle 1   reply: status

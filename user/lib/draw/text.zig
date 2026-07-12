@@ -713,7 +713,7 @@ fn cached_glyph(face: *const Face, glyph: u16, px: u32, phase: u32) ?usize {
     var probe: usize = 0;
     var slot = start;
     var oldest_slot = start;
-    var oldest_use = std.math.maxInt(u32);
+    var oldest_use: u32 = std.math.maxInt(u32);
 
     while (probe < 12) : (probe += 1) {
 
