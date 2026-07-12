@@ -134,7 +134,7 @@ fn run() !void {
 
             }
 
-            lib.time.sleep_ms(10);
+            _ = sys.wait(ready) catch {};
             continue;
 
         };
@@ -355,6 +355,7 @@ fn play() bool {
         }
 
         @atomicStore(usize, &playback_cursor, offset, .release);
+        sys.notify(ready, proto.window.ring_bit) catch {};
 
         const chunk = lib.audio.convert(loaded, offset, &scratch, @atomicLoad(u32, &volume_gain, .acquire));
 
@@ -371,6 +372,7 @@ fn play() bool {
     }
 
     @atomicStore(usize, &playback_cursor, loaded.samples.len, .release);
+    sys.notify(ready, proto.window.ring_bit) catch {};
     audio.flush() catch {};
 
     return true;
@@ -432,10 +434,12 @@ fn worker() callconv(.c) noreturn {
         }
 
         @atomicStore(u32, &playback_state, playback_running, .release);
+        sys.notify(ready, proto.window.ring_bit) catch {};
 
         const next: u32 = if (play()) playback_idle else playback_failed;
 
         @atomicStore(u32, &playback_state, next, .release);
+        sys.notify(ready, proto.window.ring_bit) catch {};
 
     }
 

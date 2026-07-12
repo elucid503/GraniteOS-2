@@ -57,7 +57,7 @@ pub const name = struct {
 pub const block = struct {
 
     pub const interface_id: u32 = 0x424c_4f4b; // "BLOK"
-    pub const version: u32 = 1;
+    pub const version: u32 = 2;
 
     pub const sector_size: usize = 512;
 
@@ -65,6 +65,8 @@ pub const block = struct {
     pub const write_sector: u16 = 2; // request: sector, offset           reply: status
     pub const capacity: u16 = 3; // request: -                        reply: sector count
     pub const attach: u16 = 4; // request: capacity, buffer Region   reply: status
+    pub const read_sectors: u16 = 5; // request: sector, count, offset    reply: status
+    pub const write_sectors: u16 = 6; // request: sector, count, offset    reply: status
 
 };
 

@@ -13,7 +13,7 @@ const sys = @import("../syscall/sys.zig");
 const Handle = cap.Handle;
 const Error = sys.Error;
 
-const buffer_size = 8192;
+const buffer_size = 68 * 1024;
 const path_offset = 0;
 const path_capacity = 4096;
 const payload_offset = 4096;
@@ -22,7 +22,7 @@ const payload_offset = 4096;
 const max_abs = 512;
 
 /// The largest span one read/write/list call can move through the session buffer.
-pub const payload_capacity = 4096;
+pub const payload_capacity = 64 * 1024;
 
 /// Resolve `path` against absolute `base`, collapsing "." and ".." into a canonical absolute path written to `out`.
 /// A leading "/" makes `path` absolute; otherwise it extends `base`. The filesystem server itself is path-stateless,

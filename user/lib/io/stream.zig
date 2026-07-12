@@ -222,13 +222,15 @@ pub const Ring = struct {
         }
 
         const amount = @min(buf.len, available(self.header));
-        const capacity = self.header.capacity;
+        const capacity: usize = self.header.capacity;
+        const start: usize = @as(usize, self.header.head) % capacity;
+        const first = @min(amount, capacity - start);
 
-        for (0..amount) |index| {
+        @memcpy(buf[0..first], self.bytes[start .. start + first]);
 
-            const offset = (@as(usize, self.header.head) + index) % @as(usize, capacity);
+        if (first < amount) {
 
-            buf[index] = self.bytes[offset];
+            @memcpy(buf[first..amount], self.bytes[0 .. amount - first]);
 
         }
 
@@ -252,13 +254,15 @@ pub const Ring = struct {
             }
 
             const amount = @min(bytes.len - written, free_space(self.header));
-            const capacity = self.header.capacity;
+            const capacity: usize = self.header.capacity;
+            const start: usize = @as(usize, self.header.tail) % capacity;
+            const first = @min(amount, capacity - start);
 
-            for (0..amount) |index| {
+            @memcpy(self.bytes[start .. start + first], bytes[written .. written + first]);
 
-                const offset = (@as(usize, self.header.tail) + index) % @as(usize, capacity);
+            if (first < amount) {
 
-                self.bytes[offset] = bytes[written + index];
+                @memcpy(self.bytes[0 .. amount - first], bytes[written + first .. written + amount]);
 
             }
 

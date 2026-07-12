@@ -108,10 +108,10 @@ const RequestHeader = extern struct {
 };
 
 // DMA region layout: descriptors + avail on page 0, used on page 1 (the legacy alignment rule), the request
-// header, status byte, and one-sector bounce buffer on page 2.
+// header, status byte, and a 4 KiB bounce buffer starting on page 2.
 
 const page_size = 4096;
-const dma_pages = 3;
+const dma_pages = 4;
 
 const avail_offset = queue_size * @sizeOf(Descriptor);
 const used_offset = page_size;
@@ -278,6 +278,8 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.identify => identify(out),
         proto.block.read_sector => read_sector(badge, in.data[1], in.data[2]),
         proto.block.write_sector => write_sector(badge, in.data[1], in.data[2]),
+        proto.block.read_sectors => read_sectors(badge, in.data[1], in.data[2], in.data[3]),
+        proto.block.write_sectors => write_sectors(badge, in.data[1], in.data[2], in.data[3]),
         proto.block.capacity => capacity(out),
         proto.block.attach => attach(badge, in),
 
@@ -323,15 +325,22 @@ fn attach(badge: u64, in: *const Message) i64 {
 
 fn read_sector(badge: u64, sector: u64, offset: u64) i64 {
 
-    const span = session_span(badge, offset) orelse return -7;
+    return read_sectors(badge, sector, 1, offset);
 
-    if (sector >= sector_count) return -7;
+}
 
-    const status = transfer(request_read, sector);
+fn read_sectors(badge: u64, sector: u64, count: u64, offset: u64) i64 {
+
+    const length = sector_length(count) orelse return -7;
+    const span = session_span(badge, offset, length) orelse return -7;
+
+    if (sector >= sector_count or count > sector_count - sector) return -7;
+
+    const status = transfer(request_read, sector, length);
 
     if (status != 0) return status;
 
-    @memcpy(span, bounce()[0..sector_size]);
+    @memcpy(span, bounce(length));
 
     return 0;
 
@@ -339,19 +348,34 @@ fn read_sector(badge: u64, sector: u64, offset: u64) i64 {
 
 fn write_sector(badge: u64, sector: u64, offset: u64) i64 {
 
-    const span = session_span(badge, offset) orelse return -7;
-
-    if (sector >= sector_count) return -7;
-
-    @memcpy(bounce()[0..sector_size], span);
-
-    return transfer(request_write, sector);
+    return write_sectors(badge, sector, 1, offset);
 
 }
 
-// Submit one 3-descriptor request chain (header, one sector, status byte) and block until the completion interrupt.
+fn write_sectors(badge: u64, sector: u64, count: u64, offset: u64) i64 {
 
-fn transfer(kind: u32, sector: u64) i64 {
+    const length = sector_length(count) orelse return -7;
+    const span = session_span(badge, offset, length) orelse return -7;
+
+    if (sector >= sector_count or count > sector_count - sector) return -7;
+
+    @memcpy(bounce(length), span);
+
+    return transfer(request_write, sector, length);
+
+}
+
+fn sector_length(count: u64) ?usize {
+
+    if (count == 0 or count > 8) return null;
+
+    return @intCast(count * sector_size);
+
+}
+
+// Submit one 3-descriptor request chain and block until the completion interrupt.
+
+fn transfer(kind: u32, sector: u64, length: usize) i64 {
 
     acknowledge_device_status();
 
@@ -372,7 +396,7 @@ fn transfer(kind: u32, sector: u64) i64 {
     const data_write_flag: u16 = if (kind == request_read) descriptor_write else 0;
 
     descriptors[0] = .{ .addr = dma_physical + header_offset, .len = @sizeOf(RequestHeader), .flags = descriptor_next, .next = 1 };
-    descriptors[1] = .{ .addr = dma_physical + data_offset, .len = sector_size, .flags = descriptor_next | data_write_flag, .next = 2 };
+    descriptors[1] = .{ .addr = dma_physical + data_offset, .len = @intCast(length), .flags = descriptor_next | data_write_flag, .next = 2 };
     descriptors[2] = .{ .addr = dma_physical + status_offset, .len = 1, .flags = descriptor_write, .next = 0 };
 
     const avail: *volatile Avail = @ptrFromInt(dma_base + avail_offset);
@@ -423,24 +447,25 @@ fn acknowledge_device_status() void {
 
 }
 
-fn bounce() []u8 {
+fn bounce(length: usize) []u8 {
 
     const bytes: [*]u8 = @ptrFromInt(dma_base + data_offset);
 
-    return bytes[0..sector_size];
+    return bytes[0..length];
 
 }
 
-fn session_span(badge: u64, offset: u64) ?[]u8 {
+fn session_span(badge: u64, offset: u64, length: usize) ?[]u8 {
 
     const session = session_for(badge) orelse return null;
+    const start: usize = @intCast(offset);
 
     if (session.base == 0) return null;
-    if (offset > session.capacity or sector_size > session.capacity - offset) return null;
+    if (start > session.capacity or length > session.capacity - start) return null;
 
     const buffer: [*]u8 = @ptrFromInt(session.base);
 
-    return buffer[@intCast(offset)..@intCast(offset + sector_size)];
+    return buffer[start .. start + length];
 
 }
 

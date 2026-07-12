@@ -82,13 +82,7 @@ const CachedDisk = struct {
 
         }
 
-        var sector: u64 = 0;
-
-        while (sector < sectors_per_block) : (sector += 1) {
-
-            self.sector_call(proto.block.read_sector, @as(u64, index) * sectors_per_block + sector, sector * proto.block.sector_size);
-
-        }
+        self.sector_call(proto.block.read_sectors, @as(u64, index) * sectors_per_block, sectors_per_block, 0);
 
         const bytes: [*]const u8 = @ptrFromInt(self.session_base);
 
@@ -110,13 +104,7 @@ const CachedDisk = struct {
 
         @memcpy(bytes[0..block_size], data);
 
-        var sector: u64 = 0;
-
-        while (sector < sectors_per_block) : (sector += 1) {
-
-            self.sector_call(proto.block.write_sector, @as(u64, index) * sectors_per_block + sector, sector * proto.block.sector_size);
-
-        }
+        self.sector_call(proto.block.write_sectors, @as(u64, index) * sectors_per_block, sectors_per_block, 0);
 
         self.cache[index % cache_slots] = .{
 
@@ -136,11 +124,11 @@ const CachedDisk = struct {
 
     // A vanished block driver breaks every request (`Gone`); exit so the supervisor restarts this server too.
 
-    fn sector_call(self: *CachedDisk, method: u16, sector: u64, offset: u64) void {
+    fn sector_call(self: *CachedDisk, method: u16, sector: u64, count: u64, offset: u64) void {
 
         _ = self;
 
-        _ = ipc.request(cap.filesystem.block, method, &.{ sector, offset }, &.{}) catch {
+        _ = ipc.request(cap.filesystem.block, method, &.{ sector, count, offset }, &.{}) catch {
 
             lib.start.exit_with(1);
 

@@ -461,13 +461,9 @@ fn submit(queue: *Queue, chain: []const Descriptor) !void {
 
     const used: *volatile Used = @ptrFromInt(queue.base + page_size);
 
-    const deadline = lib.time.now_ms() + 2_000;
-
     while (used.idx == queue.last_used) {
 
-        if (lib.time.now_ms() >= deadline) return error.Timeout;
-
-        lib.time.sleep_ms(1);
+        _ = try sys.wait(completion);
         acknowledge_device();
         _ = sys.acknowledge(cap.driver.interrupt) catch {};
 
