@@ -40,6 +40,7 @@ pub fn main(args: []const []const u8) u8 {
 fn run(path: []const u8) !void {
 
     var files = try lib.fs.Client.connect(cap.memory);
+    defer files.close();
     const info = try files.stat(path);
     const length: usize = @intCast(info.length);
 

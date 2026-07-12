@@ -241,6 +241,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.filesystem.mkdir => mkdir(badge, in),
         proto.filesystem.set_permissions => set_permissions(badge, in),
         proto.filesystem.attach => attach(badge, in),
+        proto.filesystem.detach => detach(badge),
         proto.filesystem.info => info(badge, in),
 
         else => -7,
@@ -254,6 +255,13 @@ fn identify(out: *Message) i64 {
     out.data[1] = proto.filesystem.interface_id;
     out.data[2] = proto.filesystem.version;
 
+    return 0;
+
+}
+
+fn detach(badge: u64) i64 {
+
+    sessions.close(badge);
     return 0;
 
 }

@@ -9,7 +9,6 @@ const slab = @import("../memory/slab.zig");
 const object = @import("object.zig");
 const scheduler = @import("../sched/scheduler.zig");
 const runqueue = @import("../sched/runqueue.zig");
-const ipc_sync = @import("../sync/ipc.zig");
 
 const process_module = @import("process.zig");
 const Process = process_module.Process;
@@ -154,9 +153,6 @@ pub const Thread = struct {
 
                 if (value == 0) {
 
-                    const saved = ipc_sync.lock.acquire();
-                    defer ipc_sync.lock.release(saved);
-
                     self.clear_bound_notification();
                     return;
 
@@ -165,14 +161,13 @@ pub const Thread = struct {
                 const handle: @import("../cap/handle.zig").Handle = @bitCast(@as(u32, @truncate(value)));
                 const notification = try self.process.handles.resolve_as(handle, .notification);
 
-                const saved = ipc_sync.lock.acquire();
-                defer ipc_sync.lock.release(saved);
-
                 self.clear_bound_notification();
 
+                const saved = notification.lock.acquire();
                 notification.header.retain();
                 notification.bound_to = self;
                 self.bound_notification = notification;
+                notification.lock.release(saved);
 
             },
 
@@ -184,11 +179,15 @@ pub const Thread = struct {
 
         if (self.bound_notification) |notification| {
 
+            const saved = notification.lock.acquire();
+
             if (notification.bound_to == self) notification.bound_to = null;
 
-            if (notification.header.release()) object.destroy(&notification.header);
-
             self.bound_notification = null;
+
+            notification.lock.release(saved);
+
+            if (notification.header.release()) object.destroy(&notification.header);
 
         }
 
@@ -198,19 +197,28 @@ pub const Thread = struct {
     /// endpoint it served (breaking it once no server remains), and release its bound notification. No timeouts, no hangs.
     pub fn release_ipc(self: *Thread) void {
 
-        if (self.owes_reply_to) |caller| {
+        if (self.serving) |endpoint| {
+
+            endpoint.lock.lock();
+
+            if (self.owes_reply_to) |caller| {
+
+                self.owes_reply_to = null;
+                scheduler.abort_ipc(caller);
+
+            }
+
+            self.serving = null;
+            endpoint.leave_locked();
+
+            endpoint.lock.unlock();
+
+            if (endpoint.header.release()) object.destroy(&endpoint.header);
+
+        } else if (self.owes_reply_to) |caller| {
 
             self.owes_reply_to = null;
             scheduler.abort_ipc(caller);
-
-        }
-
-        if (self.serving) |endpoint| {
-
-            self.serving = null;
-            endpoint.leave();
-
-            if (endpoint.header.release()) object.destroy(&endpoint.header);
 
         }
 
@@ -232,12 +240,10 @@ pub const Thread = struct {
 
     }
 
-    // The process's thread list is shared by its workers, so linking and unlinking ride the IPC lock.
-
     fn unlink(self: *Thread) void {
 
-        const saved = ipc_sync.lock.acquire();
-        defer ipc_sync.lock.release(saved);
+        const saved = self.process.thread_lock.acquire();
+        defer self.process.thread_lock.release(saved);
 
         var link = &self.process.threads;
 
@@ -304,12 +310,12 @@ fn alloc(process: *Process) Error!*Thread {
 
     };
 
-    const saved = ipc_sync.lock.acquire();
+    const saved = process.thread_lock.acquire();
 
     thread.next_in_process = process.threads;
     process.threads = thread;
 
-    ipc_sync.lock.release(saved);
+    process.thread_lock.release(saved);
 
     process_module.note_thread_created(process);
 

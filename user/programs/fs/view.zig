@@ -34,6 +34,7 @@ pub fn main(args: []const []const u8) u8 {
         return 1;
 
     };
+    defer client.close();
 
     const file = client.open_path(args[1], 0) catch |failure| {
 

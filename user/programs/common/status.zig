@@ -169,6 +169,7 @@ fn render_disk(out: *Stream) lib.io.Error!void {
         return;
 
     };
+    defer client.close();
 
     const info = client.info() catch {
 

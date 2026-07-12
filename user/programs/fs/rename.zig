@@ -27,6 +27,7 @@ pub fn main(args: []const []const u8) u8 {
         return 1;
 
     };
+    defer client.close();
 
     client.rename(args[1], args[2]) catch |failure| {
 

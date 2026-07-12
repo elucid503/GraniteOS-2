@@ -12,7 +12,6 @@ const inspect = @import("../inspect.zig");
 const object = @import("../object/object.zig");
 const runqueue = @import("runqueue.zig");
 const spinlock = @import("../sync/spinlock.zig");
-const ipc_sync = @import("../sync/ipc.zig");
 
 const thread_module = @import("../object/thread.zig");
 
@@ -607,7 +606,7 @@ fn earliest_sleeper(core: *Core) ?u64 {
 }
 
 /// Park the current thread; the caller set its blocked state, queued it, and called `defer_dispatch`,
-/// all under the IPC lock (released again before coming here). Blocking before the quantum runs out
+/// all under its object lock (released again before coming here). Blocking before the quantum runs out
 /// keeps the level (I/O-bound threads stay responsive).
 pub fn block(core: *Core, thread: *Thread) void {
 
@@ -620,7 +619,7 @@ pub fn block(core: *Core, thread: *Thread) void {
 }
 
 /// Wake `thread` on the waker's core - it is cache-warm there (06-kernel-ddd.md Section 10 wakeup locality).
-/// Callers hold the IPC lock, which is what serializes competing wakers.
+/// Callers hold the wait object's lock, which serializes competing wakers.
 pub fn unblock(waker: *Core, thread: *Thread) void {
 
     thread.blocked_on = null;
@@ -669,7 +668,7 @@ pub fn abort_ipc(thread: *Thread) void {
 
 /// The IPC direct hand-off (06-kernel-ddd.md Section 9): switch straight from `from` to an already-waiting `to` on
 /// this core, no run-queue trip. The caller parked `from`, cleared `to`'s wait state, and donated `from`'s
-/// scheduling under the IPC lock.
+/// scheduling under the endpoint lock.
 pub fn hand_off(from: *Thread, to: *Thread) void {
 
     const core = current_core();
@@ -698,7 +697,7 @@ pub fn hand_back(server: *Thread, caller: *Thread) void {
 }
 
 /// Lend the caller's scheduling state to the server until the matching reply (06-kernel-ddd.md Section 10 donation):
-/// the server serves at the caller's priority and its time is accounted to the caller. Held under the IPC lock.
+/// the server serves at the caller's priority and its time is accounted to the caller. Held under the endpoint lock.
 /// Donation cures priority inversion, so it only ever raises the server - a driver-class server keeps its band
 /// when a normal client calls it.
 pub fn donate(from: *Thread, to: *Thread) void {
@@ -761,9 +760,7 @@ pub fn exit_current() noreturn {
 
     // Fault-aware teardown (06-kernel-ddd.md Section 9): wake anyone this thread owed a reply or blocked toward.
 
-    ipc_sync.lock.lock();
     current.release_ipc();
-    ipc_sync.lock.unlock();
 
     current.state = .dead;
     core.current = null;

@@ -1,7 +1,50 @@
-// The kernel-wide IPC/object lock (06-kernel-ddd.md Section 15): guards endpoint and notification wait queues, thread
-// IPC state, and the per-process thread lists. Always ordered before the per-core runqueue and handle-table locks;
-// never held across a context switch - blockers queue themselves, release, then call into the scheduler.
+// IPC lock ordering (06-kernel-ddd.md Section 15): object locks are ordered by address when two are needed, then
+// per-core runqueue locks; never the inverse. No object lock may be held across a context switch.
 
 const spinlock = @import("spinlock.zig");
 
-pub var lock: spinlock.SpinLock = .{};
+pub fn lock_pair(a: *spinlock.SpinLock, b: *spinlock.SpinLock) void {
+
+    if (a == b) {
+
+        a.lock();
+        return;
+
+    }
+
+    if (@intFromPtr(a) < @intFromPtr(b)) {
+
+        a.lock();
+        b.lock();
+
+    } else {
+
+        b.lock();
+        a.lock();
+
+    }
+
+}
+
+pub fn unlock_pair(a: *spinlock.SpinLock, b: *spinlock.SpinLock) void {
+
+    if (a == b) {
+
+        a.unlock();
+        return;
+
+    }
+
+    if (@intFromPtr(a) < @intFromPtr(b)) {
+
+        b.unlock();
+        a.unlock();
+
+    } else {
+
+        a.unlock();
+        b.unlock();
+
+    }
+
+}

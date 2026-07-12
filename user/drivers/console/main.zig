@@ -105,10 +105,18 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.stream.write => write(badge, in.data[1], in.data[2]),
         proto.stream.set_mode => set_mode(badge, in.data[1]),
         proto.stream.attach => attach(badge, in),
+        proto.stream.detach => detach(badge),
 
         else => -7,
 
     };
+
+}
+
+fn detach(badge: u64) i64 {
+
+    sessions.close(badge);
+    return 0;
 
 }
 

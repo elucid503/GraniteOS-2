@@ -45,7 +45,7 @@ pub const Stream = struct {
 
         switch (self.backing) {
 
-            .server => {},
+            .server => |*server_stream| server_stream.close(),
             .ring => |*ring_stream| ring_stream.close(),
 
         }
@@ -130,6 +130,14 @@ const Server = struct {
     fn set_mode(self: *Server, mode: u64) Error!void {
 
         _ = try ipc.request(self.endpoint, proto.stream.set_mode, &.{mode}, &.{});
+
+    }
+
+    fn close(self: *Server) void {
+
+        _ = ipc.request(self.endpoint, proto.stream.detach, &.{}, &.{}) catch {};
+        sys.unmap(cap.self_space, self.base) catch {};
+        sys.close(self.buffer) catch {};
 
     }
 

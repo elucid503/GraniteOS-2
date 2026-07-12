@@ -128,6 +128,7 @@ pub fn simple_path_program(name: []const u8, args: []const []const u8, action: *
         return 1;
 
     };
+    defer client.close();
 
     action(&client, args[1]) catch |failure| {
 
@@ -196,6 +197,15 @@ pub const Client = struct {
             .cwd = start.cwd(),
 
         };
+
+    }
+
+    pub fn close(self: *Client) void {
+
+        _ = ipc.request(self.endpoint, proto.filesystem.detach, &.{}, &.{}) catch {};
+        sys.unmap(cap.self_space, self.base) catch {};
+        sys.close(self.buffer) catch {};
+        sys.close(self.endpoint) catch {};
 
     }
 

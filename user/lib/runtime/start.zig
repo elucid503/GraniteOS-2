@@ -197,6 +197,12 @@ fn receive_init(argv_storage: *[max_args][]const u8) sys.Error![]const []const u
 
 fn close_runtime_streams() void {
 
+    if (server_stdio) |*stream_handle| {
+
+        stream_handle.close();
+
+    }
+
     if (stdout_stream) |*out| {
 
         if (init_flags & proto.init.stdout_ring != 0) out.close();

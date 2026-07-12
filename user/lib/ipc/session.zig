@@ -87,6 +87,20 @@ pub fn Sessions(comptime Extra: type, comptime capacity: usize) type {
 
         }
 
+        pub fn close(self: *Self, badge: u64) void {
+
+            for (&self.slots) |*slot| {
+
+                if (!slot.used or slot.badge != badge) continue;
+
+                evict(slot);
+                slot.* = .{};
+                return;
+
+            }
+
+        }
+
         fn claim(self: *Self) *Session {
 
             var victim: *Session = &self.slots[0];

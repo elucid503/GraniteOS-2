@@ -6,6 +6,7 @@ const object = @import("object.zig");
 const scheduler = @import("../sched/scheduler.zig");
 const runqueue = @import("../sched/runqueue.zig");
 const ipc_sync = @import("../sync/ipc.zig");
+const spinlock = @import("../sync/spinlock.zig");
 
 const Thread = @import("thread.zig").Thread;
 const Endpoint = @import("endpoint.zig").Endpoint;
@@ -16,6 +17,7 @@ var cache: slab.Cache(Notification) = .{};
 pub const Notification = struct {
 
     header: object.Object,
+    lock: spinlock.SpinLock,
 
     bits: u64,
     waiters: runqueue.RunQueue,
@@ -29,6 +31,7 @@ pub const Notification = struct {
         notification.* = .{
 
             .header = .{ .kind = .notification },
+            .lock = .{},
 
             .bits = 0,
             .waiters = .{},
@@ -50,8 +53,10 @@ pub const Notification = struct {
     /// Signal: accumulate `bits` and wake one waiter with the whole set (never blocks).
     pub fn signal(self: *Notification, bits: u64) void {
 
-        const saved = ipc_sync.lock.acquire();
-        defer ipc_sync.lock.release(saved);
+        const saved = arch.disable_interrupts();
+        defer arch.restore_interrupts(saved);
+
+        self.lock.lock();
 
         self.bits |= bits;
 
@@ -63,6 +68,8 @@ pub const Notification = struct {
             self.bits = 0;
 
             scheduler.unblock(scheduler.current_core(), waiter);
+
+            self.lock.unlock();
 
             return;
 
@@ -77,24 +84,44 @@ pub const Notification = struct {
 
                 if (thread.blocked_on) |blocked_on| {
 
-                    if (blocked_on.kind == .endpoint) object.container(Endpoint, blocked_on).receivers.remove(thread);
+                    if (blocked_on.kind == .endpoint) {
+
+                        const endpoint = object.container(Endpoint, blocked_on);
+
+                        self.lock.unlock();
+                        ipc_sync.lock_pair(&self.lock, &endpoint.lock);
+
+                        if (self.bits != 0 and self.bound_to == thread and thread.blocked_on == blocked_on and thread.state == .blocked_receive and !thread.awaiting_reply) {
+
+                            endpoint.receivers.remove(thread);
+                            thread.notify_bits = self.bits;
+                            self.bits = 0;
+                            thread.woke_on_notification = true;
+
+                            scheduler.unblock(scheduler.current_core(), thread);
+
+                        }
+
+                        ipc_sync.unlock_pair(&self.lock, &endpoint.lock);
+                        return;
+
+                    }
 
                 }
-
-                thread.notify_bits = self.bits;
-                self.bits = 0;
-                thread.woke_on_notification = true;
-
-                scheduler.unblock(scheduler.current_core(), thread);
 
             }
 
         }
 
+        self.lock.unlock();
+
     }
 
     /// Take and clear any accumulated bits (for a bound receiver polling before it blocks); null when none are pending.
     pub fn take_pending(self: *Notification) ?u64 {
+
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
 
         if (self.bits == 0) return null;
 
@@ -109,8 +136,8 @@ pub const Notification = struct {
     /// leaving the caller to block through the scheduler once the lock is dropped.
     pub fn poll_or_block(self: *Notification, by: *Thread) ?u64 {
 
-        const saved = ipc_sync.lock.acquire();
-        defer ipc_sync.lock.release(saved);
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
 
         if (self.bits != 0) {
 

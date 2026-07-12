@@ -1,5 +1,5 @@
 // IPC transfer (06-kernel-ddd.md Section 9): the synchronous rendezvous behind send/receive/call/reply.
-// Queue and thread-state manipulation happens under the kernel-wide IPC lock, released before any switch;
+// Queue and thread-state manipulation happens under the endpoint lock, released before any switch;
 // a blocking thread marks its context stale first, so a cross-core waker cannot run it mid-switch.
 
 const object = @import("../object/object.zig");
@@ -24,14 +24,14 @@ pub fn send(from: *Thread, endpoint: *Endpoint) Error!void {
 
     const core = scheduler.current_core();
 
-    ipc_sync.lock.lock();
+    endpoint.lock.lock();
 
     if (endpoint.receivers.pop()) |receiver| {
 
         deliver(from, receiver, false) catch |err| {
 
             endpoint.receivers.push(receiver);
-            ipc_sync.lock.unlock();
+            endpoint.lock.unlock();
 
             return err;
 
@@ -40,7 +40,7 @@ pub fn send(from: *Thread, endpoint: *Endpoint) Error!void {
         receiver.observed_badge = from.send_badge;
         scheduler.unblock(core, receiver);
 
-        ipc_sync.lock.unlock();
+        endpoint.lock.unlock();
 
         return;
 
@@ -53,7 +53,7 @@ pub fn send(from: *Thread, endpoint: *Endpoint) Error!void {
     scheduler.defer_dispatch(from);
     endpoint.senders.push(from);
 
-    ipc_sync.lock.unlock();
+    endpoint.lock.unlock();
 
     scheduler.block(core, from);
 
@@ -74,7 +74,7 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
 
     const core = scheduler.current_core();
 
-    ipc_sync.lock.lock();
+    endpoint.lock.lock();
 
     from.is_call = true;
     from.awaiting_reply = true;
@@ -86,7 +86,7 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
 
             endpoint.receivers.push(receiver);
             from.awaiting_reply = false;
-            ipc_sync.lock.unlock();
+            endpoint.lock.unlock();
 
             return err;
 
@@ -100,7 +100,7 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
         scheduler.defer_dispatch(from);
         scheduler.donate(from, receiver);
 
-        ipc_sync.lock.unlock();
+        endpoint.lock.unlock();
 
         scheduler.hand_off(from, receiver);
 
@@ -111,7 +111,7 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
         scheduler.defer_dispatch(from);
         endpoint.senders.push(from);
 
-        ipc_sync.lock.unlock();
+        endpoint.lock.unlock();
 
         scheduler.block(core, from);
 
@@ -138,14 +138,25 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
     const core = scheduler.current_core();
 
-    ipc_sync.lock.lock();
+    const notification = into.bound_notification;
+
+    if (notification) |bound| {
+
+        ipc_sync.lock_pair(&endpoint.lock, &bound.lock);
+
+    } else {
+
+        endpoint.lock.lock();
+
+    }
 
     // The first receive on an endpoint registers the thread as one of its servers (06-kernel-ddd.md Section 9).
 
     if (into.serving == null) {
 
         into.serving = endpoint;
-        endpoint.join();
+        endpoint.server_threads += 1;
+        endpoint.header.retain();
 
     }
 
@@ -154,7 +165,7 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
         deliver(sender, into, sender.is_call) catch |err| {
 
             endpoint.senders.push(sender);
-            ipc_sync.lock.unlock();
+            unlock_receive(endpoint, notification);
 
             return err;
 
@@ -175,7 +186,7 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
         }
 
-        ipc_sync.lock.unlock();
+        unlock_receive(endpoint, notification);
 
         return into.observed_badge;
 
@@ -183,13 +194,16 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
 
     // Multi-wait: an event already pending on the bound notification wakes us without blocking.
 
-    if (into.bound_notification) |notification| {
+    if (notification) |bound| {
 
-        if (notification.take_pending()) |bits| {
+        if (bound.bits != 0) {
+
+            const bits = bound.bits;
+            bound.bits = 0;
 
             into.notify_bits = bits;
 
-            ipc_sync.lock.unlock();
+            unlock_receive(endpoint, notification);
 
             return notification_wake;
 
@@ -203,7 +217,7 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
     scheduler.defer_dispatch(into);
     endpoint.receivers.push(into);
 
-    ipc_sync.lock.unlock();
+    unlock_receive(endpoint, notification);
 
     scheduler.block(core, into);
 
@@ -227,11 +241,15 @@ pub fn reply(from: *Thread, reply_handle: Handle) Error!void {
 
     const caller = try from.process.handles.resolve_as(reply_handle, .thread);
 
-    ipc_sync.lock.lock();
+    const blocked_on = caller.blocked_on orelse return error.Invalid;
+    if (blocked_on.kind != .endpoint) return error.Invalid;
+
+    const endpoint = object.container(Endpoint, blocked_on);
+    endpoint.lock.lock();
 
     if (!caller.awaiting_reply) {
 
-        ipc_sync.lock.unlock();
+        endpoint.lock.unlock();
 
         return error.Invalid;
 
@@ -239,7 +257,7 @@ pub fn reply(from: *Thread, reply_handle: Handle) Error!void {
 
     deliver(from, caller, false) catch |err| {
 
-        ipc_sync.lock.unlock();
+        endpoint.lock.unlock();
 
         return err;
 
@@ -250,11 +268,25 @@ pub fn reply(from: *Thread, reply_handle: Handle) Error!void {
     from.owes_reply_to = null;
     scheduler.settle_donation(from, caller);
 
-    ipc_sync.lock.unlock();
+    endpoint.lock.unlock();
 
     from.process.handles.close(reply_handle) catch {};
 
     scheduler.hand_back(from, caller);
+
+}
+
+fn unlock_receive(endpoint: *Endpoint, notification: ?*@import("../object/notification.zig").Notification) void {
+
+    if (notification) |bound| {
+
+        ipc_sync.unlock_pair(&endpoint.lock, &bound.lock);
+
+    } else {
+
+        endpoint.lock.unlock();
+
+    }
 
 }
 

@@ -4,6 +4,7 @@ const slab = @import("../memory/slab.zig");
 const object = @import("object.zig");
 const scheduler = @import("../sched/scheduler.zig");
 const runqueue = @import("../sched/runqueue.zig");
+const spinlock = @import("../sync/spinlock.zig");
 
 const Error = @import("../error.zig").Error;
 
@@ -12,6 +13,7 @@ var cache: slab.Cache(Endpoint) = .{};
 pub const Endpoint = struct {
 
     header: object.Object,
+    lock: spinlock.SpinLock,
 
     senders: runqueue.RunQueue,
     receivers: runqueue.RunQueue,
@@ -26,6 +28,7 @@ pub const Endpoint = struct {
         endpoint.* = .{
 
             .header = .{ .kind = .endpoint },
+            .lock = .{},
 
             .senders = .{},
             .receivers = .{},
@@ -41,6 +44,9 @@ pub const Endpoint = struct {
     /// A thread registers as a server here (retains the endpoint for the thread that will hold it in `serving`).
     pub fn join(self: *Endpoint) void {
 
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
+
         self.server_threads += 1;
         self.header.retain();
 
@@ -49,14 +55,33 @@ pub const Endpoint = struct {
     /// A server thread leaves (on death); the last one out wakes every blocked client with `Gone`.
     pub fn leave(self: *Endpoint) void {
 
+        const saved = self.lock.acquire();
+
+        self.leave_locked();
+
+        self.lock.release(saved);
+
+    }
+
+    pub fn leave_locked(self: *Endpoint) void {
+
         self.server_threads -= 1;
 
-        if (self.server_threads == 0) self.break_endpoint();
+        if (self.server_threads == 0) self.break_endpoint_locked();
 
     }
 
     /// Wake all threads blocked in send/call toward here with `Gone`: a server that vanished must not hang its clients.
     pub fn break_endpoint(self: *Endpoint) void {
+
+        const saved = self.lock.acquire();
+        defer self.lock.release(saved);
+
+        self.break_endpoint_locked();
+
+    }
+
+    fn break_endpoint_locked(self: *Endpoint) void {
 
         while (self.senders.pop()) |sender| {
 

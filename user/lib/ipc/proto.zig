@@ -15,6 +15,7 @@ pub const stream = struct {
     pub const write: u16 = 2; // request: offset, length          reply: bytes written
     pub const set_mode: u16 = 3; // request: mode                    reply: status
     pub const attach: u16 = 4; // request: capacity, buffer Region  reply: status
+    pub const detach: u16 = 5; // request: -                        reply: status
 
     pub const mode_raw: u64 = 0;
     pub const mode_cooked: u64 = 1;
@@ -106,6 +107,7 @@ pub const filesystem = struct {
     pub const set_permissions: u16 = 11; // request: path offset, path length, mask      reply: status
     pub const attach: u16 = 12; // request: capacity, buffer Region              reply: status
     pub const info: u16 = 13; // request: buffer offset                         reply: status
+    pub const detach: u16 = 14; // request: -                                     reply: status
 
     pub const kind_file: u64 = 1;
     pub const kind_directory: u64 = 2;

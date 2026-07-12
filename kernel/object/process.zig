@@ -36,6 +36,7 @@ pub const Process = struct {
 
     address_space: *AddressSpace,
     handles: HandleTable,
+    thread_lock: spinlock.SpinLock,
     threads: ?*Thread,
     thread_count: u32,
 
@@ -55,6 +56,7 @@ pub const Process = struct {
 
             .address_space = space,
             .handles = undefined,
+            .thread_lock = .{},
             .threads = null,
             .thread_count = 0,
 

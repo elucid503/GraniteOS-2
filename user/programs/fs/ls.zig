@@ -19,6 +19,7 @@ pub fn main(args: []const []const u8) u8 {
         return 1;
 
     };
+    defer client.close();
 
     const path = if (args.len > 1) args[1] else ".";
 
