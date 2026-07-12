@@ -691,6 +691,7 @@ const GlyphEntry = struct {
 
     used: bool = false,
     key: u32 = 0,
+    used_at: u32 = 0,
 
     left: i16 = 0,
     top: i16 = 0,
@@ -702,6 +703,7 @@ const GlyphEntry = struct {
 
 var glyph_meta = [_]GlyphEntry{.{}} ** cache_capacity;
 var glyph_coverage: [cache_capacity][cache_box_w * cache_box_h]u8 = undefined;
+var glyph_clock: u32 = 0;
 
 fn cached_glyph(face: *const Face, glyph: u16, px: u32, phase: u32) ?usize {
 
@@ -710,22 +712,42 @@ fn cached_glyph(face: *const Face, glyph: u16, px: u32, phase: u32) ?usize {
 
     var probe: usize = 0;
     var slot = start;
+    var oldest_slot = start;
+    var oldest_use = std.math.maxInt(u32);
 
     while (probe < 12) : (probe += 1) {
 
         const entry = &glyph_meta[slot];
 
-        if (entry.used and entry.key == key) return slot;
+        if (entry.used and entry.key == key) {
+
+            touch_glyph(entry);
+
+            return slot;
+
+        }
 
         if (!entry.used) return if (rasterize_into(face, slot, glyph, px, phase, key)) slot else null;
+
+        if (entry.used_at < oldest_use) {
+
+            oldest_use = entry.used_at;
+            oldest_slot = slot;
+
+        }
 
         slot = (slot + 1) % cache_capacity;
 
     }
 
-    // The probe window is full: reuse the home slot rather than grow the table.
+    return if (rasterize_into(face, oldest_slot, glyph, px, phase, key)) oldest_slot else null;
 
-    return if (rasterize_into(face, start, glyph, px, phase, key)) start else null;
+}
+
+fn touch_glyph(entry: *GlyphEntry) void {
+
+    glyph_clock +%= 1;
+    entry.used_at = glyph_clock;
 
 }
 
@@ -742,6 +764,7 @@ fn rasterize_into(face: *const Face, slot: usize, glyph: u16, px: u32, phase: u3
     if (path.point_count == 0) {
 
         glyph_meta[slot] = .{ .used = true, .key = key };
+        touch_glyph(&glyph_meta[slot]);
 
         return true;
 
@@ -769,6 +792,7 @@ fn rasterize_into(face: *const Face, slot: usize, glyph: u16, px: u32, phase: u3
     if (w <= 0 or h <= 0) {
 
         glyph_meta[slot] = .{ .used = true, .key = key };
+        touch_glyph(&glyph_meta[slot]);
 
         return true;
 
@@ -796,6 +820,8 @@ fn rasterize_into(face: *const Face, slot: usize, glyph: u16, px: u32, phase: u3
         .h = @intCast(h),
 
     };
+
+    touch_glyph(&glyph_meta[slot]);
 
     return true;
 

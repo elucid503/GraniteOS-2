@@ -194,11 +194,20 @@ pub const Page = struct {
 
     width: i32 = 0,
     height: i32 = 0,
+    damage: Rect = Rect.empty,
+    initialized: bool = false,
 
     // Interaction state persists across rebuilds, keyed by node id.
     hover_id: u32 = 0,
 
     pub fn begin(self: *Page, width: i32, height: i32, style: Style) void {
+
+        if (!self.initialized or width != self.width or height != self.height) {
+
+            self.damage = .{ .x = 0, .y = 0, .w = width, .h = height };
+            self.initialized = true;
+
+        }
 
         self.count = 1;
         self.width = width;
@@ -622,7 +631,38 @@ pub const Page = struct {
 
     pub fn paint(self: *Page, surface: *const Surface) void {
 
-        self.paint_node(surface, root);
+        const dirty = self.damage.intersect(surface.bounds());
+
+        if (dirty.is_empty()) return;
+
+        const clipped = surface.clipped(dirty);
+
+        self.paint_node(&clipped, root);
+
+    }
+
+    pub fn mark_dirty(self: *Page, rect: Rect) void {
+
+        self.damage = self.damage.cover(rect.intersect(.{ .x = 0, .y = 0, .w = self.width, .h = self.height }));
+
+    }
+
+    pub fn mark_all_dirty(self: *Page) void {
+
+        self.damage = .{ .x = 0, .y = 0, .w = self.width, .h = self.height };
+
+    }
+
+    pub fn present_dirty(self: *Page, window: anytype) !void {
+
+        const dirty = self.damage.intersect(window.surface.bounds());
+
+        if (dirty.is_empty()) return;
+
+        self.paint(&window.surface);
+        try window.present(dirty);
+
+        self.damage = Rect.empty;
 
     }
 
@@ -793,6 +833,9 @@ pub const Page = struct {
 
         if (now == self.hover_id) return false;
 
+        if (self.rect_of(self.hover_id)) |rect| self.mark_dirty(rect);
+        if (self.rect_of(now)) |rect| self.mark_dirty(rect);
+
         self.hover_id = now;
 
         return true;
@@ -813,6 +856,21 @@ pub const Page = struct {
     }
 
 };
+
+test "page damage accumulates and clips to bounds" {
+
+    var page: Page = undefined;
+
+    page.width = 100;
+    page.height = 80;
+    page.damage = Rect.empty;
+
+    page.mark_dirty(.{ .x = 10, .y = 12, .w = 8, .h = 6 });
+    page.mark_dirty(.{ .x = 30, .y = 20, .w = 100, .h = 100 });
+
+    try std.testing.expectEqual(Rect{ .x = 10, .y = 12, .w = 90, .h = 68 }, page.damage);
+
+}
 
 /// The longest prefix of `s` whose width at `size` fits in `max_w`.
 pub fn truncate(font: *const Face, s: []const u8, size: u32, max_w: i32) []const u8 {

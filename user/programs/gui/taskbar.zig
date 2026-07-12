@@ -176,7 +176,15 @@ fn run() !void {
 
         if (list_due) refresh_windows();
 
-        if (list_due or clock_due) paint_bar();
+        if (list_due) {
+
+            paint_bar();
+
+        } else if (clock_due) {
+
+            paint_clock_only();
+
+        }
 
     }
 
@@ -959,6 +967,19 @@ fn paint_clock(surface: *const gfx.Surface, width: i32) void {
 
 }
 
+fn paint_clock_only() void {
+
+    const surface = &bar.surface;
+    const width: i32 = @intCast(surface.width);
+    const rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
+
+    surface.fill_rect(rect, ui.theme.surface_alt);
+    paint_clock(surface, width);
+
+    bar.present(rect) catch {};
+
+}
+
 fn paint_menu() void {
 
     sync_menu_size();
@@ -1231,7 +1252,7 @@ fn row_hover(surface: *const gfx.Surface, rect: Rect) void {
 
 }
 
-// A worker thread wakes the main loop twice a second to refresh the clock and window list.
+// A worker thread wakes the main loop on second boundaries to refresh the clock.
 
 const ticker_stack_pages = 8;
 const page_size = 4096;
@@ -1264,7 +1285,9 @@ fn ticker() callconv(.c) noreturn {
 
     while (true) {
 
-        lib.time.sleep_ms(500);
+        const remainder = lib.time.now_ms() % 1000;
+
+        lib.time.sleep_ms(if (remainder == 0) 1000 else 1000 - remainder);
 
         @atomicStore(u32, &clock_tick, 1, .release);
 

@@ -22,6 +22,7 @@ const Error = sys.Error;
 pub fn connect(authority: cap.Handle) Error!window.Connection {
 
     var attempts: usize = 0;
+    var delay_ms: u64 = 5;
 
     while (true) {
 
@@ -32,7 +33,8 @@ pub fn connect(authority: cap.Handle) Error!window.Connection {
             if (attempts > 200) return failure;
 
             // Sleep rather than spin between attempts: the compositor is only briefly unregistered at boot.
-            time.sleep_ms(5);
+            time.sleep_ms(delay_ms);
+            delay_ms = @min(delay_ms * 2, 80);
 
             continue;
 

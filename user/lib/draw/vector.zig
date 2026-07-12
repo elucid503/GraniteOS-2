@@ -242,7 +242,7 @@ const icon_capacity: usize = 64;
 const IconEntry = struct {
 
     used: bool = false,
-    source: usize = 0,
+    hash: u64 = 0,
 
     w: u16 = 0,
     h: u16 = 0,
@@ -287,8 +287,8 @@ pub fn icon_in(surface: *const Surface, rect: Rect, svg: []const u8, color: Colo
 
 fn cached_icon(svg: []const u8, w: u32, h: u32) ?usize {
 
-    const source = @intFromPtr(svg.ptr) ^ (@as(usize, w) << 20) ^ (@as(usize, h) << 28);
-    const start = (source ^ (source >> 9)) % icon_capacity;
+    const hash = icon_hash(svg) ^ (@as(u64, w) << 48) ^ (@as(u64, h) << 56);
+    const start: usize = @intCast((hash ^ (hash >> 32)) % icon_capacity);
 
     var probe: usize = 0;
     var slot = start;
@@ -297,19 +297,33 @@ fn cached_icon(svg: []const u8, w: u32, h: u32) ?usize {
 
         const entry = &icon_meta[slot];
 
-        if (entry.used and entry.source == source) return slot;
+        if (entry.used and entry.hash == hash) return slot;
 
-        if (!entry.used) return render_icon(slot, svg, source, w, h);
+        if (!entry.used) return render_icon(slot, svg, hash, w, h);
 
         slot = (slot + 1) % icon_capacity;
 
     }
 
-    return render_icon(start, svg, source, w, h);
+    return render_icon(start, svg, hash, w, h);
 
 }
 
-fn render_icon(slot: usize, svg: []const u8, source: usize, w: u32, h: u32) ?usize {
+fn icon_hash(svg: []const u8) u64 {
+
+    var hash: u64 = 0xcbf2_9ce4_8422_2325;
+
+    for (svg) |byte| {
+
+        hash = (hash ^ byte) *% 0x0000_0100_0000_01b3;
+
+    }
+
+    return hash;
+
+}
+
+fn render_icon(slot: usize, svg: []const u8, hash: u64, w: u32, h: u32) ?usize {
 
     const cells = w * h;
 
@@ -326,7 +340,7 @@ fn render_icon(slot: usize, svg: []const u8, source: usize, w: u32, h: u32) ?usi
     icon_meta[slot] = .{
 
         .used = true,
-        .source = source,
+        .hash = hash,
 
         .w = @intCast(w),
         .h = @intCast(h),

@@ -1,7 +1,7 @@
 // The drawing library root (M10 GUI rewrite): pixel surfaces, colors, and rectangles. Every visual element in
 // the system - window chrome, text, icons, charts, images - renders through this module and its companions
 // (path.zig, raster.zig, stroke.zig, text.zig, vector.zig, png.zig, image.zig). All arithmetic is integer
-// fixed-point: the kernel does not preserve FP/SIMD state across context switches, so user space never touches floats.
+// fixed-point; lazy FP/SIMD context switching allows hot pixel paths to use integer NEON vectors.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -52,11 +52,47 @@ pub fn mix(dst: Color, src: Color, alpha: u8) Color {
     const a: u32 = alpha;
     const inv = 255 - a;
 
-    const r = (@as(u32, red(src)) * a + @as(u32, red(dst)) * inv + 127) / 255;
-    const g = (@as(u32, green(src)) * a + @as(u32, green(dst)) * inv + 127) / 255;
-    const b = (@as(u32, blue(src)) * a + @as(u32, blue(dst)) * inv + 127) / 255;
+    const r = divide_255(@as(u32, red(src)) * a + @as(u32, red(dst)) * inv);
+    const g = divide_255(@as(u32, green(src)) * a + @as(u32, green(dst)) * inv);
+    const b = divide_255(@as(u32, blue(src)) * a + @as(u32, blue(dst)) * inv);
 
     return rgb(@intCast(r), @intCast(g), @intCast(b));
+
+}
+
+fn divide_255(value: u32) u32 {
+
+    const rounded = value + 128;
+
+    return (rounded + (rounded >> 8)) >> 8;
+
+}
+
+const PixelVector = @Vector(4, u32);
+
+fn mix_four(dst: PixelVector, src: PixelVector, alpha: PixelVector) PixelVector {
+
+    const all: PixelVector = @splat(255);
+    const inv = all - alpha;
+    const mask: PixelVector = @splat(0xff);
+    const rounding: PixelVector = @splat(128);
+
+    var output: PixelVector = @splat(0);
+
+    inline for (.{ 16, 8, 0 }) |shift| {
+
+        const shifts: PixelVector = @splat(shift);
+        const dst_channel = (dst >> shifts) & mask;
+        const src_channel = (src >> shifts) & mask;
+        const product = src_channel * alpha + dst_channel * inv;
+        const rounded = product + rounding;
+        const channel = (rounded + (rounded >> @as(PixelVector, @splat(8)))) >> @as(PixelVector, @splat(8));
+
+        output |= channel << shifts;
+
+    }
+
+    return output;
 
 }
 
@@ -273,8 +309,20 @@ pub const Surface = struct {
             const base = @as(u32, @intCast(y)) * self.stride;
 
             var x = clipped_rect.x;
+            const end = clipped_rect.x + clipped_rect.w;
+            const source: PixelVector = @splat(color);
+            const alphas: PixelVector = @splat(alpha);
 
-            while (x < clipped_rect.x + clipped_rect.w) : (x += 1) {
+            while (x + 4 <= end) : (x += 4) {
+
+                const index = base + @as(u32, @intCast(x));
+                const pixels: *align(1) PixelVector = @ptrCast(&self.pixels[index]);
+
+                pixels.* = mix_four(pixels.*, source, alphas);
+
+            }
+
+            while (x < end) : (x += 1) {
 
                 const index = base + @as(u32, @intCast(x));
 
@@ -364,6 +412,17 @@ pub const Surface = struct {
         }
 
         var index: usize = 0;
+        const source: PixelVector = @splat(color);
+
+        while (index + 4 <= count) : (index += 4) {
+
+            const alpha_bytes = row[index..][0..4];
+            const alphas = PixelVector{ alpha_bytes[0], alpha_bytes[1], alpha_bytes[2], alpha_bytes[3] };
+            const pixels: *align(1) PixelVector = @ptrCast(&self.pixels[base + @as(u32, @intCast(index))]);
+
+            pixels.* = mix_four(pixels.*, source, alphas);
+
+        }
 
         while (index < count) : (index += 1) {
 
@@ -606,6 +665,33 @@ test "rect intersect cover and contains" {
     try testing.expect(a.intersect(.{ .x = 20, .y = 20, .w = 4, .h = 4 }).is_empty());
     try testing.expect(a.contains(9, 9));
     try testing.expect(!a.contains(10, 9));
+
+}
+
+test "divide-free mix matches rounded scalar division" {
+
+    var alpha: u16 = 0;
+
+    while (alpha <= 255) : (alpha += 1) {
+
+        var source: u16 = 0;
+
+        while (source <= 255) : (source += 17) {
+
+            var destination: u16 = 0;
+
+            while (destination <= 255) : (destination += 17) {
+
+                const expected = (@as(u32, source) * alpha + @as(u32, destination) * (255 - alpha) + 127) / 255;
+                const actual = red(mix(rgb(@intCast(destination), 0, 0), rgb(@intCast(source), 0, 0), @intCast(alpha)));
+
+                try testing.expectEqual(expected, actual);
+
+            }
+
+        }
+
+    }
 
 }
 
