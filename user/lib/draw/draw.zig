@@ -434,7 +434,7 @@ pub const Surface = struct {
 
     /// Blit `src_rect` but weight each pixel by a coverage mask spanning the destination rect (row-major,
     /// `mask_w` wide): the compositor's rounded-window path. Zero coverage leaves the destination untouched.
-    pub fn blit_masked(self: *const Surface, dst_x: i32, dst_y: i32, src: *const Surface, src_rect: Rect, mask: []const u8, mask_w: u32) void {
+    pub fn blit_masked(self: *const Surface, dst_x: i32, dst_y: i32, src: *const Surface, src_rect: Rect, mask: []const u8, mask_w: u32, opaque_rows: ?[]const bool) void {
 
         var from = src_rect.intersect(src.bounds());
 
@@ -464,11 +464,18 @@ pub const Surface = struct {
             const mask_end = @min(mask_start + row_w, @as(u32, @intCast(mask.len)));
             const row_mask = mask[mask_start..mask_end];
             const active_w = row_mask.len;
+            const mask_row: usize = @intCast(mask_dy + row);
 
             var solid_row = active_w == row_w;
             var index: u32 = 0;
 
-            while (solid_row and index < active_w) : (index += 1) {
+            if (opaque_rows) |rows| {
+
+                solid_row = solid_row and mask_row < rows.len and rows[mask_row];
+
+            }
+
+            while (opaque_rows == null and solid_row and index < active_w) : (index += 1) {
 
                 if (row_mask[index] != 255) solid_row = false;
 
@@ -695,7 +702,7 @@ test "blit_masked weights source pixels by the mask" {
 
     const mask = [_]u8{ 255, 0, 128, 255 };
 
-    dst.blit_masked(0, 0, &src, .{ .x = 0, .y = 0, .w = 2, .h = 2 }, &mask, 2);
+    dst.blit_masked(0, 0, &src, .{ .x = 0, .y = 0, .w = 2, .h = 2 }, &mask, 2, null);
 
     try testing.expectEqual(@as(u32, 0xffffff), dst_buffer[0]);
     try testing.expectEqual(@as(u32, 0), dst_buffer[1]);

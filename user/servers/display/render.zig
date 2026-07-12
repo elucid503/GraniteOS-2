@@ -228,7 +228,7 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
         const view = back.clipped(clip);
 
         draw.round.matte_corner_edges(&view, left.x, left.y, masks.bl, side, matte);
-        view.blit_masked(left.x, left.y, surface, left.translated(-content.x, -content.y), masks.bl, side);
+        view.blit_masked(left.x, left.y, surface, left.translated(-content.x, -content.y), masks.bl, side, masks.bl_opaque);
 
     }
 
@@ -237,7 +237,7 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
         const view = back.clipped(clip);
 
         draw.round.matte_corner_edges(&view, right.x, right.y, masks.br, side, matte);
-        view.blit_masked(right.x, right.y, surface, right.translated(-content.x, -content.y), masks.br, side);
+        view.blit_masked(right.x, right.y, surface, right.translated(-content.x, -content.y), masks.br, side, masks.br_opaque);
 
     }
 

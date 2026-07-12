@@ -119,7 +119,7 @@ fn run(frame: *SyscallFrame) Error!u64 {
         .map => map(a0, a1, a2, a3),
         .unmap => unmap(a0, a1),
         .send => send(a0, a1),
-        .receive => receive(a0, a1),
+        .receive => receive(a0, a1, a2),
         .call => call(a0, a1),
         .reply => reply(a0, a1),
         .notify => notify(a0, a1),
@@ -383,14 +383,16 @@ fn send(endpoint_raw: u64, message_ptr: u64) Error!u64 {
 
 }
 
-fn receive(endpoint_raw: u64, message_ptr: u64) Error!u64 {
+fn receive(endpoint_raw: u64, message_ptr: u64, flags: u64) Error!u64 {
 
     const endpoint = try current_process().handles.resolve_as(handle_from(@truncate(endpoint_raw)), .endpoint);
 
     const server = current_thread();
     server.message_buffer = message_ptr;
 
-    const badge = try transfer.receive(server, endpoint);
+    if (flags > 1) return error.Invalid;
+
+    const badge = try transfer.receive(server, endpoint, flags == 0);
 
     // A bound-notification wake carries no request: hand back only the event bits (03-syscall-abi.md Multi-wait).
 

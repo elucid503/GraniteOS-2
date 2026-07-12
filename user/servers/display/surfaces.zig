@@ -34,19 +34,34 @@ pub fn Store(comptime capacity: usize) type {
 
             width: u32 = 0,
             height: u32 = 0,
+            capacity: usize = 0,
+
+            pending_width: u32 = 0,
+            pending_height: u32 = 0,
 
         };
 
         slots: [capacity]Slot = [_]Slot{.{}} ** capacity,
 
-        /// Allocate a zeroed surface Region for `slot`; any previous surface there is released first.
+        /// Allocate a size-classed surface, preserving a fitting buffer until the client presents its new layout.
         pub fn allocate(self: *Self, slot: usize, width: u32, height: u32) Error!Handle {
-
-            self.release(slot);
 
             const bytes = surface_bytes(width, height) orelse return error.TooLarge;
 
-            const region = sys.create(.region, bytes, cap.memory) catch return error.OutOfMemory;
+            if (self.slots[slot].region != 0 and bytes <= self.slots[slot].capacity) {
+
+                self.slots[slot].pending_width = width;
+                self.slots[slot].pending_height = height;
+
+                return self.slots[slot].region;
+
+            }
+
+            self.release(slot);
+
+            const allocation_size = std.math.ceilPowerOfTwo(usize, bytes) catch return error.TooLarge;
+
+            const region = sys.create(.region, allocation_size, cap.memory) catch return error.OutOfMemory;
 
             const base = sys.map(cap.self_space, region, 0, sys.read | sys.write) catch {
 
@@ -67,6 +82,10 @@ pub fn Store(comptime capacity: usize) type {
 
                 .width = width,
                 .height = height,
+                .capacity = allocation_size,
+
+                .pending_width = 0,
+                .pending_height = 0,
 
             };
 
@@ -102,16 +121,46 @@ pub fn Store(comptime capacity: usize) type {
 
         }
 
-        /// The slot's pixels as a Surface - only when the stored size matches what the caller expects, so a
-        /// client that lags behind a resize can never make the compositor read past its mapping.
-        pub fn surface_of(self: *Self, slot: usize, width: u32, height: u32) ?draw.Surface {
+        /// Publish the pending geometry only after the client presents pixels rendered with its new stride.
+        pub fn commit(self: *Self, slot: usize) void {
+
+            const entry = &self.slots[slot];
+
+            if (entry.pending_width == 0 or entry.pending_height == 0) return;
+
+            entry.width = entry.pending_width;
+            entry.height = entry.pending_height;
+            entry.pending_width = 0;
+            entry.pending_height = 0;
+
+        }
+
+        pub fn surface_of(self: *Self, slot: usize) ?draw.Surface {
 
             const entry = &self.slots[slot];
 
             if (entry.base == 0) return null;
-            if (entry.width != width or entry.height != height) return null;
 
             return draw.Surface.from_base(entry.base, entry.width, entry.height, entry.width * 4);
+
+        }
+
+        pub fn covers(self: *Self, slot: usize, content: draw.Rect, region: draw.Rect) bool {
+
+            const entry = &self.slots[slot];
+
+            if (entry.base == 0) return false;
+
+            const pixels = draw.Rect{
+
+                .x = content.x,
+                .y = content.y,
+                .w = @intCast(entry.width),
+                .h = @intCast(entry.height),
+
+            };
+
+            return pixels.x <= region.x and pixels.y <= region.y and pixels.x + pixels.w >= region.x + region.w and pixels.y + pixels.h >= region.y + region.h;
 
         }
 

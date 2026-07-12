@@ -24,6 +24,11 @@ pub const Masks = struct {
     bl: []const u8,
     br: []const u8,
 
+    tl_opaque: []const bool,
+    tr_opaque: []const bool,
+    bl_opaque: []const bool,
+    br_opaque: []const bool,
+
     // 1px perimeter of each quarter — precomputed so frame borders avoid per-pixel edge walks.
     rim_tl: []const u8,
     rim_tr: []const u8,
@@ -41,6 +46,11 @@ const Slot = struct {
     bl: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
     br: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
 
+    tl_opaque: [max_radius]bool = [_]bool{false} ** max_radius,
+    tr_opaque: [max_radius]bool = [_]bool{false} ** max_radius,
+    bl_opaque: [max_radius]bool = [_]bool{false} ** max_radius,
+    br_opaque: [max_radius]bool = [_]bool{false} ** max_radius,
+
     rim_tl: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
     rim_tr: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
     rim_bl: [max_radius * max_radius]u8 = [_]u8{0} ** (max_radius * max_radius),
@@ -57,6 +67,11 @@ const Slot = struct {
             .tr = self.tr[0..area],
             .bl = self.bl[0..area],
             .br = self.br[0..area],
+
+            .tl_opaque = self.tl_opaque[0..@intCast(r)],
+            .tr_opaque = self.tr_opaque[0..@intCast(r)],
+            .bl_opaque = self.bl_opaque[0..@intCast(r)],
+            .br_opaque = self.br_opaque[0..@intCast(r)],
 
             .rim_tl = self.rim_tl[0..area],
             .rim_tr = self.rim_tr[0..area],
@@ -353,12 +368,40 @@ fn build_masks(slot: *Slot, r: i32) void {
 
     extract_quadrants(coverage[0..cells], side, r, slot.tl[0..], slot.tr[0..], slot.bl[0..], slot.br[0..]);
 
+    mark_opaque_rows(slot.tl[0..corner_cells], corner, slot.tl_opaque[0..corner]);
+    mark_opaque_rows(slot.tr[0..corner_cells], corner, slot.tr_opaque[0..corner]);
+    mark_opaque_rows(slot.bl[0..corner_cells], corner, slot.bl_opaque[0..corner]);
+    mark_opaque_rows(slot.br[0..corner_cells], corner, slot.br_opaque[0..corner]);
+
     extract_rim(slot.tl[0..corner_cells], corner, slot.rim_tl[0..corner_cells]);
     extract_rim(slot.tr[0..corner_cells], corner, slot.rim_tr[0..corner_cells]);
     extract_rim(slot.bl[0..corner_cells], corner, slot.rim_bl[0..corner_cells]);
     extract_rim(slot.br[0..corner_cells], corner, slot.rim_br[0..corner_cells]);
 
     slot.ready = true;
+
+}
+
+fn mark_opaque_rows(mask: []const u8, side: u32, rows: []bool) void {
+
+    const width: usize = @intCast(side);
+
+    for (rows, 0..) |*row_is_opaque, row| {
+
+        row_is_opaque.* = true;
+
+        for (mask[row * width ..][0..width]) |alpha| {
+
+            if (alpha != 255) {
+
+                row_is_opaque.* = false;
+                break;
+
+            }
+
+        }
+
+    }
 
 }
 

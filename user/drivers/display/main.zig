@@ -519,6 +519,8 @@ fn build_framebuffer(width: u32, height: u32) !void {
     const dma = try sys.create_dma((bytes + page_size - 1) & ~@as(usize, page_size - 1), cap.driver.dma);
     const base = try sys.map(cap.self_space, dma.region, 0, sys.read | sys.write);
 
+    @memset(@as([*]u8, @ptrFromInt(base))[0..bytes], 0);
+
     const resource = next_resource;
     next_resource += 1;
 
@@ -680,23 +682,26 @@ fn flush(position: u64, extent: u64) i64 {
 
 fn push_damage(x: u32, y: u32, w: u32, h: u32) !void {
 
-    _ = .{ x, y, w, h };
-
     if (!host_display_enabled) return;
+
+    const clamped_x = @min(x, mode_width);
+    const clamped_y = @min(y, mode_height);
+    const clamped_w = @min(w, mode_width - clamped_x);
+    const clamped_h = @min(h, mode_height - clamped_y);
+
+    if (clamped_w == 0 or clamped_h == 0) return;
 
     barrier();
 
-    // The scanout backing is guest RAM the compositor maps and writes; sync it to the host with transfer
-    // then publish. Use the full resource each time so partial rectangles cannot drift after a resize.
-
-    const rect = GpuRect{ .x = 0, .y = 0, .width = mode_width, .height = mode_height };
+    const rect = GpuRect{ .x = clamped_x, .y = clamped_y, .width = clamped_w, .height = clamped_h };
+    const offset = (@as(u64, clamped_y) * mode_width + clamped_x) * 4;
 
     try check_ok(try command(TransferToHost2d, .{
 
         .header = header_of(cmd_transfer_to_host_2d),
         .rect = rect,
 
-        .offset = 0,
+        .offset = offset,
 
         .resource_id = fb_resource,
         .padding = 0,
@@ -910,6 +915,7 @@ fn apply_display_resize() bool {
     } else {
 
         build_framebuffer(size.width, size.height) catch return false;
+        push_damage(0, 0, mode_width, mode_height) catch {};
 
     }
 

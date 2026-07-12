@@ -131,7 +131,7 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
 
 /// Receive: take a waiting sender's message, block until one arrives, or wake on the bound notification (multi-wait).
 /// Returns the sender's badge, or `notification_wake` with the event bits staged in `into.notify_bits`.
-pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
+pub fn receive(into: *Thread, endpoint: *Endpoint, block: bool) Error!u64 {
 
     const saved = arch.disable_interrupts();
     defer arch.restore_interrupts(saved);
@@ -208,6 +208,13 @@ pub fn receive(into: *Thread, endpoint: *Endpoint) Error!u64 {
             return notification_wake;
 
         }
+
+    }
+
+    if (!block) {
+
+        unlock_receive(endpoint, notification);
+        return error.WouldBlock;
 
     }
 
@@ -599,5 +606,20 @@ test "take_pending returns the accumulated bits once and clears them" {
 
     try testing.expectEqual(@as(?u64, 0b11), notification.take_pending());
     try testing.expectEqual(@as(u64, 0), notification.bits);
+
+}
+
+test "polling an empty endpoint does not queue or block the receiver" {
+
+    const pool = ipc_pool(64);
+    defer std.heap.page_allocator.free(pool);
+
+    const process = try Process.create(try address_space.AddressSpace.create());
+    const endpoint = try Endpoint.create();
+    const receiver = try Thread.create(process, 0x1000);
+
+    try testing.expectError(error.WouldBlock, receive(receiver, endpoint, false));
+    try testing.expect(endpoint.receivers.is_empty());
+    try testing.expectEqual(ThreadState.suspended, receiver.state);
 
 }

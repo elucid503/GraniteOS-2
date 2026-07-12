@@ -184,6 +184,13 @@ pub fn receive(endpoint: Handle, message: *Message) Error!u64 {
 
 }
 
+/// Take a queued request without blocking, or return `WouldBlock` when the endpoint is empty.
+pub fn receive_poll(endpoint: Handle, message: *Message) Error!u64 {
+
+    return check(invoke(.receive, endpoint, @intFromPtr(message), 1, 0, 0));
+
+}
+
 /// The RPC hot path: request out, reply back in the same `message`.
 pub fn call(endpoint: Handle, message: *Message) Error!void {
 

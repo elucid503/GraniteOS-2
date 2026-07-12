@@ -16,6 +16,7 @@ const proto = lib.proto;
 const sys = lib.sys;
 
 const manager_module = @import("manager.zig");
+const damage_module = @import("damage.zig");
 const render = @import("render.zig");
 const surfaces_module = @import("surfaces.zig");
 
@@ -130,7 +131,20 @@ var resize_outline: Rect = Rect.empty;
 var resize_dx: i32 = 0;
 var resize_dy: i32 = 0;
 
-var damage: Rect = Rect.empty;
+var damage = damage_module.List{};
+var resize_damage: [manager_module.max_windows]Rect = [_]Rect{Rect.empty} ** manager_module.max_windows;
+
+const max_present_replies = 64;
+
+const PresentReply = struct {
+
+    handle: Handle,
+    status: i64,
+
+};
+
+var present_replies: [max_present_replies]PresentReply = undefined;
+var present_reply_count: usize = 0;
 
 const ListWatch = struct {
 
@@ -182,25 +196,78 @@ fn run() !void {
 
         const badge = sys.receive(cap.stdin, &in) catch continue;
 
-        if (badge == cap.notification_wake) {
+        process_message(badge, &in);
 
-            const bits = in.data[0];
+        while (true) {
 
-            if (input_attached and bits & input_bit != 0) drain_input();
-            if (bits & display_bit != 0) handle_mode_change();
+            in = Message.zeroed;
+            const queued_badge = sys.receive_poll(cap.stdin, &in) catch |failure| switch (failure) {
 
-        } else {
+                error.WouldBlock => break,
+                else => break,
 
-            var out = Message.zeroed;
-            out.data[0] = @bitCast(dispatch(badge, in.data[0], &in, &out));
+            };
 
-            sys.reply(in.reply, &out) catch {};
+            process_message(queued_badge, &in);
 
         }
 
         composite() catch {};
+        reply_to_presents();
 
     }
+
+}
+
+fn process_message(badge: u64, in: *const Message) void {
+
+    if (badge == cap.notification_wake) {
+
+        const bits = in.data[0];
+
+        if (input_attached and bits & input_bit != 0) drain_input();
+        if (bits & display_bit != 0) handle_mode_change();
+
+    } else {
+
+        var out = Message.zeroed;
+        const status = dispatch(badge, in.data[0], in, &out);
+
+        if (in.data[0] == proto.window.present) {
+
+            if (present_reply_count == present_replies.len) {
+
+                composite() catch {};
+                reply_to_presents();
+
+            }
+
+            present_replies[present_reply_count] = .{ .handle = in.reply, .status = status };
+            present_reply_count += 1;
+            return;
+
+        }
+
+        out.data[0] = @bitCast(status);
+
+        sys.reply(in.reply, &out) catch {};
+
+    }
+
+}
+
+fn reply_to_presents() void {
+
+    for (present_replies[0..present_reply_count]) |pending| {
+
+        var out = Message.zeroed;
+        out.data[0] = @bitCast(pending.status);
+
+        sys.reply(pending.handle, &out) catch {};
+
+    }
+
+    present_reply_count = 0;
 
 }
 
@@ -496,6 +563,8 @@ fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
     const window = manager.create(badge, width, height, in.data[2], title) orelse return -3;
     const slot = slot_of(window);
 
+    resize_damage[slot] = Rect.empty;
+
     _ = surfaces.allocate(slot, window.width, window.height) catch {
 
         _ = manager.destroy(window.id);
@@ -521,7 +590,17 @@ fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
 fn present(badge: u64, in: *const Message) i64 {
 
     const window = owned_window(badge, in.data[1]) orelse return -7;
+    const slot = slot_of(window);
     const content = window.content();
+
+    surfaces.commit(slot);
+
+    if (!resize_damage[slot].is_empty()) {
+
+        add_damage(resize_damage[slot]);
+        resize_damage[slot] = Rect.empty;
+
+    }
 
     const local = Rect{
 
@@ -534,13 +613,6 @@ fn present(badge: u64, in: *const Message) i64 {
     };
 
     add_damage(local.translated(content.x, content.y).intersect(content));
-
-    // Minimized windows update their backing store off-screen; defer compositing until restore.
-    if (window.flags & proto.window.flag_minimized == 0) {
-
-        composite() catch return -7;
-
-    }
 
     return 0;
 
@@ -557,8 +629,6 @@ fn set_title(badge: u64, in: *const Message) i64 {
     add_damage(window.frame());
     publish_list();
 
-    composite() catch return -7;
-
     return 0;
 
 }
@@ -570,13 +640,12 @@ fn destroy_window(badge: u64, id: u64) i64 {
 
     release_grabs(window.id);
     surfaces.release(slot);
+    resize_damage[slot] = Rect.empty;
 
     if (manager.destroy(window.id)) |dead| add_damage(dead);
 
     publish_list();
     send_focus_to_top();
-
-    composite() catch return -7;
 
     return 0;
 
@@ -598,6 +667,7 @@ fn destroy_owner_windows(owner: u64) void {
         if (manager.focus == window.id) focus_changed = true;
 
         surfaces.release(index);
+        resize_damage[index] = Rect.empty;
 
         if (manager.destroy(window.id)) |dead| add_damage(dead);
 
@@ -665,11 +735,11 @@ fn resize_window(badge: u64, in: *const Message, out: *Message) i64 {
 
     if (width > surfaces_module.max_side or height > surfaces_module.max_side) return -7;
 
-    add_damage(manager.resize_window(window, @max(manager_module.min_content, width), @max(manager_module.min_content, height)));
+    const changed = manager.resize_window(window, @max(manager_module.min_content, width), @max(manager_module.min_content, height));
+
+    resize_damage[slot] = resize_damage[slot].cover(changed);
 
     _ = surfaces.allocate(slot, window.width, window.height) catch return -3;
-
-    add_damage(window.frame());
 
     out.data[1] = in.data[1];
     out.data[2] = lib.window.pack_pair(window.width, window.height);
@@ -723,8 +793,6 @@ fn activate_window(id: u64) i64 {
 
     focus_and_raise(window);
     publish_list();
-    composite() catch return -7;
-
     return 0;
 
 }
@@ -753,8 +821,6 @@ fn move_window(badge: u64, in: *const Message) i64 {
 
     }
 
-    composite() catch return -7;
-
     return 0;
 
 }
@@ -770,8 +836,6 @@ fn minimize_window(id: u64) i64 {
         send_focus_to_top();
 
     }
-
-    composite() catch return -7;
 
     return 0;
 
@@ -789,8 +853,6 @@ fn restore_window(id: u64) i64 {
         notify_focus(previous, window.id);
 
     }
-
-    composite() catch return -7;
 
     return 0;
 
@@ -1044,11 +1106,15 @@ fn handle_button_down(event: events.Event) void {
                 // Dragging a maximized title bar restores it first so the frame can move under the pointer.
                 if (manager.unmaximize(window.id)) |result| {
 
-                    add_damage(result.damage);
-
                     if (result.resized) {
 
+                        resize_damage[slot_of(window)] = resize_damage[slot_of(window)].cover(result.damage);
+
                         send_to_owner(window, window_event(events.kind_window_resize, window.id, @intCast(window.width), @intCast(window.height)));
+
+                    } else {
+
+                        add_damage(result.damage);
 
                     }
 
@@ -1087,17 +1153,19 @@ fn apply_toggle_maximize(window: *Window) void {
 
     if (manager.toggle_maximize(window.id)) |result| {
 
-        add_damage(result.damage);
-
         if (result.resized) {
 
+            resize_damage[slot_of(window)] = resize_damage[slot_of(window)].cover(result.damage);
+
             send_to_owner(window, window_event(events.kind_window_resize, window.id, @intCast(window.width), @intCast(window.height)));
+
+        } else {
+
+            add_damage(result.damage);
 
         }
 
         publish_list();
-        composite() catch {};
-
     }
 
 }
@@ -1175,8 +1243,10 @@ fn commit_resize() void {
     // Interactive grip resize leaves maximized state.
     if (window.is_maximized()) manager.clear_maximized(window.id);
 
-    add_damage(manager.resize_window(window, target.width, target.height));
-    add_damage(window.frame());
+    const changed = manager.resize_window(window, target.width, target.height);
+    const slot = slot_of(window);
+
+    resize_damage[slot] = resize_damage[slot].cover(changed);
 
     send_to_owner(window, window_event(events.kind_window_resize, window.id, @intCast(window.width), @intCast(window.height)));
 
@@ -1325,8 +1395,6 @@ fn handle_mode_change() void {
     publish_list();
 
     add_damage(screen_bounds());
-    composite() catch {};
-
     upload_cursor(active_cursor) catch {};
     move_cursor();
 
@@ -1336,7 +1404,7 @@ fn handle_mode_change() void {
 
 fn add_damage(rect: Rect) void {
 
-    damage = damage.cover(rect.intersect(screen_bounds()));
+    damage.add(rect.intersect(screen_bounds()));
 
 }
 
@@ -1348,52 +1416,90 @@ fn screen_bounds() Rect {
 
 fn composite() !void {
 
-    if (damage.is_empty()) return;
+    if (damage.len == 0) return;
 
-    const region = damage;
-
-    damage = Rect.empty;
-
-    back.fill_rect(region, theme.wallpaper);
+    const pending = damage;
+    damage.clear();
 
     // Client pixels may have been written in other processes; publish once before reading any surface.
     draw.fence();
 
-    var index: usize = 0;
+    for (pending.rects[0..pending.len]) |region| {
 
-    while (index < manager.count) : (index += 1) {
+        var first: usize = 0;
+        var covered = false;
 
-        const window = manager.stacked(index);
+        var search = manager.count;
 
-        if (window.flags & proto.window.flag_minimized != 0) continue;
-        if (window.frame().intersect(region).is_empty()) continue;
+        while (search > 0) {
 
-        draw_window(window, region);
+            search -= 1;
 
-    }
+            const candidate = manager.stacked(search);
+
+            if (candidate.flags & proto.window.flag_minimized != 0) continue;
+            if (candidate.flags & proto.window.flag_desktop == 0 and candidate.flags & proto.window.flag_undecorated == 0) continue;
+            if (!covers(candidate.content(), region)) continue;
+            if (!surfaces.covers(slot_of(candidate), candidate.content(), region)) continue;
+
+            first = search;
+            covered = true;
+            break;
+
+        }
+
+        if (!covered) back.fill_rect(region, theme.wallpaper);
+
+        var index = first;
+
+        while (index < manager.count) : (index += 1) {
+
+            const window = manager.stacked(index);
+
+            if (window.flags & proto.window.flag_minimized != 0) continue;
+            if (window.frame().intersect(region).is_empty()) continue;
+
+            draw_window(window, region);
+
+        }
 
     // The resize rubber band rides above every window; moves always damage its band, so restroking it each
     // pass keeps the fed-back scanout consistent.
 
-    if (resize_id != 0 and !resize_outline.is_empty()) {
+        if (resize_id != 0 and !resize_outline.is_empty()) {
 
-        const view = back.clipped(region);
+            const view = back.clipped(region);
 
-        render.draw_outline(&view, resize_outline, theme.chrome);
+            render.draw_outline(&view, resize_outline, theme.chrome);
 
-    }
+        }
 
     // One pass into the uncached scanout: only the damaged band's rows move.
 
-    fb.blit(region.x, region.y, &back, region);
+        fb.blit(region.x, region.y, &back, region);
+
+    }
+
     draw.fence();
 
-    _ = try ipc.request(cap.compositor.display, proto.display.flush, &.{
+    for (pending.rects[0..pending.len]) |region| {
 
-        lib.window.pack_pair(@intCast(region.x), @intCast(region.y)),
-        lib.window.pack_pair(@intCast(region.w), @intCast(region.h)),
+        _ = try ipc.request(cap.compositor.display, proto.display.flush, &.{
 
-    }, &.{});
+            lib.window.pack_pair(@intCast(region.x), @intCast(region.y)),
+            lib.window.pack_pair(@intCast(region.w), @intCast(region.h)),
+
+        }, &.{});
+
+    }
+
+}
+
+fn covers(outer: Rect, inner: Rect) bool {
+
+    if (outer.is_empty() or inner.is_empty()) return false;
+
+    return outer.x <= inner.x and outer.y <= inner.y and outer.x + outer.w >= inner.x + inner.w and outer.y + outer.h >= inner.y + inner.h;
 
 }
 
@@ -1412,7 +1518,7 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     // A stale surface (the client has not yet reallocated after a resize) is skipped, never misread.
 
-    const surface = surfaces.surface_of(slot, window.width, window.height) orelse return;
+    const surface = surfaces.surface_of(slot) orelse return;
 
     render.blit_content(&back, window, &surface, clip, theme.border);
 

@@ -2,3 +2,4 @@ zig-out/
 .zig-cache/
 disk.img
 CLAUDE.md
+redux.md
