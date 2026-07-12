@@ -48,8 +48,11 @@ pub const Core = struct {
     idle_context: arch.Context,
     last_boost_ns: u64,
 
-    // The address-space root currently loaded in TTBR0, so a switch within one process skips the TLB flush.
-    space_root: PhysAddr,
+    // The full TTBR0 value (root ORed with ASID) currently loaded, so a switch within one space skips the reload.
+    space_root: u64,
+
+    // The ASID generation this core last flushed for; a rollover forces one local full flush on the next switch.
+    asid_generation_seen: u64,
 
     // A thread that exited on this core; freed by the next thread once it is off the dead thread's stack.
     zombie: ?*Thread,
@@ -92,10 +95,12 @@ pub fn init(count: usize) void {
             .driver_queue = .{},
             .levels = [_]RunQueue{.{}} ** config.scheduling_levels,
 
-            .idle_context = undefined,
+            // Zeroed (not undefined) so the first switch away from idle reads a defined `used_fp` (0) in switch.S.
+            .idle_context = std.mem.zeroes(arch.Context),
             .last_boost_ns = arch.now_ns(),
 
             .space_root = 0,
+            .asid_generation_seen = 0,
             .zombie = null,
 
             .lock = .{},
@@ -457,6 +462,41 @@ pub fn dispatch(core: *Core, thread: *Thread, now_ns: u64) void {
 
 }
 
+/// The device-IRQ path (Stage 1.5): a driver's line fired and woke its handler onto this core, so all that is owed is
+/// the strict driver-band preemption check - not the full MLFQ tick (quantum accounting, demotion, boost, sleeper
+/// sweep) a timer tick runs. If a normal thread is running and a driver is now ready it yields to it; an idle core
+/// just picks up the newly-runnable work.
+pub fn driver_preempt() void {
+
+    // Runs only from the device-IRQ path, where interrupts are already masked (like `tick`).
+
+    const core = current_core();
+    const now = arch.now_ns();
+
+    if (core.current) |current| {
+
+        if (current.scheduling.class == .normal and !core.driver_queue.is_empty()) {
+
+            defer_dispatch(current);
+            enqueue(core, current);
+            core.current = null;
+
+            reschedule(core, current, pick_next(core), now, .pending);
+
+        }
+
+        return;
+
+    }
+
+    if (pick_next(core)) |next| {
+
+        reschedule(core, null, next, now, .pending);
+
+    }
+
+}
+
 /// The IRQ-path tick: run the policy, then re-arm the deadline and switch if the choice changed.
 pub fn tick() void {
 
@@ -507,12 +547,31 @@ pub fn sleep(ns: u64) void {
 
     defer_dispatch(current);
 
-    current.sleep_next = core.sleepers;
-    core.sleepers = current;
+    insert_sleeper(core, current);
 
     core.current = null;
 
     reschedule(core, current, pick_next(core), now, .pending);
+
+}
+
+// The sleeper list is kept sorted by deadline, so expiry is an O(expired) pop from the front and the next wakeup is
+// the head - no full scan per tick (Stage 1.5). Insert is O(n) in the (small) sleeper count.
+
+fn insert_sleeper(core: *Core, thread: *Thread) void {
+
+    var link = &core.sleepers;
+
+    while (link.*) |existing| {
+
+        if (existing.wake_at_ns > thread.wake_at_ns) break;
+
+        link = &existing.sleep_next;
+
+    }
+
+    thread.sleep_next = link.*;
+    link.* = thread;
 
 }
 
@@ -521,41 +580,29 @@ pub fn sleep(ns: u64) void {
 
 fn wake_sleepers(core: *Core, now_ns: u64) void {
 
-    var link = &core.sleepers;
+    // Sorted ascending, so once the head is still in the future every later sleeper is too.
 
-    while (link.*) |thread| {
+    while (core.sleepers) |thread| {
 
-        if (thread.wake_at_ns <= now_ns) {
+        if (thread.wake_at_ns > now_ns) break;
 
-            link.* = thread.sleep_next;
-            thread.sleep_next = null;
+        core.sleepers = thread.sleep_next;
+        thread.sleep_next = null;
 
-            enqueue(core, thread);
-
-        } else {
-
-            link = &thread.sleep_next;
-
-        }
+        enqueue(core, thread);
 
     }
 
 }
 
-// The soonest deadline among this core's sleepers, so an otherwise-idle core still arms a timer to wake them.
+// The soonest deadline among this core's sleepers, so an otherwise-idle core still arms a timer to wake them. The
+// list is deadline-sorted, so the head is the answer.
 
 fn earliest_sleeper(core: *Core) ?u64 {
 
-    var soonest: ?u64 = null;
-    var thread = core.sleepers;
+    if (core.sleepers) |head| return head.wake_at_ns;
 
-    while (thread) |sleeper| : (thread = sleeper.sleep_next) {
-
-        if (soonest == null or sleeper.wake_at_ns < soonest.?) soonest = sleeper.wake_at_ns;
-
-    }
-
-    return soonest;
+    return null;
 
 }
 
@@ -579,6 +626,34 @@ pub fn unblock(waker: *Core, thread: *Thread) void {
     thread.blocked_on = null;
 
     enqueue(waker, thread);
+
+    // The waker core is mid-syscall (busy), so a freshly-woken normal thread would otherwise wait for this core's next
+    // reschedule or a peer's 5 ms idle steal-poll. Poke an idle peer to steal it now (Stage 1.5), extending the
+    // admit-time IPI pattern. Driver-band wakeups skip this: they preempt locally and are never stolen.
+
+    if (thread.scheduling.class == .normal) poke_idle_peer(waker);
+
+}
+
+// Send a reschedule IPI to one online, currently-idle peer so it wakes from wfi and steals newly-available work. The
+// current==null read is an unlocked heuristic: a false negative just defers to the peer's own idle timer, a false
+// positive wastes one spurious wakeup - neither is a correctness problem.
+
+fn poke_idle_peer(waker: *Core) void {
+
+    if (core_count == 1) return;
+
+    for (1..core_count) |offset| {
+
+        const peer = &cores[(waker.id + offset) % core_count];
+
+        if (!@atomicLoad(bool, &peer.online, .acquire)) continue;
+        if (@atomicLoad(?*Thread, &peer.current, .monotonic) != null) continue;
+
+        arch.send_ipi(peer.id, .reschedule);
+        return;
+
+    }
 
 }
 
@@ -944,12 +1019,25 @@ fn activate_space(core: *Core, thread: *Thread) void {
 
     if (builtin.is_test) return;
 
-    const root = thread.process.address_space.root;
+    const space = thread.process.address_space;
+    const ttbr = space.ttbr();
 
-    if (root == core.space_root) return;
+    if (ttbr == core.space_root) return;
 
-    core.space_root = root;
-    arch.activate_space(root);
+    // After an ASID rollover a reused ASID value could match stale entries this core still holds; a one-shot local
+    // full flush per generation clears them before adopting the incoming space (Stage 1.4).
+
+    const generation = arch.asid_generation();
+
+    if (generation != core.asid_generation_seen) {
+
+        arch.tlb_flush_local();
+        core.asid_generation_seen = generation;
+
+    }
+
+    core.space_root = ttbr;
+    arch.activate_space(ttbr);
 
 }
 
@@ -1113,10 +1201,13 @@ test "sleepers wake onto the run queue only once their deadline passes" {
     early.wake_at_ns = 100;
     late.wake_at_ns = 1000;
 
-    early.sleep_next = null;
-    core.sleepers = &early;
-    late.sleep_next = &early;
-    core.sleepers = &late;
+    // Insert out of deadline order to confirm the list keeps itself sorted.
+
+    core.sleepers = null;
+    insert_sleeper(core, &late);
+    insert_sleeper(core, &early);
+
+    try testing.expectEqual(&early, core.sleepers.?);
 
     wake_sleepers(core, 200);
 

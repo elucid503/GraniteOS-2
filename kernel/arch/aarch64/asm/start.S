@@ -36,9 +36,10 @@ _start:
 
 at_el1:
 
-    // Permit EL1/EL0 use of the FP/SIMD unit so compiler-emitted NEON does not trap (CPACR_EL1.FPEN = 0b11).
+    // Permit EL1 FP but trap EL0 FP/SIMD (CPACR_EL1.FPEN = 0b01): the kernel is built FP-free, and a user thread's
+    // first FP use faults into fp_common so its vector file is switched lazily from then on (Stage 1.1).
 
-    mov     x1, #(3 << 20)
+    mov     x1, #(1 << 20)
     msr     cpacr_el1, x1
     isb
 

@@ -1,5 +1,7 @@
 // Syscall dispatch (06-kernel-ddd.md Section 12; 03-syscall-abi.md): the one entry from the EL0 trap path.
 
+const build_options = @import("build_options");
+
 const arch = @import("../arch/arch.zig");
 const config = @import("../config.zig");
 const err = @import("../error.zig");
@@ -79,9 +81,16 @@ pub var debug_last_arg1: u64 = 0;
 /// Trap entry: decode the verb in x8, run its handler, and write the signed ABI result back into x0.
 pub fn dispatch(frame: *SyscallFrame) void {
 
-    debug_last_number = frame.registers[8];
-    debug_last_arg0 = frame.registers[0];
-    debug_last_arg1 = frame.registers[1];
+    // These per-syscall stores are only read by the panic path; gate them off the hot path unless asked for
+    // (build with -Ddebug-syscall-trace).
+
+    if (build_options.debug_syscall_trace) {
+
+        debug_last_number = frame.registers[8];
+        debug_last_arg0 = frame.registers[0];
+        debug_last_arg1 = frame.registers[1];
+
+    }
 
     const result = run(frame);
 
@@ -628,19 +637,47 @@ fn copy_to_user(va: VirtAddr, source: []const u8) Error!void {
 
 fn copy_from_user_of(owner: *Thread, va: VirtAddr, dest: []u8) Error!void {
 
+    if (dest.len == 0) return;
+
     const root = owner.process.address_space.root;
 
+    // Fast path (the common case): the whole buffer sits in one page, so one translate and one memcpy suffice.
+
+    if (va & ~(page_size - 1) == (va + dest.len - 1) & ~(page_size - 1)) {
+
+        const physical = arch.translate(root, va & ~(page_size - 1)) orelse return error.Invalid;
+
+        const source: [*]const u8 = @ptrFromInt(physical + (va & (page_size - 1)));
+        @memcpy(dest, source[0..dest.len]);
+
+        return;
+
+    }
+
+    // Straddling buffer: walk it page by page, reusing the last translation while chunks stay in the same page.
+
     var offset: usize = 0;
+    var cached_page: VirtAddr = 0;
+    var cached_phys: arch.PhysAddr = 0;
+    var have_cache = false;
 
     while (offset < dest.len) {
 
         const user = va + offset;
-        const physical = arch.translate(root, user & ~(page_size - 1)) orelse return error.Invalid;
+        const page = user & ~(page_size - 1);
+
+        if (!have_cache or page != cached_page) {
+
+            cached_phys = arch.translate(root, page) orelse return error.Invalid;
+            cached_page = page;
+            have_cache = true;
+
+        }
 
         const in_page = user & (page_size - 1);
         const chunk = @min(page_size - in_page, dest.len - offset);
 
-        const source: [*]const u8 = @ptrFromInt(physical + in_page);
+        const source: [*]const u8 = @ptrFromInt(cached_phys + in_page);
         @memcpy(dest[offset .. offset + chunk], source[0..chunk]);
 
         offset += chunk;
@@ -651,19 +688,43 @@ fn copy_from_user_of(owner: *Thread, va: VirtAddr, dest: []u8) Error!void {
 
 fn copy_to_user_of(owner: *Thread, va: VirtAddr, source: []const u8) Error!void {
 
+    if (source.len == 0) return;
+
     const root = owner.process.address_space.root;
 
+    if (va & ~(page_size - 1) == (va + source.len - 1) & ~(page_size - 1)) {
+
+        const physical = arch.translate(root, va & ~(page_size - 1)) orelse return error.Invalid;
+
+        const destination: [*]u8 = @ptrFromInt(physical + (va & (page_size - 1)));
+        @memcpy(destination[0..source.len], source);
+
+        return;
+
+    }
+
     var offset: usize = 0;
+    var cached_page: VirtAddr = 0;
+    var cached_phys: arch.PhysAddr = 0;
+    var have_cache = false;
 
     while (offset < source.len) {
 
         const user = va + offset;
-        const physical = arch.translate(root, user & ~(page_size - 1)) orelse return error.Invalid;
+        const page = user & ~(page_size - 1);
+
+        if (!have_cache or page != cached_page) {
+
+            cached_phys = arch.translate(root, page) orelse return error.Invalid;
+            cached_page = page;
+            have_cache = true;
+
+        }
 
         const in_page = user & (page_size - 1);
         const chunk = @min(page_size - in_page, source.len - offset);
 
-        const destination: [*]u8 = @ptrFromInt(physical + in_page);
+        const destination: [*]u8 = @ptrFromInt(cached_phys + in_page);
         @memcpy(destination[0..chunk], source[offset .. offset + chunk]);
 
         offset += chunk;

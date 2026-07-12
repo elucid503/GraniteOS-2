@@ -11,17 +11,24 @@ const Error = @import("../error.zig").Error;
 
 const page_size = config.page_size;
 
+// A free slot threads its index onto the table's free list through `next_free`; `no_slot` terminates it.
+const no_slot: u32 = 0xffff_ffff;
+
 const Entry = struct {
 
     target: ?*object.Object,
     badge: u64,
     generation: u12,
+    next_free: u32,
 
 };
 
 pub const HandleTable = struct {
 
     entries: []Entry,
+
+    // Head of the singly-linked free-slot list, so insert is O(1) instead of a linear scan (06-kernel-ddd.md Section 8).
+    free_head: u32,
 
     // Worker threads of one process share this table, so every operation takes its lock (06-kernel-ddd.md Section 15).
     lock: spinlock.SpinLock,
@@ -34,11 +41,15 @@ pub const HandleTable = struct {
         self.entries = backing[0 .. page_size / @sizeOf(Entry)];
         self.lock = .{};
 
-        for (self.entries) |*entry| {
+        for (self.entries, 0..) |*entry, index| {
 
-            entry.* = .{ .target = null, .badge = 0, .generation = 0 };
+            const next: u32 = if (index + 1 < self.entries.len) @intCast(index + 1) else no_slot;
+
+            entry.* = .{ .target = null, .badge = 0, .generation = 0, .next_free = next };
 
         }
+
+        self.free_head = if (self.entries.len == 0) no_slot else 0;
 
     }
 
@@ -148,6 +159,9 @@ pub const HandleTable = struct {
             entry.badge = 0;
             entry.generation +%= 1;
 
+            entry.next_free = self.free_head;
+            self.free_head = handle.index;
+
             break :blk held;
 
         };
@@ -218,19 +232,20 @@ pub const HandleTable = struct {
 
     fn insert_locked(self: *HandleTable, target: *object.Object, badge: u64) Error!Handle {
 
-        for (self.entries, 0..) |*entry, index| {
+        const index = self.free_head;
 
-            if (entry.target != null) continue;
+        if (index == no_slot) return error.NoMemory;
 
-            entry.target = target;
-            entry.badge = badge;
-            target.retain();
+        const entry = &self.entries[index];
 
-            return .{ .index = @intCast(index), .generation = entry.generation };
+        self.free_head = entry.next_free;
 
-        }
+        entry.target = target;
+        entry.badge = badge;
+        entry.next_free = no_slot;
+        target.retain();
 
-        return error.NoMemory;
+        return .{ .index = @intCast(index), .generation = entry.generation };
 
     }
 

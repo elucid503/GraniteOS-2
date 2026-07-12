@@ -147,12 +147,37 @@ pub fn snapshot(out: *inspect.ProcessSnapshot) void {
 
     };
 
-    const saved = list_lock.acquire();
-    defer list_lock.release(saved);
+    // Collect a retained snapshot of the process list under the lock, then compute per-process handle stats after
+    // releasing it: `stats`/`memory_usage` each take a process's own handle-table lock, which must never nest under
+    // the global list lock (06-kernel-ddd.md Section 15 lock order). The retain keeps each process alive across the gap.
 
-    var cursor = list_head;
+    var collected: [inspect.max_processes]*Process = undefined;
+    var collected_count: usize = 0;
 
-    while (cursor) |process| {
+    {
+
+        const saved = list_lock.acquire();
+        defer list_lock.release(saved);
+
+        var cursor = list_head;
+
+        while (cursor) |process| : (cursor = process.next_global) {
+
+            if (collected_count < inspect.max_processes) {
+
+                process.header.retain();
+                collected[collected_count] = process;
+                collected_count += 1;
+
+            }
+
+            out.count += 1;
+
+        }
+
+    }
+
+    for (collected[0..collected_count], 0..) |process, index| {
 
         var by_kind: [inspect.object_kind_slots]u32 = undefined;
         const handles = process.handles.stats(&by_kind);
@@ -162,26 +187,21 @@ pub fn snapshot(out: *inspect.ProcessSnapshot) void {
         out.total_threads += threads;
         out.total_handles += handles;
 
-        if (out.count < inspect.max_processes) {
+        out.processes[index] = .{
 
-            out.processes[@intCast(out.count)] = .{
+            .pid = process.pid,
+            .name_len = @intCast(process.name_len),
+            .thread_count = threads,
+            .handle_count = handles,
 
-                .pid = process.pid,
-                .name_len = @intCast(process.name_len),
-                .thread_count = threads,
-                .handle_count = handles,
+            .memory_bytes = memory_bytes,
 
-                .memory_bytes = memory_bytes,
+            .name = process.name,
+            .handles_by_kind = by_kind,
 
-                .name = process.name,
-                .handles_by_kind = by_kind,
+        };
 
-            };
-
-        }
-
-        out.count += 1;
-        cursor = process.next_global;
+        if (process.header.release()) object.destroy(&process.header);
 
     }
 

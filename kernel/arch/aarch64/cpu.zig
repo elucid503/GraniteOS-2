@@ -33,6 +33,25 @@ pub fn send_event() void {
 
 }
 
+/// Open CPACR_EL1.FPEN to 0b11 so the current core permits EL0 FP/SIMD (Stage 1.1 lazy-FP trap-in). The matching
+/// re-disable to 0b01 happens in `switch.S` when switching to a thread that has not used FP.
+pub fn enable_fp_el0() void {
+
+    var cpacr = asm volatile ("mrs %[out], cpacr_el1"
+        : [out] "=r" (-> u64),
+    );
+
+    cpacr |= @as(u64, 3) << 20;
+
+    asm volatile (
+        \\ msr cpacr_el1, %[value]
+        \\ isb
+        :
+        : [value] "r" (cpacr),
+        : .{ .memory = true });
+
+}
+
 /// Make freshly written instructions visible to the fetch path (after copying user code into a mapped page).
 pub fn sync_instruction_cache() void {
 

@@ -5,6 +5,7 @@ const panic = @import("../../debug/panic.zig");
 const cpu = @import("cpu.zig");
 const gic = @import("gic.zig");
 const timer = @import("timer.zig");
+const context = @import("context.zig");
 const interrupt_module = @import("../../object/interrupt.zig");
 const scheduler = @import("../../sched/scheduler.zig");
 const syscall = @import("../../syscall/syscall.zig");
@@ -57,11 +58,12 @@ export fn kernel_irq() callconv(.c) void {
     } else if (interrupt_module.find(irq)) |device| {
 
         // fire masks the line before the end-of-interrupt so a level-triggered device cannot storm; the driver's
-        // acknowledge re-arms it. The tick lets the woken driver-band thread preempt right away.
+        // acknowledge re-arms it. Only a driver-band preemption check is owed here (Stage 1.5) - not the full MLFQ
+        // tick a timer IRQ runs - so the just-woken driver thread runs right away without the quantum/boost sweep.
 
         device.fire();
         gic.complete(irq);
-        scheduler.tick();
+        scheduler.driver_preempt();
 
     } else {
 
@@ -76,6 +78,21 @@ export fn kernel_irq() callconv(.c) void {
 export fn kernel_syscall(frame: *SyscallFrame) callconv(.c) void {
 
     syscall.dispatch(frame);
+
+}
+
+// Lazy FP/SIMD trap (06-kernel-ddd.md Section 5): the running EL0 thread just executed its first FP/SIMD
+// instruction. Flag it so future switches carry its vector file, open CPACR for EL0 on this core, and hand back the
+// context whose (zeroed-on-first-use) vector file `fp_common` loads before retrying the instruction.
+
+export fn kernel_fp_trap() callconv(.c) *context.Context {
+
+    const thread = scheduler.current_core().current.?;
+
+    thread.context.used_fp = 1;
+    cpu.enable_fp_el0();
+
+    return &thread.context;
 
 }
 

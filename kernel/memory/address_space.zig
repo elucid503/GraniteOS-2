@@ -37,6 +37,10 @@ pub const AddressSpace = struct {
     next_base: VirtAddr,
     mappings: [max_mappings]Mapping,
 
+    // ASID tagging (Stage 1.4): assigned lazily on first activation, re-derived after a generation rollover.
+    asid: u16,
+    asid_generation: u64,
+
     pub fn create() Error!*AddressSpace {
 
         const root = try arch.new_table();
@@ -49,6 +53,9 @@ pub const AddressSpace = struct {
             .root = root,
             .next_base = default_base,
             .mappings = undefined,
+
+            .asid = 0,
+            .asid_generation = 0,
         };
 
         for (&space.mappings) |*mapping| {
@@ -80,26 +87,10 @@ pub const AddressSpace = struct {
         effective.device = region.device;
         effective.uncached = region.uncached;
 
-        var mapped: usize = 0;
+        // A Region's frames are physically contiguous, so the whole placement is one batched map with a single TLB
+        // flush at the end instead of a per-page broadcast (Stage 1.4).
 
-        for (0..region.pages) |index| {
-
-            arch.map_page(self.root, base + index * page_size, region.frame(index), effective) catch |failure| {
-
-                while (mapped > 0) {
-
-                    mapped -= 1;
-                    arch.unmap_page(self.root, base + mapped * page_size);
-
-                }
-
-                return failure;
-
-            };
-
-            mapped += 1;
-
-        }
+        try arch.map_range(self.root, base, region.frame(0), region.pages, effective);
 
         region.header.retain();
 
@@ -130,11 +121,7 @@ pub const AddressSpace = struct {
 
     fn release_mapping(self: *AddressSpace, slot: *Mapping) void {
 
-        for (0..slot.pages) |index| {
-
-            arch.unmap_page(self.root, slot.base + index * page_size);
-
-        }
+        arch.unmap_range(self.root, slot.base, slot.pages);
 
         slot.active = false;
         slot.base = 0;
@@ -150,9 +137,23 @@ pub const AddressSpace = struct {
 
     }
 
+    /// The ASID for this space, allocated (or re-derived after a rollover) on demand.
+    pub fn ensure_asid(self: *AddressSpace) u16 {
+
+        return arch.ensure_space_asid(&self.asid, &self.asid_generation);
+
+    }
+
+    /// The TTBR0 value to load for this space: the page-table root with the ASID in bits [63:48].
+    pub fn ttbr(self: *AddressSpace) u64 {
+
+        return self.root | (@as(u64, self.ensure_asid()) << 48);
+
+    }
+
     pub fn activate(self: *AddressSpace) void {
 
-        arch.activate_space(self.root);
+        arch.activate_space(self.ttbr());
 
     }
 

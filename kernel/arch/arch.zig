@@ -53,11 +53,19 @@ pub const init_user_thread_context = context.init_user_thread_context;
 pub const new_table = mmu.new_table;
 pub const map_page = mmu.map_page;
 pub const unmap_page = mmu.unmap_page;
+pub const map_range = mmu.map_range;
+pub const unmap_range = mmu.unmap_range;
 pub const translate = mmu.translate;
 pub const activate_space = mmu.activate_space;
 pub const flush_tlb_page = mmu.flush_tlb_page;
 pub const free_table = mmu.free_table;
 pub const map_ram = mmu.map_ram;
+
+// ASIDs (Stage 1.4): per-AddressSpace tags so a process switch skips the full TLB flush.
+
+pub const ensure_space_asid = if (is_target) mmu.ensure_space_asid else host.ensure_space_asid;
+pub const asid_generation = if (is_target) mmu.asid_generation else host.asid_generation;
+pub const tlb_flush_local = if (is_target) mmu.tlb_flush_local else host.tlb_flush_local;
 
 // Interrupt controller (GICv3).
 

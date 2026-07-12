@@ -34,7 +34,8 @@ const attribute_normal_uncached: u64 = 2 << 2;
 
 const memory_attributes: u64 = 0x00 | (0xff << 8) | (0x44 << 16);
 
-// TCR_EL1: 48-bit TTBR0, 4 KiB granule, write-back inner-shareable walks, TTBR1 disabled, 40-bit physical output.
+// TCR_EL1: 48-bit TTBR0, 4 KiB granule, write-back inner-shareable walks, TTBR1 disabled, 40-bit physical output,
+// 16-bit ASIDs defined by TTBR0 (AS=1; A1=0). ASIDs let a process switch skip the full TLB flush (Stage 1.4).
 
 const translation_control: u64 =
     16 | // T0SZ => 48-bit virtual address
@@ -43,7 +44,8 @@ const translation_control: u64 =
     (0b11 << 12) | // SH0 inner shareable
     (0b00 << 14) | // TG0 4 KiB granule
     (1 << 23) | // EPD1: no TTBR1 walks
-    (0b010 << 32); // IPS 40-bit
+    (0b010 << 32) | // IPS 40-bit
+    (1 << 36); // AS: 16-bit ASID (A1=0, so TTBR0.ASID is the current ASID)
 
 // One level-1 entry maps a 1 GiB block; the seed map works at this granularity (low 512 GiB, one level-1 table).
 
@@ -203,7 +205,10 @@ pub fn new_table() Error!PhysAddr {
 
 }
 
-pub fn map_page(root: PhysAddr, va: VirtAddr, pa: PhysAddr, perms: Permissions) Error!void {
+// Write one leaf descriptor (allocating intermediate tables as needed) without any TLB maintenance; the caller
+// batches that. `map_page` and `map_range` share it so single and bulk mappings agree on the walk.
+
+fn write_leaf(root: PhysAddr, va: VirtAddr, pa: PhysAddr, perms: Permissions) Error!void {
 
     var table = root;
 
@@ -225,11 +230,10 @@ pub fn map_page(root: PhysAddr, va: VirtAddr, pa: PhysAddr, perms: Permissions) 
 
     const leaf: *u64 = @ptrFromInt(table + table_index(va, 3) * 8);
     leaf.* = (pa & output_mask) | page_descriptor | leaf_attributes(perms);
-    flush_tlb_page(va);
 
 }
 
-pub fn unmap_page(root: PhysAddr, va: VirtAddr) void {
+fn clear_leaf(root: PhysAddr, va: VirtAddr) void {
 
     var table = root;
 
@@ -243,7 +247,99 @@ pub fn unmap_page(root: PhysAddr, va: VirtAddr) void {
 
     const leaf: *u64 = @ptrFromInt(table + table_index(va, 3) * 8);
     leaf.* = 0;
+
+}
+
+pub fn map_page(root: PhysAddr, va: VirtAddr, pa: PhysAddr, perms: Permissions) Error!void {
+
+    try write_leaf(root, va, pa, perms);
     flush_tlb_page(va);
+
+}
+
+pub fn unmap_page(root: PhysAddr, va: VirtAddr) void {
+
+    clear_leaf(root, va);
+    flush_tlb_page(va);
+
+}
+
+// Past this many pages, a per-VA TLBI loop costs more than one shot that drops the whole range's stale entries; the
+// range flush then broadcasts a single all-address invalidate instead (still inner-shareable, so cross-core).
+const tlb_range_threshold: usize = 64;
+
+/// Map `pages` contiguous frames from `pa` at `va`, deferring all TLB maintenance to a single batched flush at the
+/// end (Stage 1.4). On failure the partial run is rolled back. `pa` is contiguous because a Region's frames are.
+pub fn map_range(root: PhysAddr, va: VirtAddr, pa: PhysAddr, pages: usize, perms: Permissions) Error!void {
+
+    var mapped: usize = 0;
+
+    while (mapped < pages) : (mapped += 1) {
+
+        write_leaf(root, va + mapped * page_size, pa + mapped * page_size, perms) catch |failure| {
+
+            while (mapped > 0) {
+
+                mapped -= 1;
+                clear_leaf(root, va + mapped * page_size);
+
+            }
+
+            flush_tlb_range(va, pages);
+            return failure;
+
+        };
+
+    }
+
+    flush_tlb_range(va, pages);
+
+}
+
+/// Unmap `pages` contiguous pages at `va` with one batched flush.
+pub fn unmap_range(root: PhysAddr, va: VirtAddr, pages: usize) void {
+
+    for (0..pages) |index| {
+
+        clear_leaf(root, va + index * page_size);
+
+    }
+
+    flush_tlb_range(va, pages);
+
+}
+
+/// One batched TLB invalidate over `[va, va + pages*page_size)`: a per-VA loop under one barrier pair, or a single
+/// all-address shootdown past the threshold. Inner-shareable, so it reaches every core with no IPI (Section 16.2).
+pub fn flush_tlb_range(va: VirtAddr, pages: usize) void {
+
+    if (pages == 0) return;
+
+    asm volatile ("dsb ishst" ::: .{ .memory = true });
+
+    if (pages > tlb_range_threshold) {
+
+        asm volatile ("tlbi vmalle1is" ::: .{ .memory = true });
+
+    } else {
+
+        var index: usize = 0;
+
+        while (index < pages) : (index += 1) {
+
+            asm volatile ("tlbi vaae1is, %[page]"
+                :
+                : [page] "r" ((va + index * page_size) >> 12),
+                : .{ .memory = true });
+
+        }
+
+    }
+
+    asm volatile (
+        \\ dsb ish
+        \\ isb
+        ::: .{ .memory = true });
 
 }
 
@@ -265,16 +361,80 @@ pub fn translate(root: PhysAddr, va: VirtAddr) ?PhysAddr {
 
 }
 
-pub fn activate_space(root: PhysAddr) void {
+// --- ASIDs (Stage 1.4) ---
+//
+// Each AddressSpace holds a 16-bit ASID drawn from a monotonic counter within a generation. TTBR0 carries the ASID,
+// so a process switch just rewrites TTBR0 (no TLB flush) and TLB entries of different spaces cannot alias. When the
+// counter wraps, the generation bumps; every space re-derives a fresh ASID on its next activation, and each core
+// does one local full flush the first time it switches under the new generation (see `scheduler.activate_space`),
+// which is what keeps a reused ASID value from matching stale entries a core still holds.
+
+const asid_max: u32 = 0xffff;
+
+var asid_lock: @import("../../sync/spinlock.zig").SpinLock = .{};
+var asid_next: u32 = 1; // ASID 0 is reserved (global/kernel)
+var asid_generation_value: u64 = 1;
+
+pub fn asid_generation() u64 {
+
+    return @atomicLoad(u64, &asid_generation_value, .acquire);
+
+}
+
+/// Return the ASID for a space, allocating one when the space's recorded generation is stale. The fast path is a
+/// lockless generation compare; only a first activation (or a post-rollover one) takes the lock. Two cores racing the
+/// same space converge on one ASID because the second sees the generation already current.
+pub fn ensure_space_asid(asid_ptr: *u16, generation_ptr: *u64) u16 {
+
+    if (@atomicLoad(u64, generation_ptr, .acquire) == asid_generation()) {
+
+        return @atomicLoad(u16, asid_ptr, .acquire);
+
+    }
+
+    const saved = asid_lock.acquire();
+    defer asid_lock.release(saved);
+
+    if (generation_ptr.* != asid_generation_value) {
+
+        if (asid_next > asid_max) {
+
+            asid_next = 1;
+            @atomicStore(u64, &asid_generation_value, asid_generation_value + 1, .release);
+
+        }
+
+        @atomicStore(u16, asid_ptr, @intCast(asid_next), .release);
+        asid_next += 1;
+        @atomicStore(u64, generation_ptr, asid_generation_value, .release);
+
+    }
+
+    return @atomicLoad(u16, asid_ptr, .acquire);
+
+}
+
+/// Full TLB flush local to this core (used once per generation on the switch path after an ASID rollover).
+pub fn tlb_flush_local() void {
 
     asm volatile (
-        \\ msr ttbr0_el1, %[root]
         \\ dsb ish
         \\ tlbi vmalle1
         \\ dsb ish
         \\ isb
+        ::: .{ .memory = true });
+
+}
+
+/// Load a TTBR0 value (page-table root ORed with the ASID in bits [63:48]) with no TLB flush: the ASID tag keeps a
+/// stale space's entries from ever matching. Callers handle the rare post-rollover local flush.
+pub fn activate_space(ttbr0: u64) void {
+
+    asm volatile (
+        \\ msr ttbr0_el1, %[ttbr0]
+        \\ isb
         :
-        : [root] "r" (root),
+        : [ttbr0] "r" (ttbr0),
         : .{ .memory = true });
 
 }

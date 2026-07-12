@@ -129,11 +129,44 @@ pub fn translate(root: PhysAddr, va: VirtAddr) ?PhysAddr {
 
 }
 
-pub fn activate_space(root: PhysAddr) void {
+pub fn map_range(root: PhysAddr, va: VirtAddr, pa: PhysAddr, pages: usize, perms: Permissions) Error!void {
 
     _ = root;
+    _ = va;
+    _ = pa;
+    _ = pages;
+    _ = perms;
 
 }
+
+pub fn unmap_range(root: PhysAddr, va: VirtAddr, pages: usize) void {
+
+    _ = root;
+    _ = va;
+    _ = pages;
+
+}
+
+pub fn activate_space(ttbr0: u64) void {
+
+    _ = ttbr0;
+
+}
+
+pub fn ensure_space_asid(asid_ptr: *u16, generation_ptr: *u64) u16 {
+
+    _ = generation_ptr;
+    return asid_ptr.*;
+
+}
+
+pub fn asid_generation() u64 {
+
+    return 1;
+
+}
+
+pub fn tlb_flush_local() void {}
 
 pub fn flush_tlb_page(va: VirtAddr) void {
 

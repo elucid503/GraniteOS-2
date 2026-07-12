@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
     const smp = b.option(u64, "smp", "Core count for the QEMU run steps") orelse 4;
     const memory = b.option(u64, "memory", "RAM in MiB for the QEMU run steps") orelse 512;
     const disk = b.option(u64, "disk", "Disk size in MiB for the persistent QEMU disk") orelse default_disk_mib;
+    const debug_syscall_trace = b.option(bool, "debug-syscall-trace", "Record the last syscall verb/args in globals for panic diagnosis") orelse false;
 
     if (disk == 0) @panic("-Ddisk must be at least 1 MiB");
     if (disk > std.math.maxInt(u64) / bytes_per_mib) @panic("-Ddisk is too large");
@@ -30,15 +31,30 @@ pub fn build(b: *std.Build) void {
 
     });
 
+    // The kernel is FP/SIMD-free: it context-switches user FP state lazily and must never itself clobber a user
+    // thread's live vector registers during a syscall or IRQ (Stage 1.1). Dropping fp_armv8/neon from its target
+    // guarantees the compiler emits no NEON in kernel code; user modules keep FP for the NEON userspace paths.
+
+    const kernel_target = b.resolveTargetQuery(.{
+
+        .cpu_arch = .aarch64,
+        .os_tag = .freestanding,
+        .abi = .none,
+        .cpu_model = .{ .explicit = &std.Target.aarch64.cpu.cortex_a57 },
+        .cpu_features_sub = std.Target.aarch64.featureSet(&.{ .fp_armv8, .neon }),
+
+    });
+
     const options = b.addOptions();
     options.addOption(bool, "test", test_build);
+    options.addOption(bool, "debug_syscall_trace", debug_syscall_trace);
 
     // The kernel is SMP since M8: single_threaded would let the compiler lower its atomics away.
 
     const kernel_module = b.createModule(.{
 
         .root_source_file = b.path("kernel/main.zig"),
-        .target = target,
+        .target = kernel_target,
         .optimize = optimize,
         .code_model = .small,
         .single_threaded = false,

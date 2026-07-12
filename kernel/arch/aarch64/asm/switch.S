@@ -1,4 +1,4 @@
-// The context switch: save the callee-saved frame into *x0, restore it from *x1, and return on the restored link register. Offsets match `context.Context`: sp 0, x19..x28 8, x29 88, x30 96, sp_el0 104.
+// The context switch: save the callee-saved frame into *x0, restore it from *x1, and return on the restored link register. Offsets match `context.Context`: sp 0, x19..x28 8, x29 88, x30 96, sp_el0 104, used_fp 112, fp_v 128, fpcr 640, fpsr 648.
 
 .section .text
 .global switch_context
@@ -26,6 +26,77 @@ switch_context:
     ldr     x3,       [x1, #104]
     msr     sp_el0, x3
     mov     sp, x2
+
+    // Lazy FP/SIMD (Stage 1.1): save the outgoing thread's vector file only if it ever trapped into FP, restore the
+    // incoming thread's only if it did. A switch into a thread that has not used FP leaves CPACR trapping EL0 FP so
+    // its first use faults in through `fp_common`. The kernel itself is built FP-free, so no EL1 code between switches
+    // clobbers the live user vector state these paths preserve. This runs at EL1, where FP is always permitted.
+
+    ldr     x4, [x0, #112]              // outgoing used_fp
+    cbz     x4, 1f
+
+    add     x5, x0, #128
+    stp     q0,  q1,  [x5, #0]
+    stp     q2,  q3,  [x5, #32]
+    stp     q4,  q5,  [x5, #64]
+    stp     q6,  q7,  [x5, #96]
+    stp     q8,  q9,  [x5, #128]
+    stp     q10, q11, [x5, #160]
+    stp     q12, q13, [x5, #192]
+    stp     q14, q15, [x5, #224]
+    stp     q16, q17, [x5, #256]
+    stp     q18, q19, [x5, #288]
+    stp     q20, q21, [x5, #320]
+    stp     q22, q23, [x5, #352]
+    stp     q24, q25, [x5, #384]
+    stp     q26, q27, [x5, #416]
+    stp     q28, q29, [x5, #448]
+    stp     q30, q31, [x5, #480]
+    mrs     x6, fpcr
+    mrs     x7, fpsr
+    add     x8, x0, #640
+    stp     x6, x7,   [x8, #0]
+
+1:
+
+    ldr     x4, [x1, #112]             // incoming used_fp
+    cbz     x4, 2f
+
+    add     x5, x1, #128
+    ldp     q0,  q1,  [x5, #0]
+    ldp     q2,  q3,  [x5, #32]
+    ldp     q4,  q5,  [x5, #64]
+    ldp     q6,  q7,  [x5, #96]
+    ldp     q8,  q9,  [x5, #128]
+    ldp     q10, q11, [x5, #160]
+    ldp     q12, q13, [x5, #192]
+    ldp     q14, q15, [x5, #224]
+    ldp     q16, q17, [x5, #256]
+    ldp     q18, q19, [x5, #288]
+    ldp     q20, q21, [x5, #320]
+    ldp     q22, q23, [x5, #352]
+    ldp     q24, q25, [x5, #384]
+    ldp     q26, q27, [x5, #416]
+    ldp     q28, q29, [x5, #448]
+    ldp     q30, q31, [x5, #480]
+    add     x8, x1, #640
+    ldp     x6, x7,   [x8, #0]
+    msr     fpcr, x6
+    msr     fpsr, x7
+
+    mrs     x6, cpacr_el1
+    orr     x6, x6, #(3 << 20)         // FPEN=0b11: EL0 may use FP without trapping
+    msr     cpacr_el1, x6
+    isb
+    ret
+
+2:
+
+    mrs     x6, cpacr_el1
+    bic     x6, x6, #(3 << 20)
+    orr     x6, x6, #(1 << 20)         // FPEN=0b01: trap EL0 FP so the next use faults in
+    msr     cpacr_el1, x6
+    isb
 
     ret
 
