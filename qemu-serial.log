@@ -1,17 +1,0 @@
-GraniteOS-2 (aarch64 virt)
-
-Machine: 1 core, 256 MiB RAM ... Loaded
-Memory: 59417 frames, 59417 free ... Loaded
-Interrupts: GIC and timer ... Loaded
-Scheduler: objects and runqueues ... Loaded
-SMP: 1 core online ... Loaded
-Flint: hand-off ... Loaded
-Console: PL011 driver ... Loaded
-Block: virtio-blk driver ... Loaded
-Filesystem: Strata volume mounted (16384 blocks)
-
-MARBLE ......... Ready
-
-Type 'help' for available commands, 'exit' to relaunch.
-
-marble [/]> Display: ramfb driver ... Loaded
