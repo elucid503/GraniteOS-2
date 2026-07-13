@@ -4,7 +4,7 @@ A from-scratch **microkernel** rewrite of GraniteOS for ARM64 (and, later,
 x86_64). The kernel keeps only address spaces, threads & scheduling, IPC,
 interrupt dispatch, and capabilities; the filesystem, block and display drivers,
 and the compositor become user-space servers. The system is SMP-capable and
-ships with a persistent on-disk filesystem plus an optional (but highly reccomended) virtio-gpu desktop.
+ships with a persistent on-disk filesystem plus an optional (but highly recommended) ramfb desktop.
 
 [![GraniteOS Desktop Demo](_docs/desktop_demo.png)](_docs/desktop_demo.png)
 
@@ -36,7 +36,7 @@ then hands off to Flint. Flint loads bundled ELF programs for the name service,
 console and block/display drivers, the filesystem server, Marble (the
 interactive shell), and utilities (`echo`, `cat`, `help`, `ls`, `write`, …).
 When a virtio-blk disk is present, programs are also installed on the persistent
-filesystem. If virtio-gpu hardware is present (`zig build qemu-gui`), Flint
+filesystem. If ramfb hardware is present (`zig build qemu-gui`), Flint
 starts the display and input drivers, the compositor, the launcher, and a
 welcome desktop with taskbar chrome. GUI boots also expose a VirtIO Sound output;
 the Audio app and `play <file.wav>` support PCM WAV files with 8- or 16-bit mono
@@ -135,7 +135,7 @@ user/
   programs/gui/           desktop applications and chrome (welcome, taskbar, …)
   drivers/console/        PL011 console driver
   drivers/block/          virtio-blk block driver
-  drivers/display/        virtio-gpu display driver
+  drivers/display/        ramfb (fw_cfg) display driver
   drivers/audio/          virtio-sound PCM output driver
   servers/naming/         name service
   servers/filesystem/     on-disk filesystem server

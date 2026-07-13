@@ -70,6 +70,15 @@ pub const driver = struct {
 
 };
 
+// ramfb display: fw_cfg MMIO + DMA only (no interrupt; QEMU dirty-tracks the FB).
+pub const display_driver = struct {
+
+    pub const endpoint: Handle = stdin;
+    pub const device: Handle = reserved_grants; // fw_cfg MMIO window
+    pub const dma: Handle = reserved_grants + 1;
+
+};
+
 pub const marble = struct {
 
     pub const console: Handle = stdin; // the console driver's endpoint (badged)

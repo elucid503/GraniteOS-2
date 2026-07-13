@@ -165,10 +165,10 @@ pub const filesystem = struct {
 
 };
 
-// Display interface (07-userspace-ddd.md Section 10.6), spoken by the virtio-gpu display driver. The compositor is
-// its one client: it maps the scanout Region once and pushes damage rectangles through `flush`. `attach_events`
-// extends the table so a host-side window resize (a mode change) can wake the compositor through a Notification;
-// the cursor methods expose the device's hardware cursor plane, so pointer motion never forces a recomposite.
+// Display interface (07-userspace-ddd.md Section 10.6), spoken by the ramfb display driver. The compositor is
+// its one client: it maps the scanout Region once and may call `flush` after writing (a no-op for host update —
+// QEMU dirty-tracks the FB). `attach_events` is retained for mode-change wakes; ramfb uses a fixed mode.
+// Cursor methods are implemented in software on top of the linear FB (ramfb has no hardware cursor plane).
 
 pub const display = struct {
 
@@ -188,7 +188,7 @@ pub const display = struct {
     // The Notification bit `attach_events` signals when the display mode changes.
     pub const mode_bit: u64 = 1;
 
-    // Cursor images are fixed 64x64 ARGB (the virtio-gpu cursor plane size).
+    // Cursor images are fixed 64x64 ARGB (software cursor on ramfb).
     pub const cursor_size: usize = 64;
 
 };

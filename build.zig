@@ -207,7 +207,7 @@ pub fn build(b: *std.Build) void {
     add_qemu_step(b, kernel_image, bundle_image, .{
 
         .name = "qemu-gui",
-        .description = "Boot the full system with the virtio-gpu display and virtio-input devices (M9)",
+        .description = "Boot the full system with ramfb display and virtio-input devices",
         .debug = false,
         .test_build = test_build,
         .disk = .{ .path = disk_path, .prepare = seedisk_run },
@@ -444,7 +444,9 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
     if (step.gui) {
 
         run.addArgs(&.{ "-display", "sdl" });
-        run.addArgs(&.{ "-device", "virtio-gpu-device" });
+        // QEMU always loads vgabios-ramfb.bin for -device ramfb; point -L at our stub.
+        run.addArgs(&.{ "-L", b.pathFromRoot("pc-bios") });
+        run.addArgs(&.{ "-device", "ramfb" });
         run.addArgs(&.{ "-device", "virtio-keyboard-device" });
         run.addArgs(&.{ "-device", "virtio-tablet-device" });
         const audio_backend = if (builtin.os.tag == .windows) "dsound,id=granite-audio" else "sdl,id=granite-audio";

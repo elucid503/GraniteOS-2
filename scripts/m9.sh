@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# M9 smoke test: the GUI stack comes up on virtio-gpu + virtio-input hardware and the shell stays responsive
+# M9 smoke test: the GUI stack comes up on ramfb + virtio-input hardware and the shell stays responsive
 # (08-roadmap.md M9 "Done when").
 
 set -euo pipefail
@@ -11,7 +11,8 @@ cd "$root"
 zig build 2>&1
 
 gui_devices=(
-    -device virtio-gpu-device
+    -L pc-bios
+    -device ramfb
     -device virtio-keyboard-device
     -device virtio-tablet-device
 )
@@ -65,7 +66,7 @@ output="$(boot 'echo still-works')"
 
 echo "$output"
 
-check "display driver loaded"   "$output" "Display: virtio-gpu driver ... Loaded"
+check "display driver loaded"   "$output" "Display: ramfb driver ... Loaded"
 check "input server loaded"     "$output" "Input: 2 virtio-input device(s) ... Loaded"
 check "compositor loaded"       "$output" "Compositor:"
 check "welcome screen presented" "$output" "welcome: presented"

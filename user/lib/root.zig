@@ -12,6 +12,7 @@ pub const session = @import("ipc/session.zig");
 pub const sync = @import("sync.zig");
 pub const mem = @import("mem/mem.zig");
 pub const dtb = @import("boot/dtb.zig");
+pub const fw_cfg = @import("boot/fw_cfg.zig");
 pub const bundle = @import("boot/bundle.zig");
 pub const app_catalog = @import("boot/app_catalog.zig");
 pub const elf = @import("boot/elf.zig");

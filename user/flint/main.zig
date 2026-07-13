@@ -45,11 +45,13 @@ var console_uart: lib.dtb.Uart = undefined;
 var block_device: ?lib.dtb.Device = null;
 var audio_device: ?lib.dtb.Device = null;
 
-// The graphical stack is optional by hardware presence (08-roadmap.md M9): it spawns only when the DTB
+// The graphical stack is optional by hardware presence (08-roadmap.md M9): it spawns only when fw_cfg
+// exposes `etc/ramfb` (QEMU `-device ramfb`) together with virtio input.
 
 const max_input_devices = 4;
 
-var gpu_device: ?lib.dtb.Device = null;
+var fw_cfg_device: ?lib.dtb.Device = null;
+var ramfb_present = false;
 var input_devices: [max_input_devices]lib.dtb.Device = undefined;
 var input_count: usize = 0;
 
@@ -127,6 +129,9 @@ fn run(arg: u64) !void {
     try lib.stream.register_with(naming_endpoint, "console", console_endpoint);
     try lib.stream.register_with(naming_endpoint, "naming", naming_endpoint);
 
+    // Probe ramfb after the console is up so failures are visible on serial.
+    find_ramfb(dtb);
+
     if (block_device != null) {
 
         try spawn_block();
@@ -154,7 +159,7 @@ fn run(arg: u64) !void {
 
 fn start_gui() !void {
 
-    if (gpu_device != null) {
+    if (ramfb_present) {
 
         try spawn_display();
         try lib.stream.register_with(naming_endpoint, "display", display_endpoint);
@@ -179,6 +184,7 @@ fn start_gui() !void {
         try lib.stream.register_with(naming_endpoint, "launch", launcher_endpoint);
 
         // The desktop wallpaper layer sits beneath the welcome splash so the handoff never shows bare compositor fill.
+        // Taskbar starts only after welcome exits (panels would otherwise cover the splash).
         try spawn_context();
         try spawn_welcome();
 
@@ -186,13 +192,13 @@ fn start_gui() !void {
 
 }
 
-// Probe each virtio-mmio transport from the DTB and sort them by device id: block (2), gpu (16), input (18).
+// Probe each virtio-mmio transport from the DTB and sort them by device id: block (2), input (18), sound (25).
+// Display no longer uses virtio-gpu; ramfb is discovered through fw_cfg (`etc/ramfb`).
 // The transports are 0x200-byte windows sharing pages, so probing maps the containing page and reads at the
 // in-page offset.
 
 const virtio_magic: u32 = 0x7472_6976;
 const device_id_block: u32 = 2;
-const device_id_gpu: u32 = 16;
 const device_id_input: u32 = 18;
 const device_id_sound: u32 = 25;
 const max_transports = 64;
@@ -209,12 +215,6 @@ fn find_virtio_devices(dtb: usize) void {
             device_id_block => {
 
                 if (block_device == null) block_device = node;
-
-            },
-
-            device_id_gpu => {
-
-                if (gpu_device == null) gpu_device = node;
 
             },
 
@@ -264,6 +264,69 @@ fn probe_virtio(node: lib.dtb.Device) u32 {
 
     const found: u32 = if (magic.* == virtio_magic and (version.* == 1 or version.* == 2)) device_id.* else 0;
 
+    sys.unmap(cap.self_space, mapped) catch {};
+    sys.close(window) catch {};
+
+    return found;
+
+}
+
+// QEMU virt fw_cfg is at 0x09020000; prefer the DTB node when present (no interrupt required).
+const fw_cfg_fallback_base: usize = 0x0902_0000;
+
+fn find_ramfb(dtb: usize) void {
+
+    var nodes: [1]lib.dtb.Device = undefined;
+
+    fw_cfg_device = if (lib.dtb.find_compatible(dtb, "qemu,fw-cfg-mmio", &nodes) > 0)
+        nodes[0]
+    else
+        .{ .base = fw_cfg_fallback_base, .interrupt_line = 0 };
+
+    ramfb_present = probe_ramfb(fw_cfg_device.?);
+
+}
+
+fn probe_ramfb(device: lib.dtb.Device) bool {
+
+    const page = device.base & ~@as(usize, page_size - 1);
+    const window = sys.create_device_region(page, page_size, cap.flint.devices) catch return false;
+
+    const mapped = sys.map(cap.self_space, window, 0, sys.read | sys.write) catch {
+
+        sys.close(window) catch {};
+
+        return false;
+
+    };
+
+    const scratch = sys.create_dma(page_size, cap.flint.dma) catch {
+
+        sys.unmap(cap.self_space, mapped) catch {};
+        sys.close(window) catch {};
+
+        return false;
+
+    };
+
+    const scratch_va = sys.map(cap.self_space, scratch.region, 0, sys.read | sys.write) catch {
+
+        sys.close(scratch.region) catch {};
+        sys.unmap(cap.self_space, mapped) catch {};
+        sys.close(window) catch {};
+
+        return false;
+
+    };
+
+    @memset(@as([*]u8, @ptrFromInt(scratch_va))[0..page_size], 0);
+
+    const regs = mapped + (device.base - page);
+    const fw = lib.fw_cfg.FwCfg.init(regs, scratch_va, scratch.physical_base);
+    const found = fw.present() and fw.find(lib.fw_cfg.ramfb_name) != null;
+
+    sys.unmap(cap.self_space, scratch_va) catch {};
+    sys.close(scratch.region) catch {};
     sys.unmap(cap.self_space, mapped) catch {};
     sys.close(window) catch {};
 
@@ -484,12 +547,11 @@ fn spawn_marble() !void {
 
 fn spawn_display() !void {
 
-    const device = gpu_device orelse return error.NotFound;
+    const device = fw_cfg_device orelse return error.NotFound;
 
     const image = bundle.find("display") orelse return error.NotFound;
     const page = device.base & ~@as(usize, page_size - 1);
     const window = try sys.create_device_region(page, page_size, cap.flint.devices);
-    const interrupt = try sys.create(.interrupt, device.interrupt_line, cap.flint.interrupts);
     const memory = try sys.create(.memory_authority, child_budget, cap.flint.memory);
     const init_endpoint = try sys.create(.endpoint, 0, 0);
     const report = try sys.copy(supervisor_endpoint, display_id);
@@ -504,7 +566,6 @@ fn spawn_display() !void {
         init_endpoint,
         report,
         window,
-        interrupt,
         cap.flint.dma,
 
     };
@@ -517,7 +578,7 @@ fn spawn_display() !void {
         .grants = &grants,
         .data3 = device.base - page,
 
-    }, &.{ window, interrupt, memory, init_endpoint, report });
+    }, &.{ window, memory, init_endpoint, report });
 
 }
 
@@ -783,7 +844,7 @@ fn restart(who: u64) !void {
 
         display_id => {
 
-            if (gpu_device != null) {
+            if (ramfb_present) {
 
                 try spawn_display();
                 try lib.stream.register_with(naming_endpoint, "display", display_endpoint);
@@ -794,13 +855,13 @@ fn restart(who: u64) !void {
 
         input_id => {
 
-            if (gpu_device != null and input_count > 0) try spawn_input();
+            if (ramfb_present and input_count > 0) try spawn_input();
 
         },
 
         compositor_id => {
 
-            if (gpu_device != null) {
+            if (ramfb_present) {
 
                 try spawn_compositor();
                 try lib.stream.register_with(naming_endpoint, "window", window_endpoint);
@@ -811,7 +872,7 @@ fn restart(who: u64) !void {
 
         launcher_id => {
 
-            if (gpu_device != null) {
+            if (ramfb_present) {
 
                 try spawn_launcher();
                 try lib.stream.register_with(naming_endpoint, "launch", launcher_endpoint);
@@ -825,19 +886,19 @@ fn restart(who: u64) !void {
 
         welcome_id => {
 
-            if (gpu_device != null) try spawn_taskbar();
+            if (ramfb_present) try spawn_taskbar();
 
         },
 
         taskbar_id => {
 
-            if (gpu_device != null) try spawn_taskbar();
+            if (ramfb_present) try spawn_taskbar();
 
         },
 
         context_id => {
 
-            if (gpu_device != null) try spawn_context();
+            if (ramfb_present) try spawn_context();
 
         },
 
