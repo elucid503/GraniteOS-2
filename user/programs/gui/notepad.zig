@@ -103,6 +103,8 @@ fn run() !void {
 
             events.kind_key_down => key_down(event.code),
 
+            events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
             events.kind_button_down => {
 
                 if (event.code == events.button_left) mouse_down(event.x, event.y);

@@ -286,6 +286,8 @@ fn dispatch(batch: []const events.Event) bool {
 
             },
 
+            events.kind_key_up => picker.key_up(event.code),
+
             events.kind_scroll => {
 
                 if (picker.open and picker.scroll_by(event.value, win_w(), win_h())) need_full = true;

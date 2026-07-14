@@ -210,6 +210,8 @@ fn run() !void {
 
             },
 
+            events.kind_key_up => picker.key_up(event.code),
+
             events.kind_scroll => if (picker.open and picker.scroll_by(event.value, win_w(), win_h())) {
 
                 dirty = true;

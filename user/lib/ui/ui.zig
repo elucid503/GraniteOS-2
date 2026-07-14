@@ -136,11 +136,14 @@ pub const Style = struct {
 
     background: ?Color = null,
     hover_background: ?Color = null,
+
     border: ?Color = null,
     border_width: i32 = 1,
+
     radius: i32 = 0,
 
     // Text and icon.
+
     color: ?Color = null,
     size: u32 = 13,
     center_text: bool = false,
@@ -749,64 +752,9 @@ pub const Page = struct {
 
     fn paint_field(self: *Page, surface: *const Surface, node: *const Node) void {
 
-        const rect = node.rect;
-        const size = node.style.size;
         const buffer = node.field orelse return;
 
-        const radius = if (node.style.radius > 0) node.style.radius else 6;
-
-        if (node.style.background == null) {
-
-            draw.round.fill_round_rect(surface, rect, radius, theme.surface);
-
-        }
-
-        if (node.style.border == null) {
-
-            draw.round.stroke_round_rect(surface, rect, radius, 1, if (node.field_focused) theme.accent else theme.border);
-
-        }
-
-        const pad: i32 = 8;
-        const inner_x = rect.x + pad;
-        const inner_w = rect.w - 2 * pad;
-
-        if (inner_w <= 0) return;
-
-        const clipped = surface.clipped(.{ .x = inner_x, .y = rect.y, .w = inner_w, .h = rect.h });
-        const baseline = rect.y + @divTrunc(rect.h - self.font.line_height(size), 2);
-        const content = buffer.slice();
-
-        if (content.len == 0 and node.text.len > 0) {
-
-            self.font.draw(&clipped, inner_x, baseline, size, truncate(self.font, node.text, size, inner_w), theme.text_faint);
-
-        } else {
-
-            const start = field_scroll_start(self.font, content, buffer.cursor, size, inner_w);
-
-            self.font.draw(&clipped, inner_x, baseline, size, truncate(self.font, content[start..], size, inner_w), node.style.color orelse theme.text);
-
-            if (node.field_focused and node.field_caret) {
-
-                const before = content[start..@min(buffer.cursor, content.len)];
-                const caret_x = @min(inner_x + self.font.text_width(before, size), inner_x + inner_w);
-                const caret_h = @min(rect.h - 8, self.font.line_height(size));
-                const caret_y = rect.y + @divTrunc(rect.h - caret_h, 2);
-
-                surface.fill_rect(.{ .x = caret_x, .y = caret_y, .w = 1, .h = caret_h }, theme.text);
-
-            }
-
-        }
-
-        if (content.len == 0 and node.field_focused and node.field_caret) {
-
-            const caret_h = @min(rect.h - 8, self.font.line_height(size));
-
-            surface.fill_rect(.{ .x = inner_x, .y = rect.y + @divTrunc(rect.h - caret_h, 2), .w = 1, .h = caret_h }, theme.text);
-
-        }
+        paint_text_field(surface, self.font, node.rect, buffer, node.text, node.field_focused, node.field_focused and node.field_caret, node.style.size);
 
     }
 
@@ -910,13 +858,134 @@ fn field_scroll_start(font: *const Face, content: []const u8, cursor: usize, siz
 
 }
 
-// Text-editing model shared by every single-line field: a caret over caller-owned bytes.
+/// Maps a click at `rel_x` pixels from `start`
+fn field_index_at(font: *const Face, content: []const u8, size: u32, start: usize, rel_x: i32) usize {
+
+    if (rel_x <= 0) return start;
+
+    var index = start;
+    var prev_w: i32 = 0;
+
+    while (index < content.len) : (index += 1) {
+
+        const w = font.text_width(content[start .. index + 1], size);
+
+        if (w > rel_x) {
+
+            const char_w = w - prev_w;
+            const mid = prev_w + @divTrunc(char_w, 2);
+
+            return if (rel_x < mid) index else index + 1;
+
+        }
+
+        prev_w = w;
+
+    }
+
+    return content.len;
+
+}
+
+/// Maps a click at `rel_x` pixels from the left edge of a field's inner content area to a byte index in `content`
+pub fn field_click_index(font: *const Face, content: []const u8, size: u32, cursor: usize, width: i32, rel_x: i32) usize {
+
+    const start = field_scroll_start(font, content, cursor, size, width);
+
+    return field_index_at(font, content, size, start, rel_x);
+
+}
+
+pub const field_pad: i32 = 8;
+
+/// Rounded background + border for a field-shaped surface
+pub fn paint_field_chrome(surface: *const Surface, rect: Rect, focused: bool) void {
+
+    const radius: i32 = 5;
+
+    fill_round_rect(surface, rect, radius, theme.surface);
+    stroke_round_rect(surface, rect, radius, if (focused) 2 else 1, if (focused) theme.accent_dim else theme.border);
+
+}
+
+/// Draws the scrolled text, selection highlight, and caret for a field into `inner`
+pub fn paint_field_content(surface: *const Surface, font: *const Face, inner: Rect, buffer: *const EditBuffer, placeholder: []const u8, show_caret: bool, size: u32) void {
+
+    if (inner.w <= 0) return;
+
+    const clipped = surface.clipped(inner);
+    const baseline = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
+    const content = buffer.slice();
+
+    if (content.len == 0) {
+
+        if (placeholder.len > 0) font.draw(&clipped, inner.x, baseline, size, truncate(font, placeholder, size, inner.w), theme.text_faint);
+        if (show_caret) paint_field_caret(surface, inner.x, inner, size, font);
+
+        return;
+
+    }
+
+    const start = field_scroll_start(font, content, buffer.cursor, size, inner.w);
+    const visible = truncate(font, content[start..], size, inner.w);
+
+    if (buffer.selection_range()) |range| {
+
+        const sel_start = @max(range.start, start);
+        const sel_end = @min(range.end, start + visible.len);
+
+        if (sel_end > sel_start) {
+
+            const x0 = inner.x + font.text_width(content[start..sel_start], size);
+            const x1 = inner.x + font.text_width(content[start..sel_end], size);
+
+            surface.fill_rect(.{ .x = x0, .y = inner.y + 3, .w = @max(1, x1 - x0), .h = @max(1, inner.h - 6) }, theme.accent_dim);
+
+        }
+
+    }
+
+    font.draw(&clipped, inner.x, baseline, size, visible, theme.text);
+
+    if (show_caret) {
+
+        const before = content[start..@min(buffer.cursor, content.len)];
+        const caret_x = @min(inner.x + font.text_width(before, size), inner.x + inner.w);
+
+        paint_field_caret(surface, caret_x, inner, size, font);
+
+    }
+
+}
+
+fn paint_field_caret(surface: *const Surface, x: i32, inner: Rect, size: u32, font: *const Face) void {
+
+    const caret_h = @min(inner.h - 8, font.line_height(size));
+    const caret_y = inner.y + @divTrunc(inner.h - caret_h, 2);
+
+    surface.fill_rect(.{ .x = x, .y = caret_y, .w = 1, .h = caret_h }, theme.text);
+
+}
+
+/// Paints a complete single-line text field: chrome plus content, inset by the standard `field_pad`.
+pub fn paint_text_field(surface: *const Surface, font: *const Face, rect: Rect, buffer: *const EditBuffer, placeholder: []const u8, focused: bool, show_caret: bool, size: u32) void {
+
+    paint_field_chrome(surface, rect, focused);
+
+    const inner = Rect{ .x = rect.x + field_pad, .y = rect.y, .w = rect.w - 2 * field_pad, .h = rect.h };
+
+    paint_field_content(surface, font, inner, buffer, placeholder, show_caret, size);
+
+}
+
+// Text-editing model shared by every single-line field
 
 pub const EditBuffer = struct {
 
     bytes: []u8,
     len: usize = 0,
     cursor: usize = 0,
+    anchor: ?usize = null,
 
     pub fn init(storage: []u8) EditBuffer {
 
@@ -934,10 +1003,82 @@ pub const EditBuffer = struct {
 
         self.len = 0;
         self.cursor = 0;
+        self.anchor = null;
+
+    }
+
+    /// The current selection as a normalized (start <= end) byte range, or null when there is none.
+    pub fn selection_range(self: *const EditBuffer) ?struct { start: usize, end: usize } {
+
+        const anchor = self.anchor orelse return null;
+
+        if (anchor == self.cursor) return null;
+
+        return .{ .start = @min(anchor, self.cursor), .end = @max(anchor, self.cursor) };
+
+    }
+
+    pub fn clear_selection(self: *EditBuffer) void {
+
+        self.anchor = null;
+
+    }
+
+    /// Removes the selected range, if any, and collapses the cursor to its start. Returns whether it did.
+    pub fn delete_selection(self: *EditBuffer) bool {
+
+        const range = self.selection_range() orelse return false;
+        const tail_len = self.len - range.end;
+
+        std.mem.copyForwards(u8, self.bytes[range.start..][0..tail_len], self.bytes[range.end..self.len]);
+
+        self.len -= range.end - range.start;
+        self.cursor = range.start;
+        self.anchor = null;
+
+        return true;
+
+    }
+
+    /// Move the cursor to `index` (clamped to content length).
+    pub fn set_cursor(self: *EditBuffer, index: usize, extend: bool) bool {
+
+        const clamped = @min(index, self.len);
+        const had_selection = self.anchor != null;
+
+        if (extend) {
+
+            if (self.anchor == null) self.anchor = self.cursor;
+
+        } else if (had_selection) {
+
+            self.anchor = null;
+
+        }
+
+        if (clamped == self.cursor) return had_selection != (self.anchor != null);
+
+        self.cursor = clamped;
+
+        return true;
+
+    }
+
+    /// Select everything.
+    pub fn select_all(self: *EditBuffer) bool {
+
+        if (self.len == 0) return false;
+
+        self.anchor = 0;
+        self.cursor = self.len;
+
+        return true;
 
     }
 
     pub fn insert(self: *EditBuffer, byte: u8) bool {
+
+        _ = self.delete_selection();
 
         if (self.len >= self.bytes.len) return false;
 
@@ -955,6 +1096,7 @@ pub const EditBuffer = struct {
 
     pub fn backspace(self: *EditBuffer) bool {
 
+        if (self.delete_selection()) return true;
         if (self.cursor == 0) return false;
 
         var index = self.cursor - 1;
@@ -970,6 +1112,7 @@ pub const EditBuffer = struct {
 
     pub fn delete(self: *EditBuffer) bool {
 
+        if (self.delete_selection()) return true;
         if (self.cursor >= self.len) return false;
 
         var index = self.cursor;
@@ -982,58 +1125,48 @@ pub const EditBuffer = struct {
 
     }
 
-    pub fn left(self: *EditBuffer) bool {
+    /// Moves left
+    pub fn left(self: *EditBuffer, extend: bool) bool {
 
-        if (self.cursor == 0) return false;
+        if (!extend) if (self.selection_range()) |range| return self.set_cursor(range.start, false);
+        if (self.cursor == 0) return self.set_cursor(self.cursor, extend);
 
-        self.cursor -= 1;
-
-        return true;
-
-    }
-
-    pub fn right(self: *EditBuffer) bool {
-
-        if (self.cursor >= self.len) return false;
-
-        self.cursor += 1;
-
-        return true;
+        return self.set_cursor(self.cursor - 1, extend);
 
     }
 
-    pub fn home(self: *EditBuffer) bool {
+    pub fn right(self: *EditBuffer, extend: bool) bool {
 
-        if (self.cursor == 0) return false;
+        if (!extend) if (self.selection_range()) |range| return self.set_cursor(range.end, false);
+        if (self.cursor >= self.len) return self.set_cursor(self.cursor, extend);
 
-        self.cursor = 0;
-
-        return true;
-
-    }
-
-    pub fn end(self: *EditBuffer) bool {
-
-        if (self.cursor == self.len) return false;
-
-        self.cursor = self.len;
-
-        return true;
+        return self.set_cursor(self.cursor + 1, extend);
 
     }
 
-    /// Apply one key's byte sequence straight from keymap.Keyboard.bytes; returns true when the buffer
-    /// changed. Enter and other control bytes are left for the app to act on.
-    pub fn feed(self: *EditBuffer, input: []const u8) bool {
+    pub fn home(self: *EditBuffer, extend: bool) bool {
+
+        return self.set_cursor(0, extend);
+
+    }
+
+    pub fn end(self: *EditBuffer, extend: bool) bool {
+
+        return self.set_cursor(self.len, extend);
+
+    }
+
+    /// Applies one key's byte sequence straight from keymap.Keyboard.bytes
+    pub fn feed(self: *EditBuffer, input: []const u8, extend: bool) bool {
 
         if (input.len == 3 and input[0] == 0x1b and input[1] == '[') {
 
             return switch (input[2]) {
 
-                'C' => self.right(),
-                'D' => self.left(),
-                'H' => self.home(),
-                'F' => self.end(),
+                'C' => self.right(extend),
+                'D' => self.left(extend),
+                'H' => self.home(extend),
+                'F' => self.end(extend),
 
                 else => false,
 
@@ -1046,6 +1179,7 @@ pub const EditBuffer = struct {
             const byte = input[0];
 
             if (byte == 0x7f or byte == 0x08) return self.backspace();
+            if (byte == 0x01) return self.select_all(); // Ctrl+A - keymap folds letters to 0x01-0x1a under Ctrl
             if (byte >= 0x20 and byte < 0x7f) return self.insert(byte);
 
         }
@@ -1154,7 +1288,7 @@ test "edit buffer inserts at the caret and edits both directions" {
 
     for ("ac") |byte| _ = buffer.insert(byte);
 
-    try testing.expect(buffer.left());
+    try testing.expect(buffer.left(false));
     try testing.expect(buffer.insert('b'));
     try testing.expectEqualStrings("abc", buffer.slice());
     try testing.expectEqual(@as(usize, 2), buffer.cursor);
@@ -1163,6 +1297,49 @@ test "edit buffer inserts at the caret and edits both directions" {
     try testing.expectEqualStrings("ac", buffer.slice());
     try testing.expect(buffer.delete());
     try testing.expectEqualStrings("a", buffer.slice());
+
+}
+
+test "shift+arrow grows a selection that plain arrows collapse" {
+
+    var storage: [8]u8 = undefined;
+    var buffer = EditBuffer.init(&storage);
+
+    for ("abcde") |byte| _ = buffer.insert(byte);
+
+    // Cursor is after 'e' (index 5); shift+Left twice selects "de".
+    try testing.expect(buffer.left(true));
+    try testing.expect(buffer.left(true));
+    try testing.expectEqual(@as(?usize, 3), buffer.selection_range().?.start);
+    try testing.expectEqual(@as(usize, 5), buffer.selection_range().?.end);
+
+    // A plain arrow collapses to the near edge instead of moving one further.
+    try testing.expect(buffer.left(false));
+    try testing.expectEqual(@as(usize, 3), buffer.cursor);
+    try testing.expect(buffer.selection_range() == null);
+
+}
+
+test "typing and backspace replace the active selection" {
+
+    var storage: [8]u8 = undefined;
+    var buffer = EditBuffer.init(&storage);
+
+    for ("abcde") |byte| _ = buffer.insert(byte);
+
+    _ = buffer.set_cursor(1, false);
+    _ = buffer.set_cursor(4, true); // selects "bcd"
+
+    try testing.expect(buffer.insert('X'));
+    try testing.expectEqualStrings("aXe", buffer.slice());
+    try testing.expectEqual(@as(usize, 2), buffer.cursor);
+    try testing.expect(buffer.selection_range() == null);
+
+    _ = buffer.set_cursor(0, false);
+    _ = buffer.set_cursor(2, true); // selects "aX"
+
+    try testing.expect(buffer.backspace());
+    try testing.expectEqualStrings("e", buffer.slice());
 
 }
 

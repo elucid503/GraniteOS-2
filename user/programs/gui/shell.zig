@@ -208,6 +208,8 @@ fn handle(event: events.Event) bool {
 
         events.kind_key_down => key(event.code),
 
+        events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
         events.kind_window_resize => {
 
             window.resize(@intCast(event.x), @intCast(event.y)) catch {};

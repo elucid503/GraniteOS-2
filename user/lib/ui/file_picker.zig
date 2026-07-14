@@ -5,6 +5,7 @@ const std = @import("std");
 
 const draw = @import("../draw/draw.zig");
 const text_mod = @import("../draw/text.zig");
+const events = @import("../gfx/events.zig");
 const fs = @import("../fs/fs.zig");
 const keymap = @import("../keymap.zig");
 const proto = @import("../ipc/proto.zig");
@@ -225,16 +226,10 @@ pub const FilePicker = struct {
 
         if (self.mode == .save) {
 
-            const field = Rect{ .x = frame.x + pad, .y = footer_y, .w = frame.w - pad * 2 - btn_w * 2 - 16, .h = btn_h };
+            const field = save_field_rect(frame, footer_y);
 
-            ui.fill_round_rect(surface, field, chip_radius, ui.theme.window_bg);
-            ui.stroke_round_rect(surface, field, chip_radius, 1, ui.theme.border);
-
-            const name = self.name_field.slice();
-            const shown = if (name.len == 0) "filename.png" else name;
-            const color = if (name.len == 0) ui.theme.text_faint else ui.theme.text;
-
-            font.draw(surface, field.x + 10, field.y + 7, 12, shown, color);
+            ui.paint_field_chrome(surface, field, true);
+            ui.paint_field_content(surface, font, save_field_inner(field), &self.name_field, "filename.png", true, 12);
 
         }
 
@@ -311,6 +306,19 @@ pub const FilePicker = struct {
 
         }
 
+        if (id == 4) {
+
+            const footer_y = frame.y + frame.h - footer_h;
+            const field = save_field_rect(frame, footer_y);
+            const inner = save_field_inner(field);
+            const index = ui.field_click_index(self.font orelse return true, self.name_field.slice(), 12, self.name_field.cursor, inner.w, x - inner.x);
+
+            _ = self.name_field.set_cursor(index, self.keyboard.shift);
+
+            return true;
+
+        }
+
         if (id >= 100) {
 
             const index: usize = @intCast(id - 100);
@@ -381,25 +389,26 @@ pub const FilePicker = struct {
 
         }
 
+        if (self.keyboard.modifier(events.kind_key_down, code)) return false;
+
         var buffer: [3]u8 = undefined;
         const bytes = self.keyboard.bytes(code, &buffer);
 
-        if (bytes.len == 1) {
+        if (bytes.len == 1 and bytes[0] == '\r') {
 
-            const ch = bytes[0];
-
-            if (ch == '\r') {
-
-                self.confirm();
-                return true;
-
-            }
-
-            _ = self.name_field.feed(bytes);
+            self.confirm();
+            return true;
 
         }
 
-        return true;
+        return self.name_field.feed(bytes, self.keyboard.shift);
+
+    }
+
+    /// Release-side counterpart to `key`: keeps Shift/Ctrl/Caps from sticking once a save-name field has seen them.
+    pub fn key_up(self: *FilePicker, code: u16) void {
+
+        _ = self.keyboard.modifier(events.kind_key_up, code);
 
     }
 
@@ -622,6 +631,9 @@ pub const FilePicker = struct {
         }
 
         const footer_y = frame.y + frame.h - footer_h;
+
+        if (self.mode == .save and save_field_rect(frame, footer_y).contains(x, y)) return 4;
+
         const btn_y: i32 = footer_y + if (self.mode == .save) @as(i32, 0) else @as(i32, 8);
         const cancel = Rect{ .x = frame.x + frame.w - pad - btn_w * 2 - 8, .y = btn_y, .w = btn_w, .h = btn_h };
         const ok = Rect{ .x = frame.x + frame.w - pad - btn_w, .y = btn_y, .w = btn_w, .h = btn_h };
@@ -634,6 +646,20 @@ pub const FilePicker = struct {
     }
 
 };
+
+fn save_field_rect(frame: Rect, footer_y: i32) Rect {
+
+    return .{ .x = frame.x + pad, .y = footer_y, .w = frame.w - pad * 2 - btn_w * 2 - 16, .h = btn_h };
+
+}
+
+const save_field_pad: i32 = 10;
+
+fn save_field_inner(field: Rect) Rect {
+
+    return .{ .x = field.x + save_field_pad, .y = field.y, .w = field.w - 2 * save_field_pad, .h = field.h };
+
+}
 
 fn dialog_frame(window_w: i32, window_h: i32) Rect {
 

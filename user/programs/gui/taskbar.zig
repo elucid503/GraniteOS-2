@@ -497,6 +497,8 @@ fn handle_menu(event: events.Event) void {
 
         events.kind_key_down => menu_key(event.code),
 
+        events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
         events.kind_button_down => {
 
             if (event.code == events.button_left) menu_click(event.x, event.y);
@@ -604,11 +606,25 @@ fn menu_key(code: u16) void {
 
     // Printable bytes, Backspace/Delete, and the arrow escapes all flow through the shared edit buffer.
 
-    if (search.feed(bytes)) paint_menu();
+    if (search.feed(bytes, keyboard.shift)) paint_menu();
 
 }
 
 fn menu_click(x: i32, y: i32) void {
+
+    const width: i32 = if (menu) |m| @intCast(m.surface.width) else 0;
+    const text_rect = search_text_rect(width);
+
+    if (text_rect.contains(x, y)) {
+
+        const index = ui.field_click_index(&font, search.slice(), 13, search.cursor, text_rect.w, x - text_rect.x);
+
+        _ = search.set_cursor(index, keyboard.shift);
+        paint_menu();
+
+        return;
+
+    }
 
     const id = menu_regions.hit(x, y);
 
@@ -1088,6 +1104,8 @@ fn handle_pin_menu(event: events.Event) void {
 
         },
 
+        events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
         events.kind_window_blur => close_pin_menu(),
 
         else => {},
@@ -1445,11 +1463,29 @@ fn paint_menu_content() void {
 
 }
 
+fn search_box_rect(width: i32) Rect {
+
+    return .{ .x = 8, .y = 8, .w = width - 16, .h = search_height() - 12 };
+
+}
+
+/// Where the search box's text content starts and ends, past its leading icon - shared by the paint routine
+/// and by click-to-position so the two never disagree about where the text actually sits.
+fn search_text_rect(width: i32) Rect {
+
+    const search_rect = search_box_rect(width);
+    const icon_size: i32 = 20;
+    const text_x = search_rect.x + 8 + icon_size + 8;
+
+    return .{ .x = text_x, .y = search_rect.y, .w = width - 8 - text_x, .h = search_rect.h };
+
+}
+
 fn paint_search_box(surface: *const gfx.Surface, width: i32) void {
 
-    const search_rect = Rect{ .x = 8, .y = 8, .w = width - 16, .h = search_height() - 12 };
+    const search_rect = search_box_rect(width);
 
-    ui.fill_round_rect(surface, search_rect, 5, ui.theme.surface);
+    ui.paint_field_chrome(surface, search_rect, true);
 
     const icon_size: i32 = 20;
     const icon_x = search_rect.x + 8;
@@ -1457,28 +1493,7 @@ fn paint_search_box(surface: *const gfx.Surface, width: i32) void {
 
     lib.draw.vector.icon_in(surface, .{ .x = icon_x, .y = icon_y, .w = icon_size, .h = icon_size }, lib.icons.search, ui.theme.text_dim);
 
-    const text_x = icon_x + icon_size + 8;
-    const text_w = width - text_x - 8;
-    const query = search.slice();
-
-    if (query.len == 0) {
-
-        text_in(surface, .{ .x = text_x, .y = search_rect.y, .w = text_w, .h = search_rect.h }, 0, 13, "Search applications", ui.theme.text_faint);
-
-    } else {
-
-        text_in(surface, .{ .x = text_x, .y = search_rect.y, .w = text_w, .h = search_rect.h }, 0, 13, query, ui.theme.text);
-
-    }
-
-    // Caret at the edit cursor, clamped to the box.
-
-    const before = query[0..@min(search.cursor, query.len)];
-    const caret_x = @min(text_x + font.text_width(before, 13), text_x + text_w);
-    const caret_h = @min(search_rect.h - 8, font.line_height(13));
-    const caret_y = search_rect.y + @divTrunc(search_rect.h - caret_h, 2);
-
-    surface.fill_rect(.{ .x = caret_x, .y = caret_y, .w = 1, .h = caret_h }, ui.theme.text);
+    ui.paint_field_content(surface, &font, search_text_rect(width), &search, "Search applications", true, 13);
 
 }
 

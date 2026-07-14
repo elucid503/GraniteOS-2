@@ -44,6 +44,7 @@ var window_endpoint: Handle = 0;
 var launcher_endpoint: Handle = 0;
 var net_endpoint: Handle = 0;
 var netstack_endpoint: Handle = 0;
+var metrics_endpoint: Handle = 0;
 
 var console_uart: lib.dtb.Uart = undefined;
 var block_device: ?lib.dtb.Device = null;
@@ -74,6 +75,7 @@ const context_id: u64 = 13;
 const audio_id: u64 = 14;
 const net_id: u64 = 15;
 const netstack_id: u64 = 16;
+const metrics_id: u64 = 17;
 
 // The filesystem attaches its block session under this badge; badge 0 stays the shared console/logging session.
 
@@ -132,6 +134,7 @@ fn run(arg: u64) !void {
     launcher_endpoint = try sys.create(.endpoint, 0, 0);
     net_endpoint = try sys.create(.endpoint, 0, 0);
     netstack_endpoint = try sys.create(.endpoint, 0, 0);
+    metrics_endpoint = try sys.create(.endpoint, 0, 0);
 
     try spawn_naming();
     try spawn_console();
@@ -168,6 +171,16 @@ fn run(arg: u64) !void {
     try spawn_marble();
 
     start_gui() catch {};
+
+    if (net_device != null) {
+
+        // Spawned after start_gui so the compositor is already registered: Metrics' one-shot boot lookup
+        // connects to it to broadcast the detected timezone to already-open GUI clients.
+
+        try spawn_metrics();
+        try lib.stream.register_with(naming_endpoint, "metrics", metrics_endpoint);
+
+    }
 
 }
 
@@ -502,6 +515,36 @@ fn spawn_netstack() !void {
         .grants = &grants,
 
     }, &.{ memory, init_endpoint, report, net });
+
+}
+
+fn spawn_metrics() !void {
+
+    const image = bundle.find("metrics") orelse return error.NotFound;
+    const memory = try sys.create(.memory_authority, child_budget, cap.flint.memory);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
+    const report = try sys.copy(supervisor_endpoint, metrics_id);
+
+    const grants = [_]Handle{
+
+        metrics_endpoint,
+        metrics_endpoint,
+        metrics_endpoint,
+        naming_endpoint,
+        memory,
+        init_endpoint,
+        report,
+
+    };
+
+    try spawn_detached(.{
+
+        .image = image,
+        .authority = memory,
+        .args = &.{"metrics"},
+        .grants = &grants,
+
+    }, &.{ memory, init_endpoint, report });
 
 }
 
@@ -851,6 +894,7 @@ fn restart(who: u64) !void {
             if (net_device != null) {
 
                 try lib.stream.register_with(naming_endpoint, "netstack", netstack_endpoint);
+                try lib.stream.register_with(naming_endpoint, "metrics", metrics_endpoint);
 
             }
 
@@ -889,6 +933,17 @@ fn restart(who: u64) !void {
 
                 try spawn_netstack();
                 try lib.stream.register_with(naming_endpoint, "netstack", netstack_endpoint);
+
+            }
+
+        },
+
+        metrics_id => {
+
+            if (net_device != null) {
+
+                try spawn_metrics();
+                try lib.stream.register_with(naming_endpoint, "metrics", metrics_endpoint);
 
             }
 

@@ -39,6 +39,7 @@ const Op = enum {
 };
 
 var font: lib.draw.text.Face = undefined;
+var keyboard: lib.keymap.Keyboard = .{};
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
@@ -139,6 +140,8 @@ fn run() !void {
 
             events.kind_key_down => key_down(event.code),
 
+            events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
             events.kind_pointer_move => {
 
                 if (regions.pointer_move(event.x, event.y)) paint();
@@ -172,7 +175,8 @@ fn update_cursor(x: i32, y: i32) void {
 fn key_down(code: u16) void {
 
     // Digit row and numpad-style keys via scancode-independent char mapping when available.
-    var keyboard = lib.keymap.Keyboard{};
+    if (keyboard.modifier(events.kind_key_down, code)) return;
+
     var buffer: [3]u8 = undefined;
     const bytes = keyboard.bytes(code, &buffer);
 

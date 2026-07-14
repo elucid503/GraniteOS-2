@@ -34,14 +34,15 @@ const field_h: i32 = 28;
 const field_y: i32 = 6;
 const margin: i32 = 12;
 
-const ip_storage_size = 64;
+const url_storage_size = 512;
+const host_storage_size = 128;
+const path_storage_size = 384;
 const port_storage_size = 8;
-const path_storage_size = 256;
 
-const ip_field_w: i32 = 130;
-const port_field_w: i32 = 56;
+const port_toggle_w: i32 = 50;
+const port_field_w: i32 = 60;
 const go_button_w: i32 = 56;
-const label_w: i32 = 38;
+const label_w: i32 = 32;
 
 const response_capacity = 262_144;
 const recv_chunk = 4096;
@@ -57,9 +58,8 @@ const State = enum(u8) {
 
 const Focus = enum {
 
-    ip,
+    url,
     port,
-    path,
 
 };
 
@@ -69,19 +69,22 @@ var mono: lib.draw.bitmap.Font = undefined;
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
 
-var ip_storage: [ip_storage_size]u8 = undefined;
+var url_storage: [url_storage_size]u8 = undefined;
 var port_storage: [port_storage_size]u8 = undefined;
-var path_storage: [path_storage_size]u8 = undefined;
 
-var ip_buffer: ui.EditBuffer = undefined;
+var url_buffer: ui.EditBuffer = undefined;
 var port_buffer: ui.EditBuffer = undefined;
-var path_buffer: ui.EditBuffer = undefined;
 
-var focused: Focus = .ip;
+// Hidden by default: most addresses need no explicit port, so the field only takes toolbar space once the
+// user asks for it via the toggle.
+var port_enabled = false;
+
+var focused: Focus = .url;
 var keyboard = lib.keymap.Keyboard{};
 
 var scroll_row: usize = 0;
 var dragging_scrollbar = false;
+var dragging_field = false;
 
 // Shared between the worker thread and the paint loop.
 
@@ -97,7 +100,7 @@ var elapsed_ms: u64 = 0;
 var request_port: u16 = 0;
 var request_path: [path_storage_size]u8 = undefined;
 var request_path_len: usize = 0;
-var request_host: [ip_storage_size]u8 = undefined;
+var request_host: [host_storage_size]u8 = undefined;
 var request_host_len: usize = 0;
 
 var ready: cap.Handle = 0;
@@ -126,13 +129,10 @@ fn run() !void {
 
     window = try connection.create_window(760, 560, 0, "Fetch");
 
-    ip_buffer = ui.EditBuffer.init(&ip_storage);
+    url_buffer = ui.EditBuffer.init(&url_storage);
     port_buffer = ui.EditBuffer.init(&port_storage);
-    path_buffer = ui.EditBuffer.init(&path_storage);
 
-    set_field(&ip_buffer, "1.1.1.1");
-    set_field(&port_buffer, "80");
-    set_field(&path_buffer, "/");
+    set_field(&url_buffer, "http://example.com/");
 
     paint();
 
@@ -167,6 +167,8 @@ fn run() !void {
 
                 },
 
+                events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
                 events.kind_button_down => {
 
                     if (event.code == events.button_left) {
@@ -179,7 +181,12 @@ fn run() !void {
 
                 events.kind_button_up => {
 
-                    if (event.code == events.button_left) dragging_scrollbar = false;
+                    if (event.code == events.button_left) {
+
+                        dragging_scrollbar = false;
+                        dragging_field = false;
+
+                    }
 
                 },
 
@@ -188,6 +195,10 @@ fn run() !void {
                     if (dragging_scrollbar) {
 
                         if (drag_scrollbar(event.y)) dirty = true;
+
+                    } else if (dragging_field) {
+
+                        if (field_drag_to(event.x)) dirty = true;
 
                     }
 
@@ -256,13 +267,37 @@ fn key_down(code: u16) bool {
 
     const target: *ui.EditBuffer = switch (focused) {
 
-        .ip => &ip_buffer,
+        .url => &url_buffer,
         .port => &port_buffer,
-        .path => &path_buffer,
 
     };
 
-    return target.feed(bytes);
+    return target.feed(bytes, keyboard.shift);
+
+}
+
+/// Maps a click at window x `x` to a byte index in `buffer` and moves the cursor there (extending the
+/// selection when `extend` - a held Shift, or an in-progress drag). Returns whether anything changed.
+fn position_field(buffer: *ui.EditBuffer, rect: Rect, x: i32, extend: bool) bool {
+
+    const inner_w = rect.w - 2 * ui.field_pad;
+    const rel_x = x - rect.x - ui.field_pad;
+    const index = ui.field_click_index(&font, buffer.slice(), 13, buffer.cursor, inner_w, rel_x);
+
+    return buffer.set_cursor(index, extend);
+
+}
+
+/// Continues a click-drag started in `mouse_down` as the pointer moves, extending the focused field's
+/// selection to the new x.
+fn field_drag_to(x: i32) bool {
+
+    return switch (focused) {
+
+        .url => position_field(&url_buffer, url_field_rect(), x, true),
+        .port => position_field(&port_buffer, port_field_rect(), x, true),
+
+    };
 
 }
 
@@ -278,23 +313,33 @@ fn mouse_down(x: i32, y: i32) bool {
 
     }
 
-    if (ip_field_rect().contains(x, y)) {
+    if (url_field_rect().contains(x, y)) {
 
-        focused = .ip;
+        focused = .url;
+        _ = position_field(&url_buffer, url_field_rect(), x, keyboard.shift);
+        dragging_field = true;
+
         return true;
 
     }
 
-    if (port_field_rect().contains(x, y)) {
+    if (port_toggle_rect().contains(x, y)) {
+
+        port_enabled = !port_enabled;
+
+        if (port_enabled and port_buffer.len == 0) set_field(&port_buffer, "80");
+        if (!port_enabled and focused == .port) focused = .url;
+
+        return true;
+
+    }
+
+    if (port_enabled and port_field_rect().contains(x, y)) {
 
         focused = .port;
-        return true;
+        _ = position_field(&port_buffer, port_field_rect(), x, keyboard.shift);
+        dragging_field = true;
 
-    }
-
-    if (path_field_rect().contains(x, y)) {
-
-        focused = .path;
         return true;
 
     }
@@ -312,14 +357,14 @@ fn mouse_down(x: i32, y: i32) bool {
 
 fn update_cursor(x: i32, y: i32) void {
 
-    if (y < toolbar_height and (ip_field_rect().contains(x, y) or port_field_rect().contains(x, y) or path_field_rect().contains(x, y))) {
+    if (y < toolbar_height and (url_field_rect().contains(x, y) or (port_enabled and port_field_rect().contains(x, y)))) {
 
         lib.cursor.set(&connection, .selector);
         return;
 
     }
 
-    if (y < toolbar_height and go_button_rect().contains(x, y)) {
+    if (y < toolbar_height and (go_button_rect().contains(x, y) or port_toggle_rect().contains(x, y))) {
 
         lib.cursor.set(&connection, .clicker);
         return;
@@ -353,35 +398,71 @@ fn drag_scrollbar(y: i32) bool {
 
 // --- fetch request lifecycle ---
 
+/// Fills in a missing "scheme://" so bare shorthand like "example.com/path" parses the same as a full URL;
+/// `lib.url.parse` itself stays strict about requiring one, so this just meets the user halfway first.
+fn with_scheme(raw: []const u8, scratch: []u8) ?[]const u8 {
+
+    if (std.mem.indexOf(u8, raw, "://") != null) return raw;
+
+    return std.fmt.bufPrint(scratch, "http://{s}", .{raw}) catch null;
+
+}
+
 fn start_fetch() void {
 
-    const ip_text = ip_buffer.slice();
+    const raw = url_buffer.slice();
 
-    if (ip_text.len == 0) {
+    if (raw.len == 0) {
 
-        fail("invalid host");
+        fail("enter a url");
         return;
 
     }
 
-    const port = std.fmt.parseInt(u16, port_buffer.slice(), 10) catch {
+    var scratch: [url_storage_size + 8]u8 = undefined;
+    const text = with_scheme(raw, &scratch) orelse {
 
-        fail("invalid port");
+        fail("url too long");
         return;
 
     };
 
-    const path = if (path_buffer.len == 0) "/" else path_buffer.slice();
+    if (std.mem.startsWith(u8, text, "https://")) {
+
+        fail("https is not supported (http only)");
+        return;
+
+    }
+
+    const parsed = lib.url.parse(text) orelse {
+
+        fail("invalid url");
+        return;
+
+    };
+
+    var port = parsed.port;
+
+    if (port_enabled) {
+
+        port = std.fmt.parseInt(u16, port_buffer.slice(), 10) catch {
+
+            fail("invalid port");
+            return;
+
+        };
+
+    }
 
     lock.acquire();
 
     request_port = port;
 
-    request_path_len = @min(path.len, request_path.len);
-    @memcpy(request_path[0..request_path_len], path[0..request_path_len]);
+    request_path_len = @min(parsed.path.len, request_path.len);
+    @memcpy(request_path[0..request_path_len], parsed.path[0..request_path_len]);
 
-    request_host_len = @min(ip_text.len, request_host.len);
-    @memcpy(request_host[0..request_host_len], ip_text[0..request_host_len]);
+    request_host_len = @min(parsed.host.len, request_host.len);
+    @memcpy(request_host[0..request_host_len], parsed.host[0..request_host_len]);
 
     state = .running;
     response_len = 0;
@@ -463,7 +544,7 @@ fn do_fetch() void {
 
     @memcpy(path_local[0..path_len], request_path[0..path_len]);
 
-    var host_local: [ip_storage_size]u8 = undefined;
+    var host_local: [host_storage_size]u8 = undefined;
     const host_len = request_host_len;
 
     @memcpy(host_local[0..host_len], request_host[0..host_len]);
@@ -481,11 +562,19 @@ fn do_fetch() void {
 
     defer socket.close();
 
+    // The Host header carries the port too once it is not the default - otherwise a name-based virtual host
+    // behind a non-standard port would see the wrong address.
+    var host_header_buffer: [host_storage_size + 8]u8 = undefined;
+    const host_header = if (port == 80)
+        host_local[0..host_len]
+    else
+        std.fmt.bufPrint(&host_header_buffer, "{s}:{d}", .{ host_local[0..host_len], port }) catch host_local[0..host_len];
+
     var request_buffer: [512]u8 = undefined;
     const request = std.fmt.bufPrint(&request_buffer, "GET {s} HTTP/1.0\r\nHost: {s}\r\nConnection: close\r\n\r\n", .{
 
         path_local[0..path_len],
-        host_local[0..host_len],
+        host_header,
 
     }) catch {
 
@@ -555,36 +644,36 @@ fn do_fetch() void {
 
 // --- layout ---
 
-fn ip_field_rect() Rect {
-
-    return .{ .x = margin + label_w, .y = field_y, .w = ip_field_w, .h = field_h };
-
-}
-
-fn port_field_rect() Rect {
-
-    const ip = ip_field_rect();
-
-    return .{ .x = ip.x + ip.w + margin + label_w, .y = field_y, .w = port_field_w, .h = field_h };
-
-}
-
-fn path_field_rect() Rect {
-
-    const port = port_field_rect();
-    const start = port.x + port.w + margin + label_w;
-    const width: i32 = @intCast(window.surface.width);
-    const end = width - margin - go_button_w - margin;
-
-    return .{ .x = start, .y = field_y, .w = @max(40, end - start), .h = field_h };
-
-}
-
 fn go_button_rect() Rect {
 
     const width: i32 = @intCast(window.surface.width);
 
     return .{ .x = width - margin - go_button_w, .y = field_y, .w = go_button_w, .h = field_h };
+
+}
+
+fn port_toggle_rect() Rect {
+
+    const go = go_button_rect();
+
+    return .{ .x = go.x - margin - port_toggle_w, .y = field_y, .w = port_toggle_w, .h = field_h };
+
+}
+
+fn port_field_rect() Rect {
+
+    const toggle = port_toggle_rect();
+
+    return .{ .x = toggle.x - margin - port_field_w, .y = field_y, .w = port_field_w, .h = field_h };
+
+}
+
+fn url_field_rect() Rect {
+
+    const start = margin + label_w;
+    const end = if (port_enabled) port_field_rect().x - margin else port_toggle_rect().x - margin;
+
+    return .{ .x = start, .y = field_y, .w = @max(80, end - start), .h = field_h };
 
 }
 
@@ -688,9 +777,15 @@ fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_height }, ui.theme.surface_alt);
     surface.fill_rect(.{ .x = 0, .y = toolbar_height, .w = width, .h = 1 }, ui.theme.border);
 
-    paint_field(surface, "Host", ip_field_rect(), ip_buffer.slice(), focused == .ip);
-    paint_field(surface, "Port", port_field_rect(), port_buffer.slice(), focused == .port);
-    paint_field(surface, "Path", path_field_rect(), path_buffer.slice(), focused == .path);
+    paint_field(surface, "URL", &url_buffer, url_field_rect(), focused == .url);
+
+    const toggle = port_toggle_rect();
+
+    ui.fill_round_rect(surface, toggle, 5, if (port_enabled) ui.theme.accent_dim else ui.theme.surface);
+    ui.stroke_round_rect(surface, toggle, 5, 1, if (port_enabled) ui.theme.accent else ui.theme.border);
+    text_center(surface, toggle, 12, "Port", if (port_enabled) ui.theme.text else ui.theme.text_dim);
+
+    if (port_enabled) paint_field(surface, "", &port_buffer, port_field_rect(), focused == .port);
 
     const go = go_button_rect();
 
@@ -699,29 +794,13 @@ fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
 
 }
 
-fn paint_field(surface: *const gfx.Surface, label: []const u8, rect: Rect, value: []const u8, active: bool) void {
+fn paint_field(surface: *const gfx.Surface, label: []const u8, buffer: *const ui.EditBuffer, rect: Rect, active: bool) void {
 
     const label_rect = Rect{ .x = rect.x - label_w, .y = rect.y, .w = label_w - 4, .h = rect.h };
 
     text_in(surface, label_rect, 0, 11, label, ui.theme.text_faint);
 
-    ui.fill_round_rect(surface, rect, 5, ui.theme.surface);
-    ui.stroke_round_rect(surface, rect, 5, 1, if (active) ui.theme.accent else ui.theme.border);
-
-    const inner = rect.inset(6);
-    const clipped = surface.clipped(inner);
-    const visible = ui.truncate(&font, value, 13, inner.w);
-    const y = inner.y + @divTrunc(inner.h - font.line_height(13), 2);
-
-    font.draw(&clipped, inner.x, y, 13, visible, ui.theme.text);
-
-    if (active) {
-
-        const caret_x = inner.x + font.text_width(visible, 13) + 1;
-
-        surface.fill_rect(.{ .x = @min(caret_x, inner.x + inner.w - 1), .y = inner.y, .w = 1, .h = inner.h }, ui.theme.accent);
-
-    }
+    ui.paint_text_field(surface, &font, rect, buffer, "", active, active, 13);
 
 }
 
@@ -732,7 +811,7 @@ fn paint_summary(surface: *const gfx.Surface) void {
 
     switch (state) {
 
-        .idle => font.draw(surface, area.x + margin, y, 12, "Enter a host, port, and path, then press Go (or Enter).", ui.theme.text_faint),
+        .idle => font.draw(surface, area.x + margin, y, 12, "Enter a URL, then press Go (or Enter). Use Port for a non-default port.", ui.theme.text_faint),
 
         .running => font.draw(surface, area.x + margin, y, 12, "Fetching...", ui.theme.text_dim),
 

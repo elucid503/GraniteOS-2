@@ -1,6 +1,5 @@
-// Settings: desktop preferences for color theme and clock timezone. Changes apply immediately and persist to disk.
-
-const std = @import("std");
+// Settings: desktop preferences for color theme. Changes apply immediately and persist to disk. The clock
+// timezone is no longer set here - the Metrics service detects it automatically from the machine's IP at boot.
 
 const lib = @import("lib");
 
@@ -27,12 +26,6 @@ const swatch_size: i32 = 36;
 const theme_col_w: i32 = 88;
 const swatch_id_base: u32 = 100;
 
-const tz_minus_id: u32 = 200;
-const tz_plus_id: u32 = 201;
-const tz_step_minutes: i32 = 60;
-const tz_min_minutes: i32 = -12 * 60;
-const tz_max_minutes: i32 = 14 * 60;
-
 var font: lib.draw.text.Face = undefined;
 var page: ui.Page = .{ .font = &font };
 
@@ -55,7 +48,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(520, 300, 0, "Settings");
+    window = try connection.create_window(520, 200, 0, "Settings");
 
     paint();
 
@@ -99,13 +92,6 @@ fn click(x: i32, y: i32) void {
 
     const hit = page.hit(x, y);
 
-    if (hit == tz_minus_id or hit == tz_plus_id) {
-
-        adjust_tz(if (hit == tz_minus_id) -tz_step_minutes else tz_step_minutes);
-        return;
-
-    }
-
     if (hit < swatch_id_base or hit >= swatch_id_base + lib.prefs.theme_count) return;
 
     const col = hit - swatch_id_base;
@@ -114,25 +100,6 @@ fn click(x: i32, y: i32) void {
     lib.prefs.save();
     lib.prefs.broadcast_change(&connection);
     paint();
-
-}
-
-fn adjust_tz(delta: i32) void {
-
-    lib.prefs.tz_offset_minutes = std.math.clamp(lib.prefs.tz_offset_minutes + delta, tz_min_minutes, tz_max_minutes);
-
-    lib.prefs.save();
-    lib.prefs.broadcast_change(&connection);
-    paint();
-
-}
-
-fn format_tz_offset(buffer: []u8, minutes: i32) []const u8 {
-
-    const sign: u8 = if (minutes < 0) '-' else '+';
-    const magnitude: u32 = @intCast(@abs(minutes));
-
-    return std.fmt.bufPrint(buffer, "UTC{c}{d:0>2}:{d:0>2}", .{ sign, magnitude / 60, magnitude % 60 }) catch "UTC";
 
 }
 
@@ -224,49 +191,6 @@ fn paint() void {
 
     }
 
-    _ = page.label(content, "Clock timezone", .{
-
-        .size = 14,
-        .color = ui.theme.text,
-
-    });
-
-    const tz_row = page.box(content, .{
-
-        .direction = .row,
-        .gap = 10,
-        .align_cross = .center,
-
-    });
-
-    _ = page.button(tz_row, tz_minus_id, "-", .{
-
-        .width = .{ .px = 28 },
-        .height = .{ .px = 28 },
-        .size = 14,
-
-    });
-
-    var tz_buffer: [16]u8 = undefined;
-
-    _ = page.label(tz_row, format_tz_offset(&tz_buffer, lib.prefs.tz_offset_minutes), .{
-
-        .width = .{ .px = 84 },
-        .height = .{ .px = 16 },
-        .size = 13,
-        .color = ui.theme.text,
-        .center_text = true,
-
-    });
-
-    _ = page.button(tz_row, tz_plus_id, "+", .{
-
-        .width = .{ .px = 28 },
-        .height = .{ .px = 28 },
-        .size = 14,
-
-    });
-
     page.end();
     page.paint(surface);
 
@@ -280,7 +204,7 @@ fn update_cursor(x: i32, y: i32) void {
 
     const hit = page.hit(x, y);
 
-    if ((hit >= swatch_id_base and hit < swatch_id_base + lib.prefs.theme_count) or hit == tz_minus_id or hit == tz_plus_id) {
+    if (hit >= swatch_id_base and hit < swatch_id_base + lib.prefs.theme_count) {
 
         lib.cursor.set(&connection, .clicker);
         return;

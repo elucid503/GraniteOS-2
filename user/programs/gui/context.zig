@@ -244,6 +244,8 @@ fn handle_desktop(event: events.Event) void {
 
         },
 
+        events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
         events.kind_window_resize => {
 
             desktop.resize(@intCast(event.x), @intCast(event.y)) catch {};
@@ -578,7 +580,7 @@ fn prompt_key(code: u16) void {
 
     }
 
-    if (name_field.feed(bytes)) paint_desktop();
+    if (name_field.feed(bytes, keyboard.shift)) paint_desktop();
 
 }
 
@@ -596,7 +598,27 @@ fn prompt_click(x: i32, y: i32) void {
 
     }
 
-    if (cancel.contains(x, y)) close_prompt();
+    if (cancel.contains(x, y)) {
+
+        close_prompt();
+        return;
+
+    }
+
+    // Mirrors paint_prompt's layout: 16px padding, then the fixed-height title label, an 8px gap, then this
+    // field - deterministic regardless of what's laid out below it.
+    const field_rect = Rect{ .x = rect.x + 16, .y = rect.y + 38, .w = rect.w - 32, .h = 28 };
+
+    if (field_rect.contains(x, y)) {
+
+        const inner_w = field_rect.w - 2 * ui.field_pad;
+        const rel_x = x - field_rect.x - ui.field_pad;
+        const index = ui.field_click_index(&font, name_field.slice(), 13, name_field.cursor, inner_w, rel_x);
+
+        _ = name_field.set_cursor(index, keyboard.shift);
+        paint_desktop();
+
+    }
 
 }
 

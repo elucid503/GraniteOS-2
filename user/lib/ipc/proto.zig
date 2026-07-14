@@ -363,3 +363,21 @@ pub const socket = struct {
     pub const resolved: u64 = 64;
 
 };
+
+// Metrics interface: machine facts derived from the outside world. v1 carries only the timezone UTC offset,
+// looked up once at boot from a public IP-geolocation API over `lib.net`; the method table is deliberately its
+// own interface (rather than folded into an existing one) so later additions - network status, a refined
+// geolocation query, and so on - have a natural home without growing an unrelated server's protocol.
+
+pub const metrics = struct {
+
+    pub const interface_id: u32 = 0x4d45_5452; // "METR"
+    pub const version: u32 = 1;
+
+    pub const get_timezone: u16 = 1; // request: -   reply: status (status_*), offset minutes (data[2], signed via bitcast), country code packed as 2 ascii bytes (data[3])
+
+    pub const status_pending: u64 = 0; // lookup has not completed yet
+    pub const status_ready: u64 = 1; // offset/country below came from a successful lookup
+    pub const status_unavailable: u64 = 2; // lookup failed; offset defaults to 0 (UTC)
+
+};
