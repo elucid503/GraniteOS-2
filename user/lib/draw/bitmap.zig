@@ -1,6 +1,6 @@
-// Bitmap-font text rendering (07-userspace-ddd.md Section 12.6): parses real console font files in the open
-// PC Screen Font formats (PSF1 and PSF2 - the Spleen faces in user/fonts/ ship as one of each), resolves the
-// ASCII range through the font's unicode table, and draws 1-bit glyphs with word-wrapped box layout.
+// Bitmap-font text rendering (07-userspace-ddd.md Section 12.6): parses console font files in the open
+// PC Screen Font formats (PSF1 and PSF2), resolves the ASCII range through the font's unicode table, and
+// draws 1-bit glyphs with word-wrapped box layout. GUI mono text now uses TrueType (JetBrains Mono).
 
 const std = @import("std");
 

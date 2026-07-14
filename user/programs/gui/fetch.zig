@@ -64,7 +64,9 @@ const Focus = enum {
 };
 
 var font: lib.draw.text.Face = undefined;
-var mono: lib.draw.bitmap.Font = undefined;
+var mono: lib.draw.text.Face = undefined;
+
+const mono_px: u32 = 13;
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
@@ -708,7 +710,7 @@ fn text_columns() usize {
     const area = textarea_rect();
     const usable = area.w - 12 - ui.scrollbar_width - 4;
 
-    return @intCast(@max(1, @divTrunc(usable, @as(i32, @intCast(mono.width)))));
+    return @intCast(@max(1, @divTrunc(usable, mono.mono_width(mono_px))));
 
 }
 
@@ -717,7 +719,7 @@ fn visible_rows() usize {
     const area = textarea_rect();
     const usable = area.h - 12;
 
-    return @intCast(@max(1, @divTrunc(usable, mono.line_height())));
+    return @intCast(@max(1, @divTrunc(usable, mono.mono_height(mono_px))));
 
 }
 
@@ -877,7 +879,7 @@ fn paint_textarea(surface: *const gfx.Surface) void {
 
     if (text.len == 0) {
 
-        mono.draw(&clipped, inner.x, inner.y, "Response will appear here.", ui.theme.text_faint);
+        mono.draw_mono(&clipped, inner.x, inner.y, mono_px, "Response will appear here.", ui.theme.text_faint);
 
     } else {
 
@@ -898,7 +900,7 @@ fn paint_textarea(surface: *const gfx.Surface) void {
 fn paint_response_lines(surface: *const gfx.Surface, inner: Rect, text: []const u8) void {
 
     const columns = text_columns();
-    const line_h = mono.line_height();
+    const line_h = mono.mono_height(mono_px);
     const shown_rows = visible_rows();
 
     var row: usize = 0;
@@ -921,7 +923,7 @@ fn paint_response_lines(surface: *const gfx.Surface, inner: Rect, text: []const 
                 const clipped_line = line[0..@min(line.len, columns)];
                 const color = if (row == 0) status_line_color(text) else ui.theme.text;
 
-                mono.draw(surface, inner.x, inner.y + @as(i32, @intCast(shown)) * line_h, clipped_line, color);
+                mono.draw_mono(surface, inner.x, inner.y + @as(i32, @intCast(shown)) * line_h, mono_px, clipped_line, color);
 
                 shown += 1;
 

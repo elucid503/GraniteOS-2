@@ -8,7 +8,6 @@ const cap = @import("../cap/cap.zig");
 const bundle_mod = @import("../boot/bundle.zig");
 const sys = @import("../syscall/sys.zig");
 
-const font_mod = @import("../draw/bitmap.zig");
 const ttf = @import("../draw/text.zig");
 const window = @import("window.zig");
 
@@ -65,11 +64,11 @@ pub fn ui_font(bundle: *const bundle_mod.Bundle) Error!ttf.Face {
 
 }
 
-/// The fixed-width console face (Spleen 8x16) the terminal renders its cell grid with.
-pub fn console_font(bundle: *const bundle_mod.Bundle) Error!font_mod.Font {
+/// The fixed-width console face (JetBrains Mono) for the terminal cell grid and HTTP response bodies.
+pub fn console_font(bundle: *const bundle_mod.Bundle) Error!ttf.Face {
 
-    const bytes = bundle.find("font-console") orelse return error.NotFound;
+    const bytes = bundle.find("font-mono") orelse return error.NotFound;
 
-    return font_mod.Font.parse(bytes) catch error.Invalid;
+    return ttf.Face.parse(bytes) catch error.Invalid;
 
 }

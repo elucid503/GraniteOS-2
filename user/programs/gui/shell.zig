@@ -33,13 +33,15 @@ comptime {
 const margin: i32 = 8;
 const max_cols = 128;
 const max_rows = 48;
+const max_scrollback = 512;
+const mono_px: u32 = 13;
 
 const tty_workers = 3;
 const worker_stack_pages = 16;
 const page_size = 4096;
 const shutdown_method: u64 = 0xffff_ffff_ffff_fffe;
 
-var console: lib.draw.bitmap.Font = undefined;
+var console: lib.draw.text.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
@@ -63,11 +65,101 @@ var marble_cwd_len: usize = 0;
 
 var screen_lock: ipc.Lock = .{};
 
+// Row-major storage with a fixed stride of `max_cols` so a resize only changes the visible
+// width/height - not the buffer layout. Using a live `cols` stride was what scrambled text on maximize.
 var cells: [max_rows * max_cols]u8 = [_]u8{' '} ** (max_rows * max_cols);
 var cols: usize = 80;
 var rows: usize = 24;
 var cx: usize = 0;
 var cy: usize = 0;
+
+// Scrollback ring: lines that have scrolled off the top of the live screen. View offset is measured from
+// the oldest history line (scrollback + live), matching notepad's scroll_row model.
+var scrollback: [max_scrollback * max_cols]u8 = [_]u8{' '} ** (max_scrollback * max_cols);
+var scrollback_head: usize = 0;
+var scrollback_count: usize = 0;
+var scroll_row: usize = 0;
+var follow_bottom: bool = true;
+var dragging_scrollbar = false;
+
+fn cell_at(row: usize, col: usize) usize {
+
+    return row * max_cols + col;
+
+}
+
+fn history_len() usize {
+
+    return scrollback_count + rows;
+
+}
+
+fn max_scroll() usize {
+
+    const total = history_len();
+
+    return if (total > rows) total - rows else 0;
+
+}
+
+fn at_bottom() bool {
+
+    return scroll_row >= max_scroll();
+
+}
+
+fn stick_bottom() void {
+
+    follow_bottom = true;
+    scroll_row = max_scroll();
+
+}
+
+fn clamp_scroll() void {
+
+    const max = max_scroll();
+
+    if (scroll_row > max) scroll_row = max;
+
+    follow_bottom = scroll_row >= max;
+
+}
+
+fn push_scrollback_line(line: []const u8) void {
+
+    const dst = scrollback[scrollback_head * max_cols ..][0..max_cols];
+
+    @memset(dst, ' ');
+
+    const n = @min(line.len, max_cols);
+
+    @memcpy(dst[0..n], line[0..n]);
+
+    scrollback_head = (scrollback_head + 1) % max_scrollback;
+
+    if (scrollback_count < max_scrollback) scrollback_count += 1;
+
+}
+
+/// Logical history row 0 is the oldest scrollback line; the live screen follows after.
+fn history_line(hist_row: usize) []const u8 {
+
+    if (hist_row < scrollback_count) {
+
+        const oldest = (scrollback_head + max_scrollback - scrollback_count) % max_scrollback;
+        const index = (oldest + hist_row) % max_scrollback;
+
+        return scrollback[index * max_cols ..][0..max_cols];
+
+    }
+
+    const live = hist_row - scrollback_count;
+
+    if (live >= rows) return cells[0..max_cols];
+
+    return cells[cell_at(live, 0)..][0..max_cols];
+
+}
 
 const EscState = enum {
 
@@ -166,21 +258,93 @@ fn run() !void {
 
 fn resize_grid() void {
 
-    const usable_w = @as(i32, @intCast(window.surface.width)) - 2 * margin;
+    const usable_w = @as(i32, @intCast(window.surface.width)) - 2 * margin - ui.scrollbar_width - 4;
     const usable_h = @as(i32, @intCast(window.surface.height)) - 2 * margin;
+    const cell_w = console.mono_width(mono_px);
+    const cell_h = console.mono_height(mono_px);
 
-    cols = @min(max_cols, @as(usize, @intCast(@max(1, @divTrunc(usable_w, @as(i32, @intCast(console.width)))))));
-    rows = @min(max_rows, @as(usize, @intCast(@max(1, @divTrunc(usable_h, @as(i32, @intCast(console.height)))))));
+    cols = @min(max_cols, @as(usize, @intCast(@max(1, @divTrunc(usable_w, cell_w)))));
+    rows = @min(max_rows, @as(usize, @intCast(@max(1, @divTrunc(usable_h, cell_h)))));
+
+    // Storage stride is fixed at max_cols, so existing lines stay put; only the cursor must clamp.
+    cx = @min(cx, cols - 1);
+    cy = @min(cy, rows - 1);
+
+    if (follow_bottom) stick_bottom() else clamp_scroll();
+
+}
+
+fn scrollbar_rect() gfx.Rect {
+
+    const height: i32 = @intCast(window.surface.height);
+
+    return .{
+
+        .x = @as(i32, @intCast(window.surface.width)) - ui.scrollbar_width - 2,
+        .y = margin,
+        .w = ui.scrollbar_width,
+        .h = @max(0, height - 2 * margin),
+
+    };
+
+}
+
+fn scroll_model() ui.Scroll {
+
+    return .{
+
+        .offset = @intCast(scroll_row),
+        .content = @intCast(history_len()),
+        .viewport = @intCast(rows),
+
+    };
+
+}
+
+fn wheel(delta: i64) bool {
+
+    screen_lock.acquire();
+    defer screen_lock.release();
+
+    const before = scroll_row;
+
+    scroll_row = @intCast(scroll_model().wheel(delta, 3));
+    follow_bottom = at_bottom();
+
+    return scroll_row != before;
+
+}
+
+fn drag_scrollbar(y: i32) bool {
+
+    screen_lock.acquire();
+    defer screen_lock.release();
+
+    const track = scrollbar_rect();
+    const before = scroll_row;
+
+    scroll_row = @intCast(scroll_model().offset_at(track.h, y - track.y));
+    follow_bottom = at_bottom();
+
+    return scroll_row != before;
 
 }
 
 fn update_cursor(x: i32, y: i32) void {
 
+    if (scrollbar_rect().contains(x, y) and max_scroll() > 0) {
+
+        lib.cursor.set(&connection, .pointer);
+
+        return;
+
+    }
+
     const content = gfx.Rect{
 
         .x = margin,
         .y = margin,
-        .w = @as(i32, @intCast(window.surface.width)) - 2 * margin,
+        .w = @as(i32, @intCast(window.surface.width)) - 2 * margin - ui.scrollbar_width - 4,
         .h = @as(i32, @intCast(window.surface.height)) - 2 * margin,
 
     };
@@ -215,13 +379,7 @@ fn handle(event: events.Event) bool {
             window.resize(@intCast(event.x), @intCast(event.y)) catch {};
 
             screen_lock.acquire();
-
             resize_grid();
-
-            // Keep the cursor inside the reflowed grid so the next write stays in bounds.
-            cx = @min(cx, cols - 1);
-            cy = @min(cy, rows - 1);
-
             screen_lock.release();
 
             paint();
@@ -242,7 +400,48 @@ fn handle(event: events.Event) bool {
 
         },
 
-        events.kind_pointer_move => update_cursor(event.x, event.y),
+        events.kind_button_down => {
+
+            if (event.code == events.button_left) {
+
+                if (scrollbar_rect().contains(event.x, event.y) and max_scroll() > 0) {
+
+                    dragging_scrollbar = true;
+                    _ = drag_scrollbar(event.y);
+                    paint();
+
+                }
+
+            }
+
+        },
+
+        events.kind_button_up => {
+
+            if (event.code == events.button_left) dragging_scrollbar = false;
+
+        },
+
+        events.kind_pointer_move => {
+
+            if (dragging_scrollbar) {
+
+                if (drag_scrollbar(event.y)) paint();
+                lib.cursor.set(&connection, .pointer);
+
+            } else {
+
+                update_cursor(event.x, event.y);
+
+            }
+
+        },
+
+        events.kind_scroll => {
+
+            if (wheel(event.value)) paint();
+
+        },
 
         events.kind_prefs_changed => {
 
@@ -267,6 +466,16 @@ fn key(code: u16) void {
     const bytes = keyboard.bytes(code, &buffer);
 
     if (bytes.len == 0) return;
+
+    // Typing jumps back to the live prompt (same idea as notepad keeping the caret in view).
+    if (!at_bottom()) {
+
+        screen_lock.acquire();
+        stick_bottom();
+        screen_lock.release();
+        paint();
+
+    }
 
     input_lock.acquire();
 
@@ -615,7 +824,7 @@ fn feed_normal(byte: u8) void {
 
 fn put(byte: u8) void {
 
-    cells[cy * cols + cx] = byte;
+    cells[cell_at(cy, cx)] = byte;
     cx += 1;
 
     if (cx >= cols) {
@@ -642,15 +851,24 @@ fn line_feed() void {
 
 fn scroll_up() void {
 
+    // Preserve the outgoing top line in the scrollback ring.
+    push_scrollback_line(cells[cell_at(0, 0)..][0..max_cols]);
+
     var row: usize = 1;
 
     while (row < rows) : (row += 1) {
 
-        @memcpy(cells[(row - 1) * cols .. (row - 1) * cols + cols], cells[row * cols .. row * cols + cols]);
+        const dst = cell_at(row - 1, 0);
+        const src = cell_at(row, 0);
+
+        @memcpy(cells[dst .. dst + max_cols], cells[src .. src + max_cols]);
 
     }
 
-    @memset(cells[(rows - 1) * cols .. (rows - 1) * cols + cols], ' ');
+    @memset(cells[cell_at(rows - 1, 0) .. cell_at(rows - 1, 0) + max_cols], ' ');
+
+    // Pin the view to the live bottom when the user was already following output.
+    if (follow_bottom) stick_bottom();
 
 }
 
@@ -661,14 +879,14 @@ fn execute_csi(final: u8) void {
         'J' => {
 
             // Erase display (default and "2" both clear the whole grid here).
-            @memset(cells[0 .. rows * cols], ' ');
+            @memset(cells[0 .. rows * max_cols], ' ');
 
         },
 
         'K' => {
 
-            // Erase from the cursor to the end of the line.
-            @memset(cells[cy * cols + cx .. cy * cols + cols], ' ');
+            // Erase from the cursor to the end of the visible line.
+            @memset(cells[cell_at(cy, cx) .. cell_at(cy, cols)], ' ');
 
         },
 
@@ -732,7 +950,7 @@ fn parse_number(index: *usize) usize {
 
 }
 
-// Rendering: snapshot the grid under the lock, then draw it row by row and overlay the cursor.
+// Rendering: snapshot the visible history band under the lock, then draw it and the cursor / scrollbar.
 
 var snapshot: [max_rows * max_cols]u8 = undefined;
 
@@ -744,58 +962,85 @@ fn paint() void {
 
     screen_lock.acquire();
 
-    @memcpy(snapshot[0 .. rows * cols], cells[0 .. rows * cols]);
+    if (follow_bottom) stick_bottom() else clamp_scroll();
 
     const snap_cx = cx;
     const snap_cy = cy;
+    const snap_cols = cols;
+    const snap_rows = rows;
+    const snap_scroll = scroll_row;
+    const snap_sb_count = scrollback_count;
+    const view = scroll_model();
+
+    var row: usize = 0;
+
+    while (row < snap_rows) : (row += 1) {
+
+        const hist = snap_scroll + row;
+        const line = history_line(hist);
+        const dst = cell_at(row, 0);
+
+        @memcpy(snapshot[dst .. dst + max_cols], line[0..max_cols]);
+
+    }
 
     screen_lock.release();
 
     const surface = &window.surface;
-    const char_w: i32 = @intCast(console.width);
-    const char_h: i32 = @intCast(console.height);
+    const char_w = console.mono_width(mono_px);
+    const char_h = console.mono_height(mono_px);
 
     surface.fill(bg);
 
-    var row: usize = 0;
+    row = 0;
 
-    while (row < rows) : (row += 1) {
+    while (row < snap_rows) : (row += 1) {
 
         const y = margin + @as(i32, @intCast(row)) * char_h;
+        const line = snapshot[cell_at(row, 0) .. cell_at(row, 0) + snap_cols];
 
-        console.draw(surface, margin, y, snapshot[row * cols .. row * cols + cols], fg);
+        console.draw_mono(surface, margin, y, mono_px, line, fg);
 
     }
 
-    // Cursor: a solid block when focused, an outline when not.
+    // Cursor only when the live cursor row is in the current view band.
+    const cursor_hist = snap_sb_count + snap_cy;
 
-    const cursor_rect = gfx.Rect{
+    if (cursor_hist >= snap_scroll and cursor_hist < snap_scroll + snap_rows) {
 
-        .x = margin + @as(i32, @intCast(snap_cx)) * char_w,
-        .y = margin + @as(i32, @intCast(snap_cy)) * char_h,
+        const view_row = cursor_hist - snap_scroll;
 
-        .w = char_w,
-        .h = char_h,
+        const cursor_rect = gfx.Rect{
 
-    };
+            .x = margin + @as(i32, @intCast(snap_cx)) * char_w,
+            .y = margin + @as(i32, @intCast(view_row)) * char_h,
 
-    if (focused) {
+            .w = char_w,
+            .h = char_h,
 
-        surface.fill_rect(cursor_rect, cursor_color);
+        };
 
-        const under = snapshot[snap_cy * cols + snap_cx];
+        if (focused) {
 
-        if (under >= 0x20 and under < 0x7f) {
+            surface.fill_rect(cursor_rect, cursor_color);
 
-            console.draw(surface, cursor_rect.x, cursor_rect.y, &[_]u8{under}, bg);
+            const under = snapshot[cell_at(view_row, snap_cx)];
+
+            if (under >= 0x20 and under < 0x7f) {
+
+                console.draw_mono(surface, cursor_rect.x, cursor_rect.y, mono_px, &[_]u8{under}, bg);
+
+            }
+
+        } else {
+
+            surface.stroke_rect(cursor_rect, 1, cursor_color);
 
         }
 
-    } else {
-
-        surface.stroke_rect(cursor_rect, 1, cursor_color);
-
     }
+
+    ui.scrollbar(surface, scrollbar_rect(), view);
 
     window.present_all() catch {};
 

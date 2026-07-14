@@ -198,8 +198,8 @@ pub const Raster = struct {
         const dev_x = @abs(2 * b.x - a.x - c.x);
         const dev_y = @abs(2 * b.y - a.y - c.y);
 
-        // ~3/8 px flatness: sharper than 1/2 px without exploding edge counts on icons.
-        if (depth >= max_depth or (dev_x <= 24 and dev_y <= 24)) {
+        // ~1/4 px flatness: keeps small mono stems and icon arcs from faceting without edge blow-up.
+        if (depth >= max_depth or (dev_x <= 16 and dev_y <= 16)) {
 
             self.add_edge(a, c, x_min, x_max);
 
@@ -223,7 +223,7 @@ pub const Raster = struct {
         const dev2_x = @abs(3 * c.x - a.x - 2 * d.x);
         const dev2_y = @abs(3 * c.y - a.y - 2 * d.y);
 
-        if (depth >= max_depth or (@max(dev1_x, dev2_x) <= 32 and @max(dev1_y, dev2_y) <= 32)) {
+        if (depth >= max_depth or (@max(dev1_x, dev2_x) <= 20 and @max(dev1_y, dev2_y) <= 20)) {
 
             self.add_edge(a, d, x_min, x_max);
 

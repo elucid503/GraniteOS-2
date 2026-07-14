@@ -151,7 +151,7 @@ pub fn build(b: *std.Build) void {
     // GUI assets ride in the bundle as plain modules.
 
     add_module(bundle_run, "font-ttf", b.path("user/fonts/InterVariable.ttf"));
-    add_module(bundle_run, "font-console", b.path("user/fonts/spleen-8x16.psfu"));
+    add_module(bundle_run, "font-mono", b.path("user/fonts/JetBrainsMono-Regular.ttf"));
 
     // Theme wallpapers (user/images/wallpaper/default); one PNG per color theme.
     add_module(bundle_run, "wp-monochrome", b.path("user/images/wallpaper/default/monochrome.png"));

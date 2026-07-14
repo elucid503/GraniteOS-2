@@ -1,7 +1,7 @@
 // TrueType text engine (M10 GUI rewrite): parses cmap/metrics/loca/glyf, converts quadratic outlines into
-// 26.6 paths, and fills them with the analytic rasterizer. The pen advances in 26.6 - fractional advances
-// accumulate instead of rounding per glyph - and each glyph rasterizes at one of four subpixel x-phases, so
-// spacing and stems stay correct to the subpixel. Rasterized glyphs are cached as 8-bit coverage bitmaps.
+// 26.6 paths, and fills them with the analytic rasterizer. Proportional text advances in 26.6 so fractional
+// advances accumulate, and each glyph rasterizes at one of four subpixel x-phases. Monospace text snaps to
+// an integer cell grid (phase 0) so columns stay crisp. Rasterized glyphs are cached as 8-bit coverage.
 
 const std = @import("std");
 
@@ -121,10 +121,47 @@ pub const Face = struct {
 
     }
 
+    /// Fixed cell width for a monospace face: 'M' advance rounded to nearest pixel.
+    pub fn mono_width(self: *const Face, px: u32) i32 {
+
+        const advance_fx = self.advance(self.glyph_index('M'), px);
+
+        return @max(1, @divFloor(advance_fx + 32, 64));
+
+    }
+
+    /// Fixed cell height for a monospace grid: ascent-to-descent span, no extra line gap.
+    pub fn mono_height(self: *const Face, px: u32) i32 {
+
+        const span = @as(i32, self.ascent) - @as(i32, self.descent);
+
+        return @max(@as(i32, @intCast(px)), scale_px(span, px, self.units_per_em));
+
+    }
+
     /// Draw with the line box's top-left at (x, y) in pixels; the compatibility entry point.
     pub fn draw(self: *const Face, surface: *const Surface, x: i32, y: i32, px: u32, text: []const u8, color: draw_mod.Color) void {
 
         self.draw_fx(surface, path_mod.from_px(x), path_mod.from_px(y + self.ascent_px(px)), px, text, color);
+
+    }
+
+    /// Draw monospaced text on an integer cell grid. Each glyph is placed at phase 0 so vertical stems
+    /// align across columns; the pen steps by `mono_width` rather than the glyph's fractional advance.
+    pub fn draw_mono(self: *const Face, surface: *const Surface, x: i32, y: i32, px: u32, text: []const u8, color: draw_mod.Color) void {
+
+        const cell = self.mono_width(px);
+        const baseline = y + self.ascent_px(px);
+        var pen = x;
+        var offset: usize = 0;
+
+        while (next_codepoint(text, &offset)) |codepoint| {
+
+            self.draw_glyph(surface, self.glyph_index(codepoint), path_mod.from_px(pen), baseline, px, color);
+
+            pen += cell;
+
+        }
 
     }
 
@@ -679,9 +716,11 @@ fn emit_contour(path: *Path, xs: []const i32, ys: []const i32, on: []const bool)
 
 }
 
-// Glyph coverage cache: keyed by (glyph, px, subpixel phase). One face is used per process from its render
-// thread, so a static direct-mapped table with linear probing needs no locking.
+// Glyph coverage cache: keyed by (face, glyph, px, subpixel phase). Apps may load more than one face in a
+// process (UI + mono), so the face identity is mixed into the key. One render thread per process, no locks.
 
+// Sized to keep GUI ELF images under Flint's default 4 MiB child_budget (welcome/taskbar). Growing this
+// array without raising that budget makes those processes fail to spawn while larger-budget apps still work.
 const cache_max_px: u32 = 32;
 const cache_box_w: u32 = 40;
 const cache_box_h: u32 = 46;
@@ -705,9 +744,22 @@ var glyph_meta = [_]GlyphEntry{.{}} ** cache_capacity;
 var glyph_coverage: [cache_capacity][cache_box_w * cache_box_h]u8 = undefined;
 var glyph_clock: u32 = 0;
 
+fn face_tag(face: *const Face) u32 {
+
+    // Mix the font blob address so Inter and JetBrains Mono never share a cache slot by glyph id alone.
+    return @truncate(@intFromPtr(face.bytes.ptr) *% 0x9e3779b1);
+
+}
+
+fn glyph_key(face: *const Face, glyph: u16, px: u32, phase: u32) u32 {
+
+    return face_tag(face) ^ (@as(u32, glyph) << 10) ^ (px << 2) ^ phase;
+
+}
+
 fn cached_glyph(face: *const Face, glyph: u16, px: u32, phase: u32) ?usize {
 
-    const key = (@as(u32, glyph) << 8) | (px << 2) | phase;
+    const key = glyph_key(face, glyph, px, phase);
     const start = key % cache_capacity;
 
     var probe: usize = 0;
@@ -715,7 +767,7 @@ fn cached_glyph(face: *const Face, glyph: u16, px: u32, phase: u32) ?usize {
     var oldest_slot = start;
     var oldest_use: u32 = std.math.maxInt(u32);
 
-    while (probe < 12) : (probe += 1) {
+    while (probe < 16) : (probe += 1) {
 
         const entry = &glyph_meta[slot];
 
@@ -827,14 +879,14 @@ fn rasterize_into(face: *const Face, slot: usize, glyph: u16, px: u32, phase: u3
 
 }
 
-// Stem darkening for UI-size glyphs. Unhinted, an upright stem often lands as a ~40%-covered column split
-// across two pixels, which reads as speckle. This lifts partial coverage toward solid without moving any
-// edge: fully-on and fully-off cells are untouched, so the glyph shape, subpixel x-phase, and fractional
-// advances are all preserved. Only midtones (the thin stems) thicken, and it is gated to small sizes so
-// larger text stays undistorted.
+// Stem darkening for UI- and code-size glyphs. Unhinted, an upright stem often lands as a ~40%-covered
+// column split across two pixels, which reads as speckle. This lifts partial coverage toward solid without
+// moving any edge: fully-on and fully-off cells are untouched, so the glyph shape, subpixel x-phase, and
+// fractional advances are all preserved. Only midtones (the thin stems) thicken. Gated to small sizes so
+// larger display text stays undistorted; the gain is a touch higher for mono code sizes (JetBrains Mono).
 
-const stem_darken_max_px: u32 = 14;
-const stem_gain: u32 = 192;
+const stem_darken_max_px: u32 = 16;
+const stem_gain: u32 = 220;
 
 fn darken_stems(coverage: []u8) void {
 
@@ -844,6 +896,7 @@ fn darken_stems(coverage: []u8) void {
 
         if (a == 0 or a == 255) continue;
 
+        // Quadratic lift: strongest around half coverage (split stems), gentle near the extremes.
         const lifted = a + @divTrunc(a * (255 - a) * stem_gain, 255 * 255);
 
         cell.* = @intCast(@min(@as(u32, 255), lifted));
@@ -1073,5 +1126,27 @@ test "stem darkening lifts midtones and pins the extremes" {
 test "truncated fonts are rejected" {
 
     try testing.expectError(error.BadFont, Face.parse(&[_]u8{ 1, 2, 3 }));
+
+}
+
+test "JetBrains Mono parses as a monospace face" {
+
+    const allocator = testing.allocator;
+    const bytes = std.fs.cwd().readFileAlloc(allocator, "user/fonts/JetBrainsMono-Regular.ttf", 512 * 1024) catch return error.SkipZigTest;
+
+    defer allocator.free(bytes);
+
+    const face = try Face.parse(bytes);
+
+    try testing.expect(face.units_per_em > 0);
+    try testing.expect(face.glyph_count > 0);
+
+    const px: u32 = 13;
+    const cell = face.mono_width(px);
+
+    try testing.expect(cell >= 6 and cell <= 12);
+    try testing.expectEqual(cell, @divFloor(face.advance(face.glyph_index('i'), px) + 32, 64));
+    try testing.expectEqual(cell, @divFloor(face.advance(face.glyph_index('W'), px) + 32, 64));
+    try testing.expect(face.mono_height(px) >= @as(i32, @intCast(px)));
 
 }
