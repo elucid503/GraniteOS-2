@@ -1,6 +1,4 @@
-// Window management policy (07-userspace-ddd.md Section 12.3), kept pure so it host-tests without a display:
-// the window table, stacking order, focus, hit testing, drag arithmetic, and screen-resize clamping. The
-// compositor in main.zig owns everything with a side effect (surfaces, rendering, IPC).
+// Window management policy (07-userspace-ddd.md Section 12.3)
 
 const std = @import("std");
 
@@ -512,8 +510,7 @@ pub const Manager = struct {
 
     }
 
-    /// Vertical space a maximized window must leave clear at the bottom: the panel itself plus the
-    /// margin that floats it above the screen edge.
+    /// Vertical space a maximized window must leave clear at the bottom: the panel itself plus the margin that floats it above the screen edge.
     fn reserved_bottom(self: *const Manager) i32 {
 
         return self.panel_height() + panel_margin;

@@ -1,8 +1,4 @@
-// Input server (07-userspace-ddd.md Section 12.4): merges every virtio-input transport (QEMU's keyboard and
-// tablet) into one normalized event stream. The per-device drivers live in-process - each device is a grant
-// pair (MMIO window + Interrupt) with its own eventq - and delivery to the client rides the shared event ring
-// + Notification of the Input interface (Section 10.8), so everyone blocks instead of polling. Pointer
-// positions are normalized to proto.input.pointer_range; the compositor owns scaling, focus, and routing.
+// Input server (07-userspace-ddd.md Section 12.4)
 
 const lib = @import("lib");
 

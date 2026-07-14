@@ -1,9 +1,5 @@
-// Display server / compositor (M10 GUI rewrite): the policy layer over the display driver. It owns the
-// screen, allocates window surfaces as shared Regions (surfaces.zig), composites them into the scanout with
-// damage tracking through the analytic-AA renderer (render.zig), and manages stacking, focus, dragging, and
-// interactive resize (manager.zig). Input arrives over the input server's event ring; the hardware cursor
-// plane means pointer motion costs one IPC, not a recomposite.
-//
+// Display server / compositor (part of the M10 GUI rewrite)
+
 const std = @import("std");
 
 const lib = @import("lib");
@@ -123,8 +119,7 @@ var drag_id: u32 = 0;
 var drag_dx: i32 = 0;
 var drag_dy: i32 = 0;
 
-// Interactive resize draws a rubber-band outline while the grip is held; the surface reallocates once, on
-// release, so a drag never churns a fresh Region per pointer move.
+// Interactive resize draws a rubber-band outline while the grip is held.
 
 var resize_id: u32 = 0;
 var resize_outline: Rect = Rect.empty;
@@ -950,10 +945,11 @@ fn drain_input() void {
 
             events.kind_pointer_move => {
 
-                // Coalesce motion: only the last sample in this wake is applied. Intermediate
-                // samples would union damage along the whole path and thrash the compositor.
+                // Coalesces motion by only using the last sample...
+
                 pointer_x = scale(event.x, screen_width);
                 pointer_y = scale(event.y, screen_height);
+
                 moved = true;
                 motion_pending = true;
 
@@ -1033,7 +1029,7 @@ fn handle_pointer_move() void {
 
     }
 
-    // Skip chrome hit-testing while dragging/resizing - it only matters for idle cursor shape.
+    // Skips chrome hit-testing while dragging/resizing. Only matters for idle.
     update_chrome_cursor();
 
     if (window_under_pointer()) |window| {
@@ -1160,8 +1156,7 @@ fn handle_button_up(event: events.Event) void {
 
 }
 
-// The proposed content extents for the window whose grip is dragged: the pointer sets the frame's
-// bottom-right, clamped exactly as the commit will clamp, so the outline matches the final size.
+// The pointer sets the frame's bottom-right, clamped exactly as the commit will clamp, so the outline matches the final size.
 
 fn resize_target(window: *const Window) struct { width: u32, height: u32 } {
 
@@ -1323,9 +1318,7 @@ fn scale(normalized: i32, extent: u32) i32 {
 
 }
 
-// A mode change: refetch the mode, remap the scanout, rebuild the back buffer, resize every window whose
-// content tracks the screen, tell those clients, repaint the world. This is what keeps the taskbar and
-// desktop chrome alive across host window resizes.
+// On mode change, we refetch the mode, remap the scanout, rebuild the back buffer, resize every window whose content exceeds new bounds. We must notify owners.
 
 fn handle_mode_change() void {
 
@@ -1431,8 +1424,7 @@ fn composite() !void {
 
         }
 
-    // The resize rubber band rides above every window; moves always damage its band, so restroking it each
-    // pass keeps the fed-back scanout consistent.
+        // The resize 'rubber band' rides above every window, and moves always damage its band, so restroking it each pass keeps the fed-back scanout consistent.
 
         if (resize_id != 0 and !resize_outline.is_empty()) {
 
@@ -1492,7 +1484,8 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     if (window.decorated()) {
 
-        // Grip is idle-only chrome; skip during drag/resize to save a few stroke lines per frame.
+        // Grip is idle-only chrome; skip during drag/resize to save a few stroke lines per frame
+
         if (drag_id == 0 and resize_id == 0) render.draw_resize_grip(&view, window, theme.title_blurred);
         render.draw_frame_border(&view, window, theme.border);
 

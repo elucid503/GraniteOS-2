@@ -1,8 +1,4 @@
-// Window surface store (M10 GUI rewrite): every shared pixel Region a client renders into is owned here, one
-// slot per manager window slot. All allocation and release funnels through this table - create, resize,
-// destroy, and session eviction all land on the same idempotent release path - so a crashed or misbehaving
-// client can never leak a mapping or leave the compositor pointing at freed pixels. Sizes are validated and
-// the byte math is overflow-checked before any Region is created.
+// Window surface store (part of the M10 GUI rewrite)
 
 const std = @import("std");
 
