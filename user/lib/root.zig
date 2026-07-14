@@ -32,6 +32,7 @@ pub const fs = @import("fs/fs.zig");
 pub const netframe = @import("net/frame.zig");
 pub const netaddr = @import("net/addr.zig");
 pub const net = @import("net/net.zig");
+pub const url = @import("net/url.zig");
 pub const audio = @import("audio/audio.zig");
 pub const wav = @import("audio/wav.zig");
 pub const sysinfo = @import("sysinfo.zig");

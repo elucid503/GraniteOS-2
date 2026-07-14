@@ -5,6 +5,7 @@ const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
 const stream = @import("../io/stream.zig");
 const sys = @import("../syscall/sys.zig");
+const netaddr = @import("addr.zig");
 
 const Handle = cap.Handle;
 const Error = sys.Error;
@@ -27,16 +28,69 @@ pub const Socket = struct {
 
         errdefer socket.close();
 
-        _ = try ipc.request(socket.endpoint, proto.socket.connect, &.{ socket.sid, addr, port }, &.{});
+        return finish_connect(socket, addr, port);
+
+    }
+
+    /// Like `connect`, but takes a hostname and resolves it to an IPv4 address through netstack's DNS resolver.
+    pub fn connect_host(authority: Handle, name: []const u8, port: u16) Error!Socket {
+
+        if (netaddr.parse_ipv4(name)) |addr| return connect(authority, addr, port);
+
+        var socket = try open(try stream.lookup_endpoint("netstack"), authority);
+
+        errdefer socket.close();
+
+        const addr = try socket.resolve(name);
+
+        return finish_connect(socket, addr, port);
+
+    }
+
+    fn finish_connect(socket: Socket, addr: u32, port: u16) Error!Socket {
+
+        var result = socket;
+
+        _ = try ipc.request(result.endpoint, proto.socket.connect, &.{ result.sid, addr, port }, &.{});
 
         while (true) {
 
-            const bits = try socket.poll_bits();
+            const bits = try result.poll_bits();
 
             if (bits & proto.socket.err != 0) return error.Gone;
-            if (bits & proto.socket.connected != 0) return socket;
+            if (bits & proto.socket.connected != 0) return result;
 
-            _ = try sys.wait(socket.readiness);
+            _ = try sys.wait(result.readiness);
+
+        }
+
+    }
+
+    /// Resolve `name` to an IPv4 address through netstack's DNS resolver, reusing this socket's already-attached session buffer and readiness Notification.
+    pub fn resolve(self: *Socket, name: []const u8) Error!u32 {
+
+        if (name.len > buffer_size) return error.Invalid;
+
+        const dest: [*]u8 = @ptrFromInt(self.base);
+
+        @memcpy(dest[0..name.len], name);
+
+        while (true) {
+
+            const reply = ipc.request(self.endpoint, proto.socket.resolve, &.{ 0, name.len }, &.{}) catch |failure| switch (failure) {
+
+                error.WouldBlock => {
+
+                    _ = try sys.wait(self.readiness);
+                    continue;
+
+                },
+
+                else => return failure,
+
+            };
+
+            return @intCast(reply.data[1]);
 
         }
 

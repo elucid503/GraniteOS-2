@@ -94,7 +94,6 @@ var error_message: [96]u8 = undefined;
 var error_len: usize = 0;
 var elapsed_ms: u64 = 0;
 
-var request_addr: u32 = 0;
 var request_port: u16 = 0;
 var request_path: [path_storage_size]u8 = undefined;
 var request_path_len: usize = 0;
@@ -358,12 +357,12 @@ fn start_fetch() void {
 
     const ip_text = ip_buffer.slice();
 
-    const addr = lib.netaddr.parse_ipv4(ip_text) orelse {
+    if (ip_text.len == 0) {
 
-        fail("invalid IPv4 address");
+        fail("invalid host");
         return;
 
-    };
+    }
 
     const port = std.fmt.parseInt(u16, port_buffer.slice(), 10) catch {
 
@@ -376,7 +375,6 @@ fn start_fetch() void {
 
     lock.acquire();
 
-    request_addr = addr;
     request_port = port;
 
     request_path_len = @min(path.len, request_path.len);
@@ -458,7 +456,6 @@ fn do_fetch() void {
 
     lock.acquire();
 
-    const addr = request_addr;
     const port = request_port;
 
     var path_local: [path_storage_size]u8 = undefined;
@@ -475,7 +472,7 @@ fn do_fetch() void {
 
     const start_ms = lib.time.now_ms();
 
-    var socket = lib.net.Socket.connect(cap.memory, addr, port) catch |failure| {
+    var socket = lib.net.Socket.connect_host(cap.memory, host_local[0..host_len], port) catch |failure| {
 
         fail(@errorName(failure));
         return;
@@ -691,7 +688,7 @@ fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_height }, ui.theme.surface_alt);
     surface.fill_rect(.{ .x = 0, .y = toolbar_height, .w = width, .h = 1 }, ui.theme.border);
 
-    paint_field(surface, "IP", ip_field_rect(), ip_buffer.slice(), focused == .ip);
+    paint_field(surface, "Host", ip_field_rect(), ip_buffer.slice(), focused == .ip);
     paint_field(surface, "Port", port_field_rect(), port_buffer.slice(), focused == .port);
     paint_field(surface, "Path", path_field_rect(), path_buffer.slice(), focused == .path);
 

@@ -5,6 +5,7 @@ pub var mac: [6]u8 = .{ 0, 0, 0, 0, 0, 0 };
 pub const ip: u32 = 0x0a00_020f; // 10.0.2.15
 pub const netmask: u32 = 0xffff_ff00; // /24
 pub const gateway: u32 = 0x0a00_0202; // 10.0.2.2
+pub const dns: u32 = 0x0a00_0203; // 10.0.2.3 - slirp's built-in DNS forwarder
 
 pub fn on_link(addr: u32) bool {
 

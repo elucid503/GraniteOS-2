@@ -348,6 +348,7 @@ pub const socket = struct {
     pub const poll: u16 = 10; // request: sid                                          reply: readiness bitmask (data[1])
     pub const local_addr: u16 = 11; // request: sid                                          reply: addr (data[1]), port (data[2])
     pub const detach: u16 = 12; // request: -                                           reply: status (releases every socket this session owns)
+    pub const resolve: u16 = 13; // request: sid-less: offset, length of hostname in session buffer   reply: addr (data[1]) | WouldBlock
 
     pub const kind_stream: u64 = 1;
     pub const kind_dgram: u64 = 2;
@@ -359,5 +360,6 @@ pub const socket = struct {
     pub const closed: u64 = 8;
     pub const accept_ready: u64 = 16;
     pub const err: u64 = 32;
+    pub const resolved: u64 = 64;
 
 };

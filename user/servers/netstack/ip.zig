@@ -9,10 +9,11 @@ const netaddr = @import("lib").netaddr;
 
 pub const protocol_icmp: u8 = 1;
 pub const protocol_tcp: u8 = 6;
+pub const protocol_udp: u8 = 17;
 
 const header_len = 20;
 const default_ttl: u8 = 64;
-const max_payload = @import("lib").netframe.max_frame - eth.header_len - header_len;
+pub const max_payload = @import("lib").netframe.max_frame - eth.header_len - header_len;
 
 pub const Parsed = struct {
 

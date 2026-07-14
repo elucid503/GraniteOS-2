@@ -45,6 +45,8 @@ const bundle_overrides = std.StaticStringMap([]const u8).initComptime(.{
     .{ "programs/gui/about", "about-gui" },
     // Keep the virtio-sound driver as plain "audio"; the Media app must not steal that name.
     .{ "programs/gui/audio", "audio-gui" },
+    // Without this, both fetch programs derive the bundle name "fetch"
+    .{ "programs/gui/fetch", "fetch-gui" },
 
 });
 

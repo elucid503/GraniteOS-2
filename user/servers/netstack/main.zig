@@ -12,6 +12,8 @@ const ip = @import("ip.zig");
 const arp = @import("arp.zig");
 const icmp = @import("icmp.zig");
 const tcp = @import("tcp.zig");
+const udp = @import("udp.zig");
+const dns = @import("dns.zig");
 const link = @import("link.zig");
 
 const Handle = cap.Handle;
@@ -46,6 +48,7 @@ const SessionExtra = struct {
         _ = self;
 
         tcp.release_session(badge);
+        dns.release_session(badge);
 
     }
 
@@ -79,6 +82,7 @@ fn run() !void {
     try start_timer_thread();
 
     tcp.init(&deliver_readiness);
+    dns.init(&deliver_readiness);
     arp.set_learned_callback(&tcp.retry_pending_arp);
 
     try lib.stream.register_name("netstack", cap.server.endpoint);
@@ -113,7 +117,11 @@ fn run() !void {
 fn pump() void {
 
     link.drain(&handle_frame);
-    tcp.tick(lib.time.now_ms());
+
+    const now = lib.time.now_ms();
+
+    tcp.tick(now);
+    dns.tick(now);
 
 }
 
@@ -133,6 +141,7 @@ fn handle_frame(frame: []const u8) void {
 
                 ip.protocol_icmp => icmp.handle(packet.src_ip, packet.payload),
                 ip.protocol_tcp => tcp.handle_segment(packet.src_ip, packet.dst_ip, packet.payload),
+                ip.protocol_udp => udp.handle(packet.src_ip, packet.dst_ip, packet.payload),
 
                 else => {},
 
@@ -196,6 +205,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.socket.close => close_socket(badge, in),
         proto.socket.poll => poll_socket(badge, in, out),
         proto.socket.local_addr => local_addr_socket(badge, in, out),
+        proto.socket.resolve => resolve_host(badge, in, out),
 
         else => -7,
 
@@ -356,6 +366,30 @@ fn local_addr_socket(badge: u64, in: *const Message, out: *Message) i64 {
     out.data[2] = info.port;
 
     return 0;
+
+}
+
+fn resolve_host(badge: u64, in: *const Message, out: *Message) i64 {
+
+    const session = sessions.find(badge) orelse return -7;
+    const span = session_span(session, in.data[1], in.data[2]) orelse return -7;
+
+    return switch (dns.resolve(badge, span)) {
+
+        .hit => |addr| blk: {
+
+            out.data[1] = addr;
+            break :blk 0;
+
+        },
+
+        .pending => -5,
+        .not_found => -6,
+        .timeout => -8,
+        .invalid => -7,
+        .no_resources => -3,
+
+    };
 
 }
 
