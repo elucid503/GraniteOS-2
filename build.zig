@@ -50,6 +50,11 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "test", test_build);
     options.addOption(bool, "debug_syscall_trace", debug_syscall_trace);
 
+    // No RTC and no NTP-capable datagram sockets exist yet, so the taskbar clock seeds its wall-clock
+    // offset from the build machine's real time (see user/lib/localtime.zig) - accurate as long as the
+    // gap between building and booting stays small, which it does for a normal build-then-run loop.
+    options.addOption(i64, "build_epoch_s", std.time.timestamp());
+
     // The kernel is SMP since M8: single_threaded would let the compiler lower its atomics away.
 
     const kernel_module = b.createModule(.{
@@ -89,6 +94,8 @@ pub fn build(b: *std.Build) void {
         .pic = false,
 
     });
+
+    user_lib.addImport("build_options", options.createModule());
 
     var module_arena = std.heap.ArenaAllocator.init(b.allocator);
     defer module_arena.deinit();
@@ -265,6 +272,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
 
     });
+
+    host_user_lib.addImport("build_options", options.createModule());
 
     const user_tests_module = b.createModule(.{
 

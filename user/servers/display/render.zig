@@ -1,11 +1,6 @@
-// Compositor chrome rendering (M10 GUI rewrite): decorated windows get a frame - a title bar with Inter text
-// and a close cross, client content blitted with the bottom corners cut by quarter-circle coverage masks - all
-// through fast masked fills and blits. Because windows composite bottom-up into the back buffer, the masked
-// corners naturally reveal whatever lies beneath, so rounding costs two small masked blits per window and
-// nothing else.
+// Compositor chrome rendering (part of the M10 GUI rewrite)
 
 const std = @import("std");
-
 const lib = @import("lib");
 
 const draw = lib.draw;
@@ -172,14 +167,21 @@ fn stroke_line(back: *const Surface, x0: i32, y0: i32, x1: i32, y1: i32, color: 
 
 }
 
-/// Blit the client's content into the back buffer, cutting decorated windows' bottom corners with the
-/// quarter-circle masks so what was already composited beneath shows through.
+/// Blits the client's content into the back buffer, cutting decorated windows' bottom corners with quarter-circle coverage masks.
 pub fn blit_content(back: *const Surface, window: *const Window, surface: *const Surface, clip: Rect, matte: Color) void {
 
     const content = window.content();
     const visible = content.intersect(clip);
 
     if (visible.is_empty()) return;
+
+    if (window.is_panel() and content.h > 2 * corner_radius and content.w > 2 * corner_radius) {
+
+        blit_content_all_corners(back, surface, clip, matte, content);
+
+        return;
+
+    }
 
     if (!window.decorated() or content.h <= corner_radius or content.w <= 2 * corner_radius) {
 
@@ -238,6 +240,60 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
 
         draw.round.matte_corner_edges(&view, right.x, right.y, masks.br, side, matte);
         view.blit_masked(right.x, right.y, surface, right.translated(-content.x, -content.y), masks.br, side, masks.br_opaque);
+
+    }
+
+}
+
+/// Blits a floating panel's content with all four corners cut.
+fn blit_content_all_corners(back: *const Surface, surface: *const Surface, clip: Rect, matte: Color, content: Rect) void {
+
+    const masks = content_corner_masks() orelse {
+
+        const visible = content.intersect(clip);
+
+        if (!visible.is_empty()) back.blit(visible.x, visible.y, surface, visible.translated(-content.x, -content.y));
+
+        return;
+
+    };
+
+    const r = corner_radius;
+
+    const top_strip = Rect{ .x = content.x + r, .y = content.y, .w = content.w - 2 * r, .h = r };
+    const body = Rect{ .x = content.x, .y = content.y + r, .w = content.w, .h = content.h - 2 * r };
+    const bottom_strip = Rect{ .x = content.x + r, .y = content.y + content.h - r, .w = content.w - 2 * r, .h = r };
+
+    for ([_]Rect{ top_strip, body, bottom_strip }) |part| {
+
+        const part_visible = part.intersect(clip);
+
+        if (!part_visible.is_empty()) back.blit(part_visible.x, part_visible.y, surface, part_visible.translated(-content.x, -content.y));
+
+    }
+
+    const side: u32 = @intCast(r);
+    const bottom_y = content.y + content.h - r;
+
+    const Corner = struct { rect: Rect, mask: []const u8, opaque_rows: []const bool };
+
+    const corners = [_]Corner{
+
+        .{ .rect = .{ .x = content.x, .y = content.y, .w = r, .h = r }, .mask = masks.tl, .opaque_rows = masks.tl_opaque },
+        .{ .rect = .{ .x = content.x + content.w - r, .y = content.y, .w = r, .h = r }, .mask = masks.tr, .opaque_rows = masks.tr_opaque },
+        .{ .rect = .{ .x = content.x, .y = bottom_y, .w = r, .h = r }, .mask = masks.bl, .opaque_rows = masks.bl_opaque },
+        .{ .rect = .{ .x = content.x + content.w - r, .y = bottom_y, .w = r, .h = r }, .mask = masks.br, .opaque_rows = masks.br_opaque },
+
+    };
+
+    for (corners) |corner| {
+
+        if (corner.rect.intersect(clip).is_empty()) continue;
+
+        const view = back.clipped(clip);
+
+        draw.round.matte_corner_edges(&view, corner.rect.x, corner.rect.y, corner.mask, side, matte);
+        view.blit_masked(corner.rect.x, corner.rect.y, surface, corner.rect.translated(-content.x, -content.y), corner.mask, side, corner.opaque_rows);
 
     }
 

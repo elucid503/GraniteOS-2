@@ -26,6 +26,9 @@ pub const resize_grip: i32 = 18;
 pub const min_content: u32 = 32;
 pub const default_panel_height: i32 = 40;
 
+// A panel floats inset from every screen edge (dock-style) by this many pixels, rather than sitting flush.
+pub const panel_margin: i32 = 10;
+
 pub const StackKind = enum {
 
     desktop,
@@ -509,6 +512,14 @@ pub const Manager = struct {
 
     }
 
+    /// Vertical space a maximized window must leave clear at the bottom: the panel itself plus the
+    /// margin that floats it above the screen edge.
+    fn reserved_bottom(self: *const Manager) i32 {
+
+        return self.panel_height() + panel_margin;
+
+    }
+
     pub const GeometryChange = struct {
 
         damage: Rect,
@@ -532,7 +543,7 @@ pub const Manager = struct {
         window.restore_width = window.width;
         window.restore_height = window.height;
 
-        const work_h = @max(0, @as(i32, @intCast(self.screen_height)) - self.panel_height());
+        const work_h = @max(0, @as(i32, @intCast(self.screen_height)) - self.reserved_bottom());
         const content_h = @max(@as(i32, @intCast(min_content)), work_h - title_height);
 
         window.x = 0;
@@ -792,7 +803,7 @@ pub const Manager = struct {
 
             } else if (window.is_maximized()) {
 
-                const work_h = @max(0, @as(i32, @intCast(self.screen_height)) - self.panel_height());
+                const work_h = @max(0, @as(i32, @intCast(self.screen_height)) - self.reserved_bottom());
                 const content_h = @max(@as(i32, @intCast(min_content)), work_h - title_height);
 
                 window.x = 0;
@@ -832,13 +843,15 @@ pub const Manager = struct {
 
         }
 
-        // A panel is pinned full-width to the screen bottom; it never moves off it.
+        // A panel floats inset from the screen bottom and both sides, dock-style; it never moves off it.
 
         if (window.is_panel()) {
 
-            window.width = self.screen_width;
-            window.x = 0;
-            window.y = @max(0, @as(i32, @intCast(self.screen_height)) - @as(i32, @intCast(window.height)));
+            const width = @as(i32, @intCast(self.screen_width)) - panel_margin * 2;
+
+            window.width = @intCast(@max(0, width));
+            window.x = panel_margin;
+            window.y = @max(panel_margin, @as(i32, @intCast(self.screen_height)) - @as(i32, @intCast(window.height)) - panel_margin);
 
             return;
 
@@ -1088,8 +1101,9 @@ test "a panel docks to the bottom and stays above ordinary windows" {
 
     const panel = manager.create(1, 0, 44, proto.window.flag_panel, "taskbar").?;
 
-    try testing.expectEqual(@as(u32, 640), panel.width);
-    try testing.expectEqual(@as(i32, 480 - 44), panel.y);
+    try testing.expectEqual(@as(u32, 640 - panel_margin * 2), panel.width);
+    try testing.expectEqual(@as(i32, panel_margin), panel.x);
+    try testing.expectEqual(@as(i32, 480 - 44 - panel_margin), panel.y);
     try testing.expect(!panel.decorated());
 
     const app = manager.create(1, 200, 200, 0, "app").?;
@@ -1171,7 +1185,7 @@ test "maximize fills work area and unmaximize restores geometry" {
     try testing.expectEqual(@as(i32, 0), window.x);
     try testing.expectEqual(@as(i32, 0), window.y);
     try testing.expectEqual(@as(u32, 640), window.width);
-    try testing.expectEqual(@as(u32, 480 - 40 - title_height), window.height);
+    try testing.expectEqual(@as(u32, 480 - 40 - panel_margin - title_height), window.height);
 
     const restored = manager.unmaximize(window.id).?;
 
@@ -1224,7 +1238,8 @@ test "panels reposition when the screen resizes" {
 
     manager.resize_screen(1024, 768);
 
-    try testing.expectEqual(@as(u32, 1024), panel.width);
-    try testing.expectEqual(@as(i32, 768 - 40), panel.y);
+    try testing.expectEqual(@as(u32, 1024 - panel_margin * 2), panel.width);
+    try testing.expectEqual(@as(i32, panel_margin), panel.x);
+    try testing.expectEqual(@as(i32, 768 - 40 - panel_margin), panel.y);
 
 }

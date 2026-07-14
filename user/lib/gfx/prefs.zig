@@ -1,5 +1,4 @@
-// Desktop preferences: theme palettes and a small config file on disk. GUI apps call refresh()
-// after prefs_changed notifications (or once at startup) so each process picks up the user's choices.
+// Desktop preferences: theme palettes and a small config file on disk.
 
 const std = @import("std");
 
@@ -16,9 +15,13 @@ const Color = gfx.Color;
 pub const config_path = "/root/user/settings.cfg";
 pub const open_path_file = "/root/user/.open-path";
 pub const desktop_pins_path = "/root/user/desktop.pins";
+pub const taskbar_pins_path = "/root/user/taskbar.pins";
 
 pub const max_desktop_pins = 24;
 pub const max_pin_path = 128;
+
+pub const max_taskbar_pins = 16;
+pub const max_pin_program = 32; // matches proto.launch.max_length
 
 pub const ThemeId = enum(u8) {
 
@@ -53,6 +56,7 @@ pub const Chrome = struct {
 };
 
 pub var active_theme: ThemeId = .mono;
+pub var tz_offset_minutes: i32 = 0;
 
 var loaded_generation: u64 = 0;
 
@@ -287,7 +291,7 @@ pub fn save() void {
 
     var buffer: [128]u8 = undefined;
     const stamp = loaded_generation +% 1;
-    const text = std.fmt.bufPrint(&buffer, "theme={d}\nstamp={d}\n", .{ @intFromEnum(active_theme), stamp }) catch return;
+    const text = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\nstamp={d}\n", .{ @intFromEnum(active_theme), tz_offset_minutes, stamp }) catch return;
 
     if (client.open_path(config_path, 0)) |file| {
 
@@ -482,6 +486,105 @@ fn save_desktop_pins(pins: []const DesktopPin) bool {
 
 }
 
+pub const TaskbarPin = struct {
+
+    program: [max_pin_program]u8 = [_]u8{0} ** max_pin_program,
+    length: u8 = 0,
+
+    pub fn slice(self: *const TaskbarPin) []const u8 {
+
+        return self.program[0..self.length];
+
+    }
+
+};
+
+/// Load pinned taskbar program names (one per line) into `out`; returns the count.
+pub fn load_taskbar_pins(out: []TaskbarPin) usize {
+
+    var client = fs.Client.connect(cap.memory) catch return 0;
+
+    const file = client.open_path(taskbar_pins_path, 0) catch return 0;
+    defer client.close_file(file) catch {};
+
+    var buffer: [max_taskbar_pins * (max_pin_program + 1)]u8 = undefined;
+    const read = client.read(file, 0, &buffer) catch return 0;
+
+    var written: usize = 0;
+    var start: usize = 0;
+    var index: usize = 0;
+
+    while (index <= read and written < out.len) : (index += 1) {
+
+        const at_end = index == read;
+        const sep = if (at_end) true else buffer[index] == '\n' or buffer[index] == '\r';
+
+        if (!sep) continue;
+
+        const line = buffer[start..index];
+        start = index + 1;
+
+        if (line.len == 0) continue;
+
+        const length = @min(line.len, max_pin_program);
+
+        out[written] = .{};
+        @memcpy(out[written].program[0..length], line[0..length]);
+        out[written].length = @intCast(length);
+        written += 1;
+
+    }
+
+    return written;
+
+}
+
+pub fn is_taskbar_pinned(program: []const u8) bool {
+
+    var pins: [max_taskbar_pins]TaskbarPin = undefined;
+    const count = load_taskbar_pins(pins[0..]);
+
+    for (pins[0..count]) |pin| {
+
+        if (std.mem.eql(u8, pin.slice(), program)) return true;
+
+    }
+
+    return false;
+
+}
+
+/// Overwrites the on-disk taskbar pin list with exactly `pins`. Good for avoiding duplicates and keeping the order of pins consistent with the taskbar.
+pub fn save_taskbar_pins(pins: []const TaskbarPin) bool {
+
+    var client = fs.Client.connect(cap.memory) catch return false;
+
+    var buffer: [max_taskbar_pins * (max_pin_program + 1)]u8 = undefined;
+    var length: usize = 0;
+
+    for (pins) |pin| {
+
+        const slice = pin.slice();
+
+        if (length + slice.len + 1 > buffer.len) break;
+
+        @memcpy(buffer[length .. length + slice.len], slice);
+        length += slice.len;
+        buffer[length] = '\n';
+        length += 1;
+
+    }
+
+    _ = client.delete(taskbar_pins_path) catch {};
+    client.create(taskbar_pins_path, proto.filesystem.kind_file) catch return false;
+
+    const file = client.open_path(taskbar_pins_path, 0) catch return false;
+    defer client.close_file(file) catch {};
+
+    return (client.write(file, 0, buffer[0..length]) catch 0) == length;
+
+}
+
 fn config_generation(text: []const u8) u64 {
 
     var lines = std.mem.tokenizeScalar(u8, text, '\n');
@@ -515,6 +618,10 @@ fn parse_config(text: []const u8) void {
             const value = std.fmt.parseInt(u8, line[6..], 10) catch continue;
 
             if (value < theme_count) apply_theme(@enumFromInt(value));
+
+        } else if (std.mem.startsWith(u8, line, "tz=")) {
+
+            tz_offset_minutes = std.fmt.parseInt(i32, line[3..], 10) catch tz_offset_minutes;
 
         }
 

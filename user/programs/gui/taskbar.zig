@@ -27,6 +27,20 @@ fn bar_height() i32 {
 
 }
 
+// Must match the compositor's `manager.panel_margin` (user/servers/display/manager.zig)
+fn dock_margin() i32 {
+
+    return 10;
+
+}
+
+// Must match the compositor's `render.corner_radius` (user/servers/display/render.zig)
+fn dock_radius() i32 {
+
+    return 8;
+
+}
+
 fn launcher_width() i32 {
 
     return 44;
@@ -35,7 +49,7 @@ fn launcher_width() i32 {
 
 fn clock_width() i32 {
 
-    return 92;
+    return 100;
 
 }
 
@@ -50,6 +64,8 @@ fn window_button_min() i32 {
     return 36;
 
 }
+
+const window_button_icon: i32 = 18;
 
 fn button_gap() i32 {
 
@@ -94,11 +110,40 @@ var bar: lib.window.Window = undefined;
 var menu: ?lib.window.Window = null;
 var menu_open = false;
 
+var pin_menu: ?lib.window.Window = null;
+var pin_menu_open = false;
+var pin_menu_widget = ui.Menu{};
+var pin_menu_program: [lib.prefs.max_pin_program]u8 = undefined;
+var pin_menu_program_len: usize = 0;
+var pin_menu_pinned = false;
+
+const pin_action_row = [_]ui.Menu.Row{.{ .item = "Pin to Taskbar" }};
+const unpin_action_row = [_]ui.Menu.Row{.{ .item = "Unpin from Taskbar" }};
+
 var windows: [proto.window.max_windows]WindowInfo = undefined;
 var window_count: usize = 0;
 
 var apps: [max_apps]lib.wm.App = undefined;
 var app_count: usize = 0;
+
+// One taskbar indicator per open window, plus one per pinned app that is not currently running.
+const TaskbarItem = struct {
+
+    is_window: bool,
+    window_index: usize = 0,
+    app_index: usize = 0,
+    has_app: bool = false,
+    pinned: bool = false,
+
+};
+
+const max_taskbar_items = proto.window.max_windows + lib.prefs.max_taskbar_pins;
+
+var items: [max_taskbar_items]TaskbarItem = undefined;
+var item_count: usize = 0;
+
+var pinned_programs: [lib.prefs.max_taskbar_pins]lib.prefs.TaskbarPin = undefined;
+var pinned_count: usize = 0;
 
 // Categories are derived from the apps' `category` metadata; the menu lists them and flies the active category's apps out to the side. Searching bypasses the grouping and matches across every app.
 var categories: [max_categories][]const u8 = undefined;
@@ -155,6 +200,7 @@ fn run() !void {
     build_categories();
     launch_endpoint = lib.stream.lookup_endpoint("launch") catch 0;
 
+    reload_pins();
     refresh_windows();
     paint_bar();
 
@@ -193,6 +239,115 @@ fn run() !void {
 fn refresh_windows() void {
 
     window_count = window_list.refresh(windows[0..]);
+    rebuild_items();
+
+}
+
+fn reload_pins() void {
+
+    pinned_count = lib.prefs.load_taskbar_pins(pinned_programs[0..]);
+
+}
+
+fn is_pinned_program(program: []const u8) bool {
+
+    for (pinned_programs[0..pinned_count]) |pin| {
+
+        if (std.mem.eql(u8, pin.slice(), program)) return true;
+
+    }
+
+    return false;
+
+}
+
+fn app_index_for_title(title: []const u8) ?usize {
+
+    for (apps[0..app_count], 0..) |app, index| {
+
+        if (std.mem.eql(u8, app.title, title)) return index;
+
+    }
+
+    return null;
+
+}
+
+fn app_index_for_program(program: []const u8) ?usize {
+
+    for (apps[0..app_count], 0..) |app, index| {
+
+        if (std.mem.eql(u8, app.program, program)) return index;
+
+    }
+
+    return null;
+
+}
+
+/// Merge open windows with pinned-but-not-running apps into one indicator list: every open window gets
+/// a button (its pin state resolved from the catalog match, if any), followed by any pinned app that has
+/// no window currently open for it.
+fn rebuild_items() void {
+
+    item_count = 0;
+
+    for (windows[0..window_count], 0..) |info, window_index| {
+
+        if (item_count >= items.len) break;
+
+        const title = info.title[0..@min(@as(usize, @intCast(info.title_len)), proto.window.max_title)];
+        const app_index = app_index_for_title(title);
+        const pinned = if (app_index) |index| is_pinned_program(apps[index].program) else false;
+
+        items[item_count] = .{
+
+            .is_window = true,
+            .window_index = window_index,
+            .app_index = app_index orelse 0,
+            .has_app = app_index != null,
+            .pinned = pinned,
+
+        };
+
+        item_count += 1;
+
+    }
+
+    for (pinned_programs[0..pinned_count]) |pin| {
+
+        if (item_count >= items.len) break;
+
+        var already_open = false;
+
+        for (items[0..item_count]) |existing| {
+
+            if (!existing.is_window or !existing.has_app) continue;
+            if (std.mem.eql(u8, apps[existing.app_index].program, pin.slice())) {
+
+                already_open = true;
+                break;
+
+            }
+
+        }
+
+        if (already_open) continue;
+
+        const app_index = app_index_for_program(pin.slice()) orelse continue;
+
+        items[item_count] = .{
+
+            .is_window = false,
+            .app_index = app_index,
+            .has_app = true,
+            .pinned = true,
+
+        };
+
+        item_count += 1;
+
+    }
 
 }
 
@@ -204,6 +359,12 @@ fn handle(event: events.Event) void {
 
         apply_prefs_changed();
         return;
+
+    }
+
+    if (pin_menu) |pin_menu_window| {
+
+        if (event.window == pin_menu_window.id) return handle_pin_menu(event);
 
     }
 
@@ -237,6 +398,8 @@ fn update_menu_cursor(x: i32, y: i32) void {
 fn apply_prefs_changed() void {
 
     lib.prefs.refresh();
+    reload_pins();
+    rebuild_items();
 
     bar.resize(bar.surface.width, @intCast(bar_height())) catch {};
 
@@ -264,18 +427,30 @@ fn handle_bar(event: events.Event) void {
 
         events.kind_button_down => {
 
-            if (event.code != events.button_left) return;
-
             const id = bar_regions.hit(event.x, event.y);
 
-            if (id == launcher_id) {
+            if (event.code == events.button_left) {
 
-                toggle_menu();
+                close_pin_menu();
+
+                if (id == launcher_id) {
+
+                    toggle_menu();
+                    return;
+
+                }
+
+                if (id >= window_id_base) activate_item(id - window_id_base);
+
                 return;
 
             }
 
-            if (id >= window_id_base) activate_window(id - window_id_base);
+            if (event.code == events.button_right) {
+
+                if (id >= window_id_base) open_pin_menu(id - window_id_base, event.x);
+
+            }
 
         },
 
@@ -300,6 +475,8 @@ fn handle_bar(event: events.Event) void {
                 } else |_| {}
 
             }
+
+            close_pin_menu();
 
             refresh_windows();
             paint_bar();
@@ -357,6 +534,24 @@ fn handle_menu(event: events.Event) void {
         events.kind_window_blur => close_menu(),
 
         else => {},
+
+    }
+
+}
+
+fn activate_item(index: usize) void {
+
+    if (index >= item_count) return;
+
+    const item = items[index];
+
+    if (item.is_window) {
+
+        activate_window(item.window_index);
+
+    } else if (item.has_app) {
+
+        launch(apps[item.app_index].program);
 
     }
 
@@ -695,7 +890,7 @@ fn sync_menu_size() void {
 
 fn menu_y(screen_height: u32) i32 {
 
-    return @as(i32, @intCast(screen_height)) - bar_height() - @as(i32, @intCast(menu_height())) - 10;
+    return @as(i32, @intCast(screen_height)) - bar_height() - dock_margin() - @as(i32, @intCast(menu_height())) - 10;
 
 }
 
@@ -721,6 +916,8 @@ fn ensure_menu() !void {
 
 fn open_menu() void {
 
+    close_pin_menu();
+
     ensure_menu() catch return;
 
     search.clear();
@@ -735,7 +932,7 @@ fn open_menu() void {
 
     if (lib.wm.screen_info(&connection)) |screen| {
 
-        lib.wm.move_window(&connection, menu_window.id, 10, menu_y(screen.height)) catch {};
+        lib.wm.move_window(&connection, menu_window.id, dock_margin(), menu_y(screen.height)) catch {};
 
     } else |_| {}
 
@@ -760,6 +957,211 @@ fn close_menu() void {
     menu_open = false;
 
     paint_bar();
+
+}
+
+// The pin action row is always exactly one row tall...
+fn pin_menu_width() u32 {
+
+    return @intCast(pin_menu_widget.width);
+
+}
+
+fn pin_menu_height() u32 {
+
+    return @intCast(pin_menu_widget.row_height + pin_menu_widget.inset * 2);
+
+}
+
+fn ensure_pin_menu() !void {
+
+    if (pin_menu != null) return;
+
+    var window = try connection.create_window(pin_menu_width(), pin_menu_height(), proto.window.flag_undecorated, "pin-menu");
+
+    window.surface.fill(ui.theme.surface);
+
+    try lib.wm.minimize(&connection, window.id);
+
+    pin_menu = window;
+
+}
+
+/// Opens the "Pin to Taskbar" / "Unpin from Taskbar" popup.
+fn open_pin_menu(index: usize, local_x: i32) void {
+
+    if (index >= item_count) return;
+
+    const item = items[index];
+
+    if (!item.has_app) return;
+
+    close_menu();
+    ensure_pin_menu() catch return;
+
+    const program = apps[item.app_index].program;
+
+    pin_menu_program_len = @min(program.len, pin_menu_program.len);
+    @memcpy(pin_menu_program[0..pin_menu_program_len], program[0..pin_menu_program_len]);
+    pin_menu_pinned = item.pinned;
+
+    const rows: []const ui.Menu.Row = if (pin_menu_pinned) unpin_action_row[0..] else pin_action_row[0..];
+    const window = pin_menu orelse return;
+
+    pin_menu_widget.open_at(rows, 0, 0, @intCast(pin_menu_width()), @intCast(pin_menu_height()));
+
+    if (lib.wm.screen_info(&connection)) |screen| {
+
+        const max_x = @as(i32, @intCast(screen.width)) - @as(i32, @intCast(pin_menu_width()));
+        const screen_x = std.math.clamp(dock_margin() + local_x, 0, @max(0, max_x));
+        const popup_y = @as(i32, @intCast(screen.height)) - bar_height() - dock_margin() - @as(i32, @intCast(pin_menu_height())) - 10;
+
+        lib.wm.move_window(&connection, window.id, screen_x, popup_y) catch {};
+
+    } else |_| {}
+
+    pin_menu_open = true;
+
+    paint_pin_menu_content();
+
+    gfx.fence();
+    lib.wm.restore(&connection, window.id) catch {};
+    window.present_all() catch {};
+
+}
+
+fn close_pin_menu() void {
+
+    if (!pin_menu_open) return;
+
+    if (pin_menu) |window| lib.wm.minimize(&connection, window.id) catch {};
+
+    pin_menu_open = false;
+
+}
+
+fn paint_pin_menu_content() void {
+
+    const window = pin_menu orelse return;
+    const surface = &window.surface;
+
+    // The menu's own rounded fill leaves its true corner pixels untouched, so prime them first (matches
+    // ensure_menu()'s treatment of the launcher popup).
+    surface.fill(ui.theme.surface);
+
+    pin_menu_widget.paint(surface, &font);
+
+}
+
+fn paint_pin_menu() void {
+
+    paint_pin_menu_content();
+
+    if (pin_menu) |window| window.present_all() catch {};
+
+}
+
+fn handle_pin_menu(event: events.Event) void {
+
+    switch (event.kind) {
+
+        events.kind_button_down => {
+
+            if (event.code == events.button_left) pin_menu_click(event.x, event.y);
+
+        },
+
+        events.kind_pointer_move => {
+
+            if (pin_menu_widget.pointer_move(event.x, event.y)) paint_pin_menu();
+
+        },
+
+        events.kind_key_down => {
+
+            if (keyboard.modifier(events.kind_key_down, event.code)) return;
+
+            var buffer: [3]u8 = undefined;
+            const bytes = keyboard.bytes(event.code, &buffer);
+
+            if (bytes.len == 1 and bytes[0] == 0x1b) close_pin_menu();
+
+        },
+
+        events.kind_window_blur => close_pin_menu(),
+
+        else => {},
+
+    }
+
+}
+
+fn pin_menu_click(x: i32, y: i32) void {
+
+    if (pin_menu_widget.hit(x, y) == null) {
+
+        close_pin_menu();
+        return;
+
+    }
+
+    const program = pin_menu_program[0..pin_menu_program_len];
+
+    // Important: we update the in-memory pin list first
+    if (pin_menu_pinned) {
+
+        untrack_pinned_program(program);
+
+    } else {
+
+        track_pinned_program(program);
+
+    }
+
+    _ = lib.prefs.save_taskbar_pins(pinned_programs[0..pinned_count]);
+
+    close_pin_menu();
+
+    rebuild_items();
+    paint_bar();
+
+}
+
+fn track_pinned_program(program: []const u8) void {
+
+    for (pinned_programs[0..pinned_count]) |pin| {
+
+        if (std.mem.eql(u8, pin.slice(), program)) return;
+
+    }
+
+    if (pinned_count >= pinned_programs.len) return;
+
+    var entry: lib.prefs.TaskbarPin = .{};
+    const length = @min(program.len, entry.program.len);
+
+    @memcpy(entry.program[0..length], program[0..length]);
+    entry.length = @intCast(length);
+
+    pinned_programs[pinned_count] = entry;
+    pinned_count += 1;
+
+}
+
+fn untrack_pinned_program(program: []const u8) void {
+
+    var write_index: usize = 0;
+
+    for (pinned_programs[0..pinned_count]) |pin| {
+
+        if (std.mem.eql(u8, pin.slice(), program)) continue;
+
+        pinned_programs[write_index] = pin;
+        write_index += 1;
+
+    }
+
+    pinned_count = write_index;
 
 }
 
@@ -805,14 +1207,14 @@ fn button_layout() ButtonLayout {
     const end = @as(i32, @intCast(bar.surface.width)) - clock_width() - button_gap();
     const available = end - start;
 
-    if (window_count == 0 or available <= 0) {
+    if (item_count == 0 or available <= 0) {
 
         return .{ .start = start, .width = 0, .visible = 0, .overflow = false, .overflow_x = start };
 
     }
 
     // Fit as many buttons as possible at a usable width; shrink first, then overflow.
-    var count = window_count;
+    var count = item_count;
     var width = @divTrunc(available - button_gap() * @as(i32, @intCast(count)), @as(i32, @intCast(count)));
 
     if (width > window_button_max()) width = window_button_max();
@@ -822,10 +1224,10 @@ fn button_layout() ButtonLayout {
         const slot = window_button_min() + button_gap();
         const fit: usize = @intCast(@max(0, @divTrunc(available, slot)));
 
-        count = @min(window_count, @max(@as(usize, 1), fit));
+        count = @min(item_count, @max(@as(usize, 1), fit));
         width = window_button_min();
 
-        if (count < window_count and count > 0) {
+        if (count < item_count and count > 0) {
 
             // Reserve one slot for the overflow indicator.
             count = @max(@as(usize, 1), count - 1);
@@ -834,7 +1236,7 @@ fn button_layout() ButtonLayout {
 
     }
 
-    const overflow = count < window_count;
+    const overflow = count < item_count;
     const overflow_x = start + @as(i32, @intCast(count)) * (width + button_gap());
 
     return .{
@@ -854,8 +1256,7 @@ fn paint_bar() void {
     const surface = &bar.surface;
     const width: i32 = @intCast(surface.width);
 
-    surface.fill(ui.theme.surface_alt);
-    surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = 1 }, ui.theme.border);
+    panel(surface, surface.bounds(), ui.theme.surface_alt);
 
     bar_regions.reset();
 
@@ -904,28 +1305,47 @@ fn paint_bar() void {
 
         bar_regions.add(id, .{ .x = x, .y = 0, .w = layout.width, .h = bar_height() });
 
-        const info_entry = windows[index];
-        const focused = info_entry.focused != 0;
-        const minimized = info_entry.minimized != 0;
+        const item = items[index];
+        const info_entry: ?WindowInfo = if (item.is_window) windows[item.window_index] else null;
+        const focused = if (info_entry) |entry| entry.focused != 0 else false;
+        const minimized = if (info_entry) |entry| entry.minimized != 0 else false;
         const hovered = bar_regions.hovered(id);
 
         const fill = if (minimized) ui.theme.surface else if (focused) ui.theme.accent_dim else if (hovered) ui.theme.hover else ui.theme.surface_alt;
 
         ui.fill_round_rect(surface, rect, 5, fill);
 
-        const title = info_entry.title[0..@min(@as(usize, @intCast(info_entry.title_len)), proto.window.max_title)];
-        const label_color = if (minimized) ui.theme.text_dim else ui.theme.text;
+        const title: []const u8 = if (info_entry) |entry|
+            entry.title[0..@min(@as(usize, @intCast(entry.title_len)), proto.window.max_title)]
+        else if (item.has_app) apps[item.app_index].title else "";
+
+        // A pinned-but-not-running app has no window to dim/highlight, so its label reads as idle.
+        const label_color = if (minimized or !item.is_window) ui.theme.text_dim else ui.theme.text;
+        const icon: []const u8 = if (item.has_app) apps[item.app_index].icon else lib.icons.apps;
 
         if (layout.width >= 72) {
 
-            text_in(surface, rect, 10, 13, title, label_color);
+            const button_icon_x = rect.x + 8;
+            const button_icon_y = rect.y + @divTrunc(rect.h - window_button_icon, 2);
+            const icon_rect = Rect{ .x = button_icon_x, .y = button_icon_y, .w = window_button_icon, .h = window_button_icon };
+
+            lib.draw.vector.icon_in(surface, icon_rect, icon, label_color);
+            if (item.pinned) draw_pin_dot(surface, icon_rect, fill);
+
+            const text_x = button_icon_x + window_button_icon + 6;
+            const text_rect = Rect{ .x = text_x, .y = rect.y, .w = rect.x + rect.w - text_x - 8, .h = rect.h };
+
+            text_in(surface, text_rect, 0, 13, title, label_color);
 
         } else {
 
-            // Narrow buttons: first letter (or glyph) only.
-            const monogram = if (title.len > 0) title[0..1] else "?";
+            // Narrow buttons: icon only, centered.
+            const button_icon_x = rect.x + @divTrunc(rect.w - window_button_icon, 2);
+            const button_icon_y = rect.y + @divTrunc(rect.h - window_button_icon, 2);
+            const icon_rect = Rect{ .x = button_icon_x, .y = button_icon_y, .w = window_button_icon, .h = window_button_icon };
 
-            text_center(surface, rect, 13, monogram, label_color);
+            lib.draw.vector.icon_in(surface, icon_rect, icon, label_color);
+            if (item.pinned) draw_pin_dot(surface, icon_rect, fill);
 
         }
 
@@ -936,7 +1356,7 @@ fn paint_bar() void {
         const rect = Rect{ .x = layout.overflow_x, .y = 5, .w = layout.width, .h = bar_height() - 10 };
 
         bar_regions.add(overflow_id, .{ .x = layout.overflow_x, .y = 0, .w = layout.width, .h = bar_height() });
-        const remaining = window_count - layout.visible;
+        const remaining = item_count - layout.visible;
         var buffer: [8]u8 = undefined;
         const label = std.fmt.bufPrint(&buffer, "+{d}", .{remaining}) catch "+";
 
@@ -953,17 +1373,28 @@ fn paint_bar() void {
 
 fn paint_clock(surface: *const gfx.Surface, width: i32) void {
 
-    const seconds = lib.time.now_ms() / 1000;
-    const hours = seconds / 3600;
-    const minutes = (seconds % 3600) / 60;
-    const secs = seconds % 60;
-
-    var buffer: [16]u8 = undefined;
-    const text = std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hours, minutes, secs }) catch return;
-
     const rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
+    const local = lib.localtime.now(lib.prefs.tz_offset_minutes);
 
-    text_center(surface, rect, 14, text, ui.theme.text_dim);
+    const hour12 = if (local.hour % 12 == 0) 12 else local.hour % 12;
+    const am_pm: []const u8 = if (local.hour < 12) "AM" else "PM";
+
+    var time_buffer: [16]u8 = undefined;
+    var date_buffer: [16]u8 = undefined;
+
+    const time_text = std.fmt.bufPrint(&time_buffer, "{d}:{d:0>2} {s}", .{ hour12, local.minute, am_pm }) catch return;
+    const date_text = std.fmt.bufPrint(&date_buffer, "{d}/{d}/{d}", .{ local.month, local.day, local.year }) catch return;
+
+    const time_size: u32 = 13;
+    const date_size: u32 = 10;
+    const line_gap: i32 = 1;
+
+    const time_h = font.line_height(time_size);
+    const date_h = font.line_height(date_size);
+    const top = rect.y + @divTrunc(rect.h - (time_h + line_gap + date_h), 2);
+
+    text_center(surface, .{ .x = rect.x, .y = top, .w = rect.w, .h = time_h }, time_size, time_text, ui.theme.text);
+    text_center(surface, .{ .x = rect.x, .y = top + time_h + line_gap, .w = rect.w, .h = date_h }, date_size, date_text, ui.theme.text_dim);
 
 }
 
@@ -1079,7 +1510,7 @@ fn paint_categories(surface: *const gfx.Surface) void {
 
         }
 
-        lib.draw.vector.icon_in(surface, .{ .x = rect.x + 10, .y = rect.y + @divTrunc(rect.h - 22, 2), .w = 22, .h = 22 }, lib.icons.apps, ui.theme.accent);
+        lib.draw.vector.icon_in(surface, .{ .x = rect.x + 10, .y = rect.y + @divTrunc(rect.h - 22, 2), .w = 22, .h = 22 }, lib.icons.category, ui.theme.accent);
 
         text_in(surface, .{ .x = rect.x + 40, .y = rect.y, .w = rect.w - 56, .h = rect.h }, 0, 14, name, ui.theme.text);
 
@@ -1162,6 +1593,23 @@ fn paint_app_row(surface: *const gfx.Surface, rect: Rect, app: lib.wm.App, hover
 
 }
 
+/// A small dot inset into an icon's bottom-right corner marking a pinned app.
+fn draw_pin_dot(surface: *const gfx.Surface, icon_rect: Rect, halo_color: gfx.Color) void {
+
+    const outer: i32 = 8;
+    const inner: i32 = 5;
+
+    const cx = icon_rect.x + icon_rect.w - @divTrunc(inner, 2) - 1;
+    const cy = icon_rect.y + icon_rect.h - @divTrunc(inner, 2) - 1;
+
+    const outer_rect = Rect{ .x = cx - @divTrunc(outer, 2), .y = cy - @divTrunc(outer, 2), .w = outer, .h = outer };
+    const inner_rect = Rect{ .x = cx - @divTrunc(inner, 2), .y = cy - @divTrunc(inner, 2), .w = inner, .h = inner };
+
+    ui.fill_round_rect(surface, outer_rect, outer, halo_color);
+    ui.fill_round_rect(surface, inner_rect, inner, ui.theme.accent);
+
+}
+
 // Small right-pointing chevron drawn from pixels so it needs no font glyph.
 fn draw_chevron(surface: *const gfx.Surface, cx: i32, cy: i32, color: gfx.Color) void {
 
@@ -1241,8 +1689,8 @@ fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, content: []co
 
 fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
 
-    ui.fill_round_rect(surface, rect, 8, color);
-    ui.stroke_round_rect(surface, rect, 8, 1, ui.theme.border);
+    ui.fill_round_rect(surface, rect, dock_radius(), color);
+    ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
 
 }
 

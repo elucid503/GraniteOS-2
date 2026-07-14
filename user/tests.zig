@@ -18,6 +18,7 @@ test {
     _ = @import("lib").ui.chart;
     _ = @import("lib").icons;
     _ = @import("lib").time;
+    _ = @import("lib").localtime;
     _ = @import("lib").events;
     _ = @import("lib").window;
     _ = @import("servers/naming/main.zig");

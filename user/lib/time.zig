@@ -1,6 +1,4 @@
-// Monotonic time for user programs. The kernel enables EL0 access to the ARM generic timer counters
-// (kernel/arch/aarch64/timer.zig sets CNTKCTL_EL1.EL0PCTEN|EL0VCTEN), so a program reads wall-clock time with no
-// syscall - which is what lets the GUI drive realtime charts and periodic refreshes without a timer interrupt.
+// Monotonic time for user programs.
 
 const builtin = @import("builtin");
 
@@ -33,8 +31,7 @@ pub fn now_ms() u64 {
 
 }
 
-/// Block this thread for `duration_ms`, consuming no CPU (the kernel wakes it off the generic timer). Use it to pace
-/// periodic work - a chart ticker, a respawn backoff - on a dedicated worker thread.
+/// Block this thread for `duration_ms`, consuming no CPU (the kernel wakes it off the generic timer).
 pub fn sleep_ms(duration_ms: u64) void {
 
     sys.sleep(duration_ms * 1_000_000);

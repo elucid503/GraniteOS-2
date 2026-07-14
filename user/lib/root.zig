@@ -1,8 +1,8 @@
-// The GraniteOS user runtime - our "std" (07-userspace-ddd.md Section 3). Every user program links exactly this.
+// The GraniteOS user runtime - our "std" (07-userspace-ddd.md Section 3).
 
 const builtin = @import("builtin");
 
-pub const start = if (builtin.target.cpu.arch == .aarch64) @import("runtime/start.zig") else @import("runtime/host_start.zig");
+pub const start = if (builtin.target.cpu.arch == .aarch64) @import("runtime/start.zig") else @import("runtime/host_start.zig"); // ternary needed for future support of x86_64 and other architectures.
 pub const sys = @import("syscall/sys.zig");
 pub const budget = @import("budget.zig");
 pub const cap = @import("cap/cap.zig");
@@ -37,6 +37,7 @@ pub const audio = @import("audio/audio.zig");
 pub const wav = @import("audio/wav.zig");
 pub const sysinfo = @import("sysinfo.zig");
 pub const time = @import("time.zig");
+pub const localtime = @import("localtime.zig");
 pub const io = @import("io/io.zig");
 pub const term = @import("io/term.zig");
 pub const log = @import("io/log.zig");

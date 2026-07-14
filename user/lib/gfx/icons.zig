@@ -9,6 +9,15 @@ pub const apps =
     \\</svg>
 ;
 
+// A price-tag shape (point + punch hole) for app-launcher categories - distinct from both the apps grid
+// and the file folder icon so category rows don't read as either.
+pub const category =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M12 3 L20 3 L20 11 L11 20 L3 12 Z"/>
+    \\<circle cx="16" cy="7" r="1.5"/>
+    \\</svg>
+;
+
 pub const folder =
     \\<svg viewBox="0 0 24 24">
     \\<path d="M3 7 L3 19 L21 19 L21 9 L11 9 L9 6 L4 6 Z"/>

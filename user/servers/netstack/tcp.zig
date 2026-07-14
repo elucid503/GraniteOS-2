@@ -204,17 +204,16 @@ pub fn init(notify: *const fn (u64, u64) void) void {
 
 }
 
-// --- socket-facing API (called from main.zig's dispatch, already ownership-checked there) ---
+// Socket-facing API
 
-/// Allocate a fresh, unbound socket owned by `session_badge`. Returns its table index (the client's `sid`), or
-/// -3 (NoMemory) if the table is full.
+/// Allocate a fresh, unbound socket owned by `session_badge`. Returns its table index (the client's `sid`), or -3 (NoMemory) if the table is full.
 pub fn open(session_badge: u64) i64 {
 
     const index = allocate_index() orelse return -3;
 
     // `state` defaults to `.closed` - the same value an aborted connection ends in - so the orphan reaper in
-    // `tick` needs a real "closed since" timestamp here too, or it reads the zero default as "closed since boot"
-    // and reaps the socket before `connect`/`bind`/`listen` ever arrives.
+    // `tick` needs a real "closed since" timestamp here too, or it reads the zero default as "closed since boot" and reaps the socket
+
     tcbs[index] = .{ .used = true, .session_badge = session_badge, .closed_since_ms = lib.time.now_ms() };
 
     return index;
