@@ -70,15 +70,6 @@ pub const driver = struct {
 
 };
 
-// ramfb display: fw_cfg MMIO + DMA only (no interrupt; QEMU dirty-tracks the FB).
-pub const display_driver = struct {
-
-    pub const endpoint: Handle = stdin;
-    pub const device: Handle = reserved_grants; // fw_cfg MMIO window
-    pub const dma: Handle = reserved_grants + 1;
-
-};
-
 pub const marble = struct {
 
     pub const console: Handle = stdin; // the console driver's endpoint (badged)
@@ -141,5 +132,24 @@ pub const launcher = struct {
     pub const endpoint: Handle = stdin; // spawn requests arrive here
     pub const console: Handle = reserved_grants; // the console endpoint passed on to GUI children
     pub const bundle: Handle = reserved_grants + 1; // read-only module bundle Region
+
+};
+
+// virtio-net driver: the same MMIO + interrupt + DMA-sub-grant layout as the block/audio drivers.
+
+pub const net_driver = struct {
+
+    pub const endpoint: Handle = stdin;
+    pub const device: Handle = reserved_grants; // MMIO window Region
+    pub const interrupt: Handle = reserved_grants + 1; // the hardware line
+    pub const dma: Handle = reserved_grants + 2; // DmaAuthority sub-grant
+
+};
+
+// The netstack server: its own service endpoint in the standard slot, plus a badged endpoint to the net driver.
+
+pub const netstack = struct {
+
+    pub const net: Handle = reserved_grants; // badged endpoint to the virtio-net driver
 
 };

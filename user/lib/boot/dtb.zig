@@ -200,16 +200,12 @@ pub fn find_compatible(dtb: usize, wanted: []const u8, out: []Device) usize {
 fn decode_device(dtb: usize, reg: ?usize, interrupts: ?usize, addr_cells: u32) ?Device {
 
     const reg_at = reg orelse return null;
+    const interrupts_at = interrupts orelse return null;
 
-    // fw-cfg and similar platform devices expose `reg` only; interrupt_line 0 means "none".
-    const line: u32 = if (interrupts) |interrupts_at| blk: {
+    const kind = read_u32(dtb, interrupts_at);
+    const number = read_u32(dtb, interrupts_at + 4);
 
-        const kind = read_u32(dtb, interrupts_at);
-        const number = read_u32(dtb, interrupts_at + 4);
-
-        break :blk if (kind == interrupt_kind_shared) number + 32 else number + 16;
-
-    } else 0;
+    const line = if (kind == interrupt_kind_shared) number + 32 else number + 16;
 
     return .{
 

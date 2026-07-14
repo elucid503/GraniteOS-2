@@ -225,6 +225,7 @@ pub fn icon_by_name(name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "file")) return icons.file;
     if (std.mem.eql(u8, name, "chart")) return icons.chart;
     if (std.mem.eql(u8, name, "terminal")) return icons.terminal;
+    if (std.mem.eql(u8, name, "network")) return icons.network;
     if (std.mem.eql(u8, name, "home")) return icons.home;
     if (std.mem.eql(u8, name, "search")) return icons.search;
     if (std.mem.eql(u8, name, "clock")) return icons.clock;

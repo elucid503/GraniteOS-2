@@ -1,5 +1,4 @@
-// Build-time discovery for every user-space ELF: walks the tree, applies bundle-name overrides, and extracts
-// optional `app_meta` / `program_meta` blocks from source for the generated catalog.
+// Build-time discovery for every user-space ELF: walks the tree, applies bundle-name overrides, and extracts optional `app_meta` / `program_meta` blocks from source for the generated catalog.
 
 const std = @import("std");
 
@@ -79,6 +78,7 @@ const default_descriptions = std.StaticStringMap([]const u8).initComptime(.{
     .{ "rename", "Move a file or directory" },
     .{ "perms", "Set file write permission" },
     .{ "play", "Play a PCM WAV audio file" },
+    .{ "fetch", "Fetch a URL over TCP (HTTP/1.0)" },
 
 });
 

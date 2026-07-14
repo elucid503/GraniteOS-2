@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     const memory = b.option(u64, "memory", "RAM in MiB for the QEMU run steps") orelse 512;
     const disk = b.option(u64, "disk", "Disk size in MiB for the persistent QEMU disk") orelse default_disk_mib;
     const debug_syscall_trace = b.option(bool, "debug-syscall-trace", "Record the last syscall verb/args in globals for panic diagnosis") orelse false;
+    const net = b.option(bool, "net", "Attach virtio-net (QEMU user-mode networking, host reachable at 10.0.2.2) to the QEMU run steps") orelse true;
 
     if (disk == 0) @panic("-Ddisk must be at least 1 MiB");
     if (disk > std.math.maxInt(u64) / bytes_per_mib) @panic("-Ddisk is too large");
@@ -189,6 +190,7 @@ pub fn build(b: *std.Build) void {
         .disk = .{ .path = disk_path, .prepare = seedisk_run },
         .smp = smp,
         .memory = memory,
+        .net = net,
 
     }, null);
 
@@ -201,19 +203,21 @@ pub fn build(b: *std.Build) void {
         .disk = .{ .path = disk_path, .prepare = seedisk_run },
         .smp = smp,
         .memory = memory,
+        .net = net,
 
     }, null);
 
     add_qemu_step(b, kernel_image, bundle_image, .{
 
         .name = "qemu-gui",
-        .description = "Boot the full system with ramfb display and virtio-input devices",
+        .description = "Boot the full system with the virtio-gpu display and virtio-input devices (M9)",
         .debug = false,
         .test_build = test_build,
         .disk = .{ .path = disk_path, .prepare = seedisk_run },
         .smp = smp,
         .memory = memory,
         .gui = true,
+        .net = net,
 
     }, qemu_runner);
 
@@ -226,6 +230,7 @@ pub fn build(b: *std.Build) void {
         .disk = null,
         .smp = smp,
         .memory = memory,
+        .net = net,
 
     }, null);
 
@@ -409,6 +414,7 @@ const QemuStep = struct {
     smp: u64,
     memory: u64,
     gui: bool = false,
+    net: bool = false,
 
 };
 
@@ -439,14 +445,22 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
     // VirtIO Sound needs a modern MMIO transport (VIRTIO_F_VERSION_1 / config version 2).
     run.addArgs(&.{ "-global", "virtio-mmio.force-legacy=false" });
 
+    // QEMU user-mode networking (SLIRP): guest 10.0.2.15/24, gateway/host-proxy and DNS at 10.0.2.2/.3 (matches
+    // servers/netstack/config.zig's hardcoded addressing). hostfwd lets a host client reach a guest TCP listener;
+    // the guest reaches the host itself at 10.0.2.2 for outbound tests (e.g. `fetch`).
+    if (step.net) {
+
+        run.addArgs(&.{ "-netdev", "user,id=granite-net,hostfwd=tcp::5555-:5555" });
+        run.addArgs(&.{ "-device", "virtio-net-device,netdev=granite-net" });
+
+    }
+
     // GUI boots open a host display window with the serial console on stdio; everything else is headless.
 
     if (step.gui) {
 
         run.addArgs(&.{ "-display", "sdl" });
-        // QEMU always loads vgabios-ramfb.bin for -device ramfb; point -L at our stub.
-        run.addArgs(&.{ "-L", b.pathFromRoot("pc-bios") });
-        run.addArgs(&.{ "-device", "ramfb" });
+        run.addArgs(&.{ "-device", "virtio-gpu-device" });
         run.addArgs(&.{ "-device", "virtio-keyboard-device" });
         run.addArgs(&.{ "-device", "virtio-tablet-device" });
         const audio_backend = if (builtin.os.tag == .windows) "dsound,id=granite-audio" else "sdl,id=granite-audio";

@@ -165,10 +165,10 @@ pub const filesystem = struct {
 
 };
 
-// Display interface (07-userspace-ddd.md Section 10.6), spoken by the ramfb display driver. The compositor is
-// its one client: it maps the scanout Region once and may call `flush` after writing (a no-op for host update —
-// QEMU dirty-tracks the FB). `attach_events` is retained for mode-change wakes; ramfb uses a fixed mode.
-// Cursor methods are implemented in software on top of the linear FB (ramfb has no hardware cursor plane).
+// Display interface (07-userspace-ddd.md Section 10.6), spoken by the virtio-gpu display driver. The compositor is
+// its one client: it maps the scanout Region once and pushes damage rectangles through `flush`. `attach_events`
+// extends the table so a host-side window resize (a mode change) can wake the compositor through a Notification;
+// the cursor methods expose the device's hardware cursor plane, so pointer motion never forces a recomposite.
 
 pub const display = struct {
 
@@ -188,7 +188,7 @@ pub const display = struct {
     // The Notification bit `attach_events` signals when the display mode changes.
     pub const mode_bit: u64 = 1;
 
-    // Cursor images are fixed 64x64 ARGB (software cursor on ramfb).
+    // Cursor images are fixed 64x64 ARGB (the virtio-gpu cursor plane size).
     pub const cursor_size: usize = 64;
 
 };
@@ -303,5 +303,61 @@ pub const input = struct {
 pub const supervisor = struct {
 
     pub const death: u16 = 1; // request: exit status        (one-way; no reply)
+
+};
+
+// virtio-net driver interface: the netstack's one client, speaking raw Ethernet frames. RX is asynchronous (frames
+// arrive unbidden into a shared frame ring the netstack owns); TX is a synchronous per-frame call into a shared
+// staging buffer, matching the block/audio drivers' bounce-buffer convention.
+
+pub const net = struct {
+
+    pub const interface_id: u32 = 0x4e45_5431; // "NET1"
+    pub const version: u32 = 1;
+
+    pub const attach: u16 = 1; // request: rx ring capacity (frames), tx buffer capacity (bytes)
+    // handles: [0] = rx frame Ring Region (driver writes), [1] = tx staging Region (driver reads), [2] = Notification (driver signals on new RX frames)   reply: status
+    pub const mac_address: u16 = 2; // request: -                     reply: mac[0..4] as le32 in data[1], mac[4..6] in low 16 bits of data[2]
+    pub const transmit: u16 = 3; // request: length (bytes staged at offset 0)   reply: status
+    pub const link_status: u16 = 4; // request: -                     reply: 1 = up, 0 = down
+
+    pub const rx_bit: u64 = 1; // the Notification bit the driver signals when it pushes into the RX frame ring
+
+};
+
+// Socket interface (07-userspace-ddd.md Section 10.x style), spoken by the netstack server. One shared session
+// buffer per client (attach, once), then `(offset, length)` pairs into it for payloads - the filesystem/audio
+// convention. Sockets are non-blocking at the wire: a call that cannot complete immediately returns `WouldBlock`
+// (or, for `connect`, simply "accepted, in progress") and the client waits on the per-session readiness
+// Notification before retrying. `lib.net` hides this behind a blocking facade.
+
+pub const socket = struct {
+
+    pub const interface_id: u32 = 0x534f_434b; // "SOCK"
+    pub const version: u32 = 1;
+
+    pub const attach: u16 = 1; // request: capacity                                    handles: [0] = buffer Region, [1] = readiness Notification   reply: status
+    pub const open: u16 = 2; // request: kind (stream|dgram)                          reply: socket id
+    pub const bind: u16 = 3; // request: sid, addr, port                              reply: status
+    pub const listen: u16 = 4; // request: sid, backlog                                 reply: status
+    pub const connect: u16 = 5; // request: sid, addr, port                              reply: status (accepted; wait for `connected`/`err` on poll)
+    pub const accept: u16 = 6; // request: sid                                          reply: new sid (data[1]), peer addr (data[2]), peer port (data[3])   | WouldBlock
+    pub const send: u16 = 7; // request: sid, offset, length                          reply: bytes queued (data[1])   | WouldBlock
+    pub const recv: u16 = 8; // request: sid, offset, capacity                        reply: bytes read (data[1])     | WouldBlock
+    pub const close: u16 = 9; // request: sid                                          reply: status
+    pub const poll: u16 = 10; // request: sid                                          reply: readiness bitmask (data[1])
+    pub const local_addr: u16 = 11; // request: sid                                          reply: addr (data[1]), port (data[2])
+    pub const detach: u16 = 12; // request: -                                           reply: status (releases every socket this session owns)
+
+    pub const kind_stream: u64 = 1;
+    pub const kind_dgram: u64 = 2;
+
+    // Readiness bits, mirroring the input/window ring-bit convention: signaled into the client's own Notification.
+    pub const readable: u64 = 1;
+    pub const writable: u64 = 2;
+    pub const connected: u64 = 4;
+    pub const closed: u64 = 8;
+    pub const accept_ready: u64 = 16;
+    pub const err: u64 = 32;
 
 };

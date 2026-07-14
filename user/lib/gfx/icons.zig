@@ -1,5 +1,4 @@
-// Minimalist outline icons for the desktop, drawn by the SVG renderer (svg.zig). Each is a 24x24 stroke-only glyph
-// from the shape subset the renderer supports (path/line/polyline/rect/circle), so they scale to any icon box.
+// Minimalist outline icons for the desktop, drawn by the SVG renderer (svg.zig).
 
 pub const apps =
     \\<svg viewBox="0 0 24 24">
@@ -34,6 +33,15 @@ pub const terminal =
     \\<svg viewBox="0 0 24 24">
     \\<polyline points="6 8 11 12 6 16"/>
     \\<line x1="14" y1="17" x2="19" y2="17"/>
+    \\</svg>
+;
+
+pub const network =
+    \\<svg viewBox="0 0 24 24">
+    \\<circle cx="12" cy="12" r="9"/>
+    \\<line x1="3" y1="12" x2="21" y2="12"/>
+    \\<path d="M12 3 Q17 12 12 21"/>
+    \\<path d="M12 3 Q7 12 12 21"/>
     \\</svg>
 ;
 

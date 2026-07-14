@@ -13,6 +13,8 @@ const child_budget = 4 * 1024 * 1024;
 // Virtio-sound pulls a larger image/BSS than the other MMIO drivers; keep headroom for DMA + console log session.
 const audio_budget = 8 * 1024 * 1024;
 const files_budget = 8 * 1024 * 1024;
+// The TCB table alone is ~1 MiB (32 connections x 32 KiB of send/recv rings); leave headroom over that.
+const netstack_budget = 12 * 1024 * 1024;
 const marble_budget = 16 * 1024 * 1024;
 
 // Desktop wallpaper decode needs a multi-megabyte pixel buffer (1920x1080 XRGB plus inflate scratch).
@@ -40,18 +42,20 @@ var display_endpoint: Handle = 0;
 var input_endpoint: Handle = 0;
 var window_endpoint: Handle = 0;
 var launcher_endpoint: Handle = 0;
+var net_endpoint: Handle = 0;
+var netstack_endpoint: Handle = 0;
 
 var console_uart: lib.dtb.Uart = undefined;
 var block_device: ?lib.dtb.Device = null;
 var audio_device: ?lib.dtb.Device = null;
+var net_device: ?lib.dtb.Device = null;
 
-// The graphical stack is optional by hardware presence (08-roadmap.md M9): it spawns only when fw_cfg
-// exposes `etc/ramfb` (QEMU `-device ramfb`) together with virtio input.
+// The graphical stack is optional by hardware presence (08-roadmap.md M9): it spawns only when the DTB
+// reports a virtio-gpu transport together with virtio input.
 
 const max_input_devices = 4;
 
-var fw_cfg_device: ?lib.dtb.Device = null;
-var ramfb_present = false;
+var gpu_device: ?lib.dtb.Device = null;
 var input_devices: [max_input_devices]lib.dtb.Device = undefined;
 var input_count: usize = 0;
 
@@ -68,10 +72,13 @@ const launcher_id: u64 = 11;
 const taskbar_id: u64 = 12;
 const context_id: u64 = 13;
 const audio_id: u64 = 14;
+const net_id: u64 = 15;
+const netstack_id: u64 = 16;
 
 // The filesystem attaches its block session under this badge; badge 0 stays the shared console/logging session.
 
 const files_block_badge: u64 = 1;
+const netstack_net_badge: u64 = 1;
 
 pub export fn _start() linksection(".text.start") callconv(.naked) noreturn {
 
@@ -123,14 +130,13 @@ fn run(arg: u64) !void {
     input_endpoint = try sys.create(.endpoint, 0, 0);
     window_endpoint = try sys.create(.endpoint, 0, 0);
     launcher_endpoint = try sys.create(.endpoint, 0, 0);
+    net_endpoint = try sys.create(.endpoint, 0, 0);
+    netstack_endpoint = try sys.create(.endpoint, 0, 0);
 
     try spawn_naming();
     try spawn_console();
     try lib.stream.register_with(naming_endpoint, "console", console_endpoint);
     try lib.stream.register_with(naming_endpoint, "naming", naming_endpoint);
-
-    // Probe ramfb after the console is up so failures are visible on serial.
-    find_ramfb(dtb);
 
     if (block_device != null) {
 
@@ -151,6 +157,14 @@ fn run(arg: u64) !void {
 
     }
 
+    if (net_device != null) {
+
+        try spawn_net();
+        try spawn_netstack();
+        try lib.stream.register_with(naming_endpoint, "netstack", netstack_endpoint);
+
+    }
+
     try spawn_marble();
 
     start_gui() catch {};
@@ -159,7 +173,7 @@ fn run(arg: u64) !void {
 
 fn start_gui() !void {
 
-    if (ramfb_present) {
+    if (gpu_device != null) {
 
         try spawn_display();
         try lib.stream.register_with(naming_endpoint, "display", display_endpoint);
@@ -192,13 +206,14 @@ fn start_gui() !void {
 
 }
 
-// Probe each virtio-mmio transport from the DTB and sort them by device id: block (2), input (18), sound (25).
-// Display no longer uses virtio-gpu; ramfb is discovered through fw_cfg (`etc/ramfb`).
+// Probe each virtio-mmio transport from the DTB and sort them by device id: block (2), gpu (16), input (18).
 // The transports are 0x200-byte windows sharing pages, so probing maps the containing page and reads at the
 // in-page offset.
 
 const virtio_magic: u32 = 0x7472_6976;
+const device_id_net: u32 = 1;
 const device_id_block: u32 = 2;
+const device_id_gpu: u32 = 16;
 const device_id_input: u32 = 18;
 const device_id_sound: u32 = 25;
 const max_transports = 64;
@@ -212,9 +227,21 @@ fn find_virtio_devices(dtb: usize) void {
 
         switch (probe_virtio(node)) {
 
+            device_id_net => {
+
+                if (net_device == null) net_device = node;
+
+            },
+
             device_id_block => {
 
                 if (block_device == null) block_device = node;
+
+            },
+
+            device_id_gpu => {
+
+                if (gpu_device == null) gpu_device = node;
 
             },
 
@@ -264,69 +291,6 @@ fn probe_virtio(node: lib.dtb.Device) u32 {
 
     const found: u32 = if (magic.* == virtio_magic and (version.* == 1 or version.* == 2)) device_id.* else 0;
 
-    sys.unmap(cap.self_space, mapped) catch {};
-    sys.close(window) catch {};
-
-    return found;
-
-}
-
-// QEMU virt fw_cfg is at 0x09020000; prefer the DTB node when present (no interrupt required).
-const fw_cfg_fallback_base: usize = 0x0902_0000;
-
-fn find_ramfb(dtb: usize) void {
-
-    var nodes: [1]lib.dtb.Device = undefined;
-
-    fw_cfg_device = if (lib.dtb.find_compatible(dtb, "qemu,fw-cfg-mmio", &nodes) > 0)
-        nodes[0]
-    else
-        .{ .base = fw_cfg_fallback_base, .interrupt_line = 0 };
-
-    ramfb_present = probe_ramfb(fw_cfg_device.?);
-
-}
-
-fn probe_ramfb(device: lib.dtb.Device) bool {
-
-    const page = device.base & ~@as(usize, page_size - 1);
-    const window = sys.create_device_region(page, page_size, cap.flint.devices) catch return false;
-
-    const mapped = sys.map(cap.self_space, window, 0, sys.read | sys.write) catch {
-
-        sys.close(window) catch {};
-
-        return false;
-
-    };
-
-    const scratch = sys.create_dma(page_size, cap.flint.dma) catch {
-
-        sys.unmap(cap.self_space, mapped) catch {};
-        sys.close(window) catch {};
-
-        return false;
-
-    };
-
-    const scratch_va = sys.map(cap.self_space, scratch.region, 0, sys.read | sys.write) catch {
-
-        sys.close(scratch.region) catch {};
-        sys.unmap(cap.self_space, mapped) catch {};
-        sys.close(window) catch {};
-
-        return false;
-
-    };
-
-    @memset(@as([*]u8, @ptrFromInt(scratch_va))[0..page_size], 0);
-
-    const regs = mapped + (device.base - page);
-    const fw = lib.fw_cfg.FwCfg.init(regs, scratch_va, scratch.physical_base);
-    const found = fw.present() and fw.find(lib.fw_cfg.ramfb_name) != null;
-
-    sys.unmap(cap.self_space, scratch_va) catch {};
-    sys.close(scratch.region) catch {};
     sys.unmap(cap.self_space, mapped) catch {};
     sys.close(window) catch {};
 
@@ -470,6 +434,77 @@ fn spawn_files() !void {
 
 }
 
+fn spawn_net() !void {
+
+    const device = net_device orelse return error.NotFound;
+
+    const image = bundle.find("net") orelse return error.NotFound;
+    const page = device.base & ~@as(usize, page_size - 1);
+    const window = try sys.create_device_region(page, page_size, cap.flint.devices);
+    const interrupt = try sys.create(.interrupt, device.interrupt_line, cap.flint.interrupts);
+    const memory = try sys.create(.memory_authority, child_budget, cap.flint.memory);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
+    const report = try sys.copy(supervisor_endpoint, net_id);
+
+    const grants = [_]Handle{
+
+        net_endpoint,
+        net_endpoint,
+        net_endpoint,
+        naming_endpoint,
+        memory,
+        init_endpoint,
+        report,
+        window,
+        interrupt,
+        cap.flint.dma,
+
+    };
+
+    try spawn_detached(.{
+
+        .image = image,
+        .authority = memory,
+        .args = &.{"net"},
+        .grants = &grants,
+        .data3 = device.base - page,
+
+    }, &.{ window, interrupt, memory, init_endpoint, report });
+
+}
+
+fn spawn_netstack() !void {
+
+    const image = bundle.find("netstack") orelse return error.NotFound;
+    const memory = try sys.create(.memory_authority, netstack_budget, cap.flint.memory);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
+    const report = try sys.copy(supervisor_endpoint, netstack_id);
+    const net = try sys.copy(net_endpoint, netstack_net_badge);
+
+    const grants = [_]Handle{
+
+        netstack_endpoint,
+        netstack_endpoint,
+        netstack_endpoint,
+        naming_endpoint,
+        memory,
+        init_endpoint,
+        report,
+        net,
+
+    };
+
+    try spawn_detached(.{
+
+        .image = image,
+        .authority = memory,
+        .args = &.{"netstack"},
+        .grants = &grants,
+
+    }, &.{ memory, init_endpoint, report, net });
+
+}
+
 fn spawn_audio() !void {
 
     const device = audio_device orelse return error.NotFound;
@@ -547,11 +582,12 @@ fn spawn_marble() !void {
 
 fn spawn_display() !void {
 
-    const device = fw_cfg_device orelse return error.NotFound;
+    const device = gpu_device orelse return error.NotFound;
 
     const image = bundle.find("display") orelse return error.NotFound;
     const page = device.base & ~@as(usize, page_size - 1);
     const window = try sys.create_device_region(page, page_size, cap.flint.devices);
+    const interrupt = try sys.create(.interrupt, device.interrupt_line, cap.flint.interrupts);
     const memory = try sys.create(.memory_authority, child_budget, cap.flint.memory);
     const init_endpoint = try sys.create(.endpoint, 0, 0);
     const report = try sys.copy(supervisor_endpoint, display_id);
@@ -566,6 +602,7 @@ fn spawn_display() !void {
         init_endpoint,
         report,
         window,
+        interrupt,
         cap.flint.dma,
 
     };
@@ -578,7 +615,7 @@ fn spawn_display() !void {
         .grants = &grants,
         .data3 = device.base - page,
 
-    }, &.{ window, memory, init_endpoint, report });
+    }, &.{ window, interrupt, memory, init_endpoint, report });
 
 }
 
@@ -811,6 +848,12 @@ fn restart(who: u64) !void {
 
             }
 
+            if (net_device != null) {
+
+                try lib.stream.register_with(naming_endpoint, "netstack", netstack_endpoint);
+
+            }
+
         },
 
         console_id => {
@@ -834,6 +877,23 @@ fn restart(who: u64) !void {
 
         },
 
+        net_id => {
+
+            if (net_device != null) try spawn_net();
+
+        },
+
+        netstack_id => {
+
+            if (net_device != null) {
+
+                try spawn_netstack();
+                try lib.stream.register_with(naming_endpoint, "netstack", netstack_endpoint);
+
+            }
+
+        },
+
         // Without a disk the filesystem's exit is its clean "unavailable" report, not a crash to heal.
 
         files_id => {
@@ -844,7 +904,7 @@ fn restart(who: u64) !void {
 
         display_id => {
 
-            if (ramfb_present) {
+            if (gpu_device != null) {
 
                 try spawn_display();
                 try lib.stream.register_with(naming_endpoint, "display", display_endpoint);
@@ -855,13 +915,13 @@ fn restart(who: u64) !void {
 
         input_id => {
 
-            if (ramfb_present and input_count > 0) try spawn_input();
+            if (gpu_device != null and input_count > 0) try spawn_input();
 
         },
 
         compositor_id => {
 
-            if (ramfb_present) {
+            if (gpu_device != null) {
 
                 try spawn_compositor();
                 try lib.stream.register_with(naming_endpoint, "window", window_endpoint);
@@ -872,7 +932,7 @@ fn restart(who: u64) !void {
 
         launcher_id => {
 
-            if (ramfb_present) {
+            if (gpu_device != null) {
 
                 try spawn_launcher();
                 try lib.stream.register_with(naming_endpoint, "launch", launcher_endpoint);
@@ -886,19 +946,19 @@ fn restart(who: u64) !void {
 
         welcome_id => {
 
-            if (ramfb_present) try spawn_taskbar();
+            if (gpu_device != null) try spawn_taskbar();
 
         },
 
         taskbar_id => {
 
-            if (ramfb_present) try spawn_taskbar();
+            if (gpu_device != null) try spawn_taskbar();
 
         },
 
         context_id => {
 
-            if (ramfb_present) try spawn_context();
+            if (gpu_device != null) try spawn_context();
 
         },
 
