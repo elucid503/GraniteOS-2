@@ -34,13 +34,6 @@ fn dock_margin() i32 {
 
 }
 
-// Must match the compositor's `render.corner_radius` (user/servers/display/render.zig)
-fn dock_radius() i32 {
-
-    return 8;
-
-}
-
 fn launcher_width() i32 {
 
     return 44;
@@ -279,7 +272,7 @@ fn run() !void {
     window_list = try lib.wm.List.init(&connection, cap.memory);
     try window_list.subscribe();
 
-    bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel, "taskbar");
+    bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel | proto.window.flag_glass, "taskbar");
 
     app_count = lib.wm.load_apps(&bundle, apps[0..]);
     build_categories();
@@ -1056,9 +1049,9 @@ fn ensure_menu() !void {
 
     const height = menu_height();
 
-    var menu_window = try connection.create_window(menu_width(), height, proto.window.flag_undecorated, "menu");
+    var menu_window = try connection.create_window(menu_width(), height, proto.window.flag_undecorated | proto.window.flag_glass, "menu");
 
-    menu_window.surface.fill(ui.theme.window_bg);
+    menu_window.surface.fill(lib.draw.glass_hole);
 
     try lib.wm.minimize(&connection, menu_window.id);
 
@@ -1311,9 +1304,9 @@ fn ensure_weather_popup() !void {
 
     }
 
-    var window = try connection.create_window(calendar_width(), weather_height(), proto.window.flag_undecorated, "weather");
+    var window = try connection.create_window(calendar_width(), weather_height(), proto.window.flag_undecorated | proto.window.flag_glass, "weather");
 
-    window.surface.fill(ui.theme.surface);
+    window.surface.fill(lib.draw.glass_hole);
 
     try lib.wm.minimize(&connection, window.id);
 
@@ -1330,9 +1323,9 @@ fn ensure_calendar() !void {
 
     }
 
-    var window = try connection.create_window(calendar_width(), calendar_height(), proto.window.flag_undecorated, "calendar");
+    var window = try connection.create_window(calendar_width(), calendar_height(), proto.window.flag_undecorated | proto.window.flag_glass, "calendar");
 
-    window.surface.fill(ui.theme.surface);
+    window.surface.fill(lib.draw.glass_hole);
 
     try lib.wm.minimize(&connection, window.id);
 
@@ -1463,7 +1456,7 @@ fn paint_weather_content() void {
     const window = weather_popup orelse return;
     const surface = &window.surface;
 
-    panel(surface, surface.bounds(), ui.theme.surface);
+    glass_panel(surface, surface.bounds());
 
     const pad = calendar_pad();
     const rect = Rect{
@@ -1537,7 +1530,7 @@ fn paint_calendar_content() void {
     const surface = &window.surface;
     const pad = calendar_pad();
 
-    panel(surface, surface.bounds(), ui.theme.surface);
+    glass_panel(surface, surface.bounds());
 
     const grid_rect = Rect{
 
@@ -1992,7 +1985,7 @@ fn paint_bar() void {
     const surface = &bar.surface;
     const width: i32 = @intCast(surface.width);
 
-    panel(surface, surface.bounds(), ui.theme.surface_alt);
+    glass_panel(surface, surface.bounds());
 
     bar_regions.reset();
 
@@ -2155,7 +2148,9 @@ fn paint_clock_only() void {
     const width: i32 = @intCast(surface.width);
     const rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
 
-    surface.fill_rect(rect, ui.theme.surface_alt);
+    // The bar is glass: re-hole this band rather than filling it opaque, or the tick would paint an
+    // opaque patch over the backdrop until the next full `paint_bar`.
+    surface.fill_rect(rect, lib.draw.glass_hole);
     paint_clock(surface, width);
 
     bar.present(rect) catch {};
@@ -2177,7 +2172,7 @@ fn paint_menu_content() void {
     const surface = &menu_window.surface;
     const width: i32 = @intCast(surface.width);
 
-    panel(surface, surface.bounds(), ui.theme.window_bg);
+    glass_panel(surface, surface.bounds());
 
     menu_regions.reset();
 
@@ -2434,10 +2429,13 @@ fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, content: []co
 
 }
 
-fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
+/// Every taskbar surface (dock, launcher grid, calendar, weather) is glass: the compositor's own
+/// procedural backdrop (draw.glass, driven by `flag_glass` on each of these windows) already owns
+/// the rounding, blur, tint, and rim, so the client only needs to leave its background see-through.
+/// Anything drawn on top afterward (text, icons, hover chips) stays opaque as usual.
+fn glass_panel(surface: *const gfx.Surface, rect: Rect) void {
 
-    ui.fill_round_rect(surface, rect, dock_radius(), color);
-    ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
+    surface.fill_rect(rect, lib.draw.glass_hole);
 
 }
 

@@ -21,6 +21,7 @@ const Manager = manager_module.Manager;
 const Message = ipc.Message;
 const Rect = draw.Rect;
 const Window = manager_module.Window;
+const glass = draw.glass;
 
 comptime {
 
@@ -74,6 +75,20 @@ var fb: draw.Surface = undefined;
 var back_region: Handle = 0;
 var back_base: usize = 0;
 var back: draw.Surface = undefined;
+
+// Scratch buffers for the glass backdrop capture + blur ping-pong (draw/glass.zig). Grown on demand
+// to whatever footprint (plus blur/lens halo) a glass element needs; never shrunk, so an open dock or
+// popout never re-triggers the growth path once warmed up.
+
+var glass_capture_region: Handle = 0;
+var glass_capture_base: usize = 0;
+var glass_capture_capacity: usize = 0;
+var glass_capture: draw.Surface = undefined;
+
+var glass_scratch_region: Handle = 0;
+var glass_scratch_base: usize = 0;
+var glass_scratch_capacity: usize = 0;
+var glass_scratch: draw.Surface = undefined;
 
 var manager = Manager{};
 var surfaces = surfaces_module.Store(manager_module.max_windows){};
@@ -372,6 +387,77 @@ fn build_back_buffer() !void {
     back_region = try sys.create(.region, bytes, cap.memory);
     back_base = try sys.map(cap.self_space, back_region, 0, sys.read | sys.write);
     back = draw.Surface.from_base(back_base, screen_width, screen_height, screen_width * 4);
+
+}
+
+/// Grows the glass capture/scratch regions to fit a `width x height` footprint, amortized like
+/// `surfaces.Store.allocate`. Both buffers stay allocated at their high-water size for the process
+/// lifetime; only genuinely larger glass elements (or a bigger halo) ever grow them again.
+fn ensure_glass_scratch(width: u32, height: u32) !void {
+
+    const bytes = surfaces_module.surface_bytes(width, height) orelse return error.Invalid;
+
+    if (bytes > glass_capture_capacity) {
+
+        if (glass_capture_base != 0) sys.unmap(cap.self_space, glass_capture_base) catch {};
+        if (glass_capture_region != 0) sys.close(glass_capture_region) catch {};
+
+        const allocation = std.math.ceilPowerOfTwo(usize, bytes) catch bytes;
+
+        glass_capture_region = try sys.create(.region, allocation, cap.memory);
+        glass_capture_base = try sys.map(cap.self_space, glass_capture_region, 0, sys.read | sys.write);
+        glass_capture_capacity = allocation;
+
+    }
+
+    if (bytes > glass_scratch_capacity) {
+
+        if (glass_scratch_base != 0) sys.unmap(cap.self_space, glass_scratch_base) catch {};
+        if (glass_scratch_region != 0) sys.close(glass_scratch_region) catch {};
+
+        const allocation = std.math.ceilPowerOfTwo(usize, bytes) catch bytes;
+
+        glass_scratch_region = try sys.create(.region, allocation, cap.memory);
+        glass_scratch_base = try sys.map(cap.self_space, glass_scratch_region, 0, sys.read | sys.write);
+        glass_scratch_capacity = allocation;
+
+    }
+
+    glass_capture = draw.Surface.from_base(glass_capture_base, width, height, width * 4);
+    glass_scratch = draw.Surface.from_base(glass_scratch_base, width, height, width * 4);
+
+}
+
+/// Procedural material selection: any window can opt into glass (`flag_glass`) and gets a preset
+/// picked from its existing kind, with no per-widget code. A dock-style panel reads a touch more
+/// frosted than a transient popout.
+fn glass_material_for(window: *const Window) ?glass.Material {
+
+    if (!window.is_glass()) return null;
+    if (window.is_panel()) return glass.dock;
+
+    return glass.panel;
+
+}
+
+/// Repaints a glass window's backdrop for the part of its frame within `clip`, before its own
+/// content is blitted on top (see `draw_window`).
+fn render_glass_backdrop(window: *const Window, clip: Rect, material: glass.Material) void {
+
+    const frame = window.frame();
+    const footprint = frame.intersect(clip).intersect(back.bounds());
+
+    if (footprint.is_empty()) return;
+
+    const capture_rect = footprint.inset(-glass.halo(material)).intersect(back.bounds());
+
+    if (capture_rect.is_empty()) return;
+
+    ensure_glass_scratch(@intCast(capture_rect.w), @intCast(capture_rect.h)) catch return;
+
+    const radius = draw.round.clamp_radius(frame, render.corner_radius);
+
+    glass.render_backdrop(&back, &glass_capture, &glass_scratch, capture_rect, frame, footprint, radius, material);
 
 }
 
@@ -1375,9 +1461,57 @@ fn screen_bounds() Rect {
 
 }
 
+/// A glass element's backdrop is only as fresh as the last time its (halo-dilated) footprint was
+/// repainted. Whatever moved to produce `damage` this frame must also dirty every glass element
+/// whose footprint overlaps it, or its blur/lens would go on showing a stale backdrop underneath.
+/// Two passes cover the deepest realistic stack on this desktop (a popout above the always-open
+/// dock); a snapshot per pass keeps each pass from reacting to rects it itself just added.
+fn amplify_glass_damage() void {
+
+    var pass: usize = 0;
+
+    while (pass < 2) : (pass += 1) {
+
+        const snapshot = damage;
+        var index: usize = 0;
+
+        while (index < manager.count) : (index += 1) {
+
+            const window = manager.stacked(index);
+
+            if (!window.is_glass()) continue;
+            if (window.flags & proto.window.flag_minimized != 0) continue;
+
+            const material = glass_material_for(window) orelse continue;
+            const dilated = window.frame().inset(-glass.halo(material));
+
+            var overlaps = false;
+            var r: usize = 0;
+
+            while (r < snapshot.len) : (r += 1) {
+
+                if (!dilated.intersect(snapshot.rects[r]).is_empty()) {
+
+                    overlaps = true;
+                    break;
+
+                }
+
+            }
+
+            if (overlaps) add_damage(dilated);
+
+        }
+
+    }
+
+}
+
 fn composite() !void {
 
     if (damage.len == 0) return;
+
+    amplify_glass_damage();
 
     const pending = damage;
     damage.clear();
@@ -1399,6 +1533,11 @@ fn composite() !void {
             const candidate = manager.stacked(search);
 
             if (candidate.flags & proto.window.flag_minimized != 0) continue;
+
+            // Glass is never opaque: treating it as the covering floor would skip painting whatever
+            // sits beneath it, and its own backdrop capture would then read stale pixels.
+            if (candidate.is_glass()) continue;
+
             if (candidate.flags & proto.window.flag_desktop == 0 and candidate.flags & proto.window.flag_undecorated == 0) continue;
             if (!covers(candidate.content(), region)) continue;
             if (!surfaces.covers(slot_of(candidate), candidate.content(), region)) continue;
@@ -1468,6 +1607,10 @@ fn draw_window(window: *Window, clip: Rect) void {
     const slot = slot_of(window);
     const view = back.clipped(clip);
 
+    // Glass paints its backdrop into `back` first: everything below is already composited for this
+    // damage region, so the capture below is always fresh (see `composite`'s glass damage amplification).
+    if (glass_material_for(window)) |material| render_glass_backdrop(window, clip, material);
+
     if (window.decorated()) {
 
         const face: ?*const draw.text.Face = if (title_font) |*f| f else null;
@@ -1480,7 +1623,7 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     const surface = surfaces.surface_of(slot) orelse return;
 
-    render.blit_content(&back, window, &surface, clip, theme.border);
+    render.blit_content(&back, window, &surface, clip, theme.border, window.is_glass());
 
     if (window.decorated()) {
 

@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const bitmap = @import("bitmap.zig");
+pub const glass = @import("glass.zig");
 pub const image = @import("image.zig");
 pub const path = @import("path.zig");
 pub const png = @import("png.zig");
@@ -97,6 +98,19 @@ fn mix_four(dst: PixelVector, src: PixelVector, alpha: PixelVector) PixelVector 
 pub fn lerp(from: Color, to: Color, t: u8) Color {
 
     return mix(from, to, t);
+
+}
+
+/// Reserved sentinel a glass-enabled client paints to mark a pixel as see-through: the compositor's
+/// own blurred/refracted backdrop rendering (see `glass.zig`) shows through instead of this color.
+/// Ordinary colors built with `rgb()` never produce this exact value, and every existing blit/blend
+/// path (`blit`, `blit_masked`, ...) treats it as an ordinary opaque color, so only a window that
+/// opts into glass and is composited through `blit_glass` needs to care about it.
+pub const glass_hole: Color = 0x0100_0000;
+
+pub fn is_glass_hole(color: Color) bool {
+
+    return color == glass_hole;
 
 }
 
@@ -568,6 +582,48 @@ pub const Surface = struct {
 
     }
 
+    /// Like `blit`, but source pixels equal to `glass_hole` are skipped, leaving whatever the
+    /// compositor already painted underneath (its own blurred/refracted backdrop) untouched. This is
+    /// the compositing step that lets a glass client's own chrome sit opaquely over a see-through body.
+    pub fn blit_glass(self: *const Surface, dst_x: i32, dst_y: i32, src: *const Surface, src_rect: Rect) void {
+
+        var from = src_rect.intersect(src.bounds());
+
+        if (from.is_empty()) return;
+
+        var to = Rect{ .x = dst_x, .y = dst_y, .w = from.w, .h = from.h };
+        const clipped_to = to.intersect(self.paint_bounds());
+
+        if (clipped_to.is_empty()) return;
+
+        from.x += clipped_to.x - to.x;
+        from.y += clipped_to.y - to.y;
+        to = clipped_to;
+
+        var row: u32 = 0;
+        const row_w: u32 = @intCast(to.w);
+
+        while (row < to.h) : (row += 1) {
+
+            const src_start = (@as(u32, @intCast(from.y)) + row) * src.stride + @as(u32, @intCast(from.x));
+            const dst_start = (@as(u32, @intCast(to.y)) + row) * self.stride + @as(u32, @intCast(to.x));
+
+            var col: u32 = 0;
+
+            while (col < row_w) : (col += 1) {
+
+                const pixel = src.pixels[src_start + col];
+
+                if (is_glass_hole(pixel)) continue;
+
+                self.pixels[dst_start + col] = pixel;
+
+            }
+
+        }
+
+    }
+
     // 4x4 Bayer-dithered vertical gradient to hide 8-bit banding on large fills.
 
     pub fn fill_gradient(self: *const Surface, rect: Rect, top: Color, bottom: Color) void {
@@ -639,6 +695,23 @@ fn test_surface(buffer: []u32, width: u32, height: u32) Surface {
     @memset(buffer, 0);
 
     return Surface.from_pixels(buffer.ptr, width, height);
+
+}
+
+test "blit_glass copies opaque pixels but skips holes" {
+
+    var src_buf: [4]u32 = .{ 0x112233, glass_hole, 0x445566, glass_hole };
+    const src = Surface.from_pixels(&src_buf, 2, 2);
+
+    var dst_buf: [4]u32 = .{ 0xaaaaaa, 0xbbbbbb, 0xcccccc, 0xdddddd };
+    const dst = Surface.from_pixels(&dst_buf, 2, 2);
+
+    dst.blit_glass(0, 0, &src, src.bounds());
+
+    try testing.expectEqual(@as(u32, 0x112233), dst_buf[0]);
+    try testing.expectEqual(@as(u32, 0xbbbbbb), dst_buf[1]);
+    try testing.expectEqual(@as(u32, 0x445566), dst_buf[2]);
+    try testing.expectEqual(@as(u32, 0xdddddd), dst_buf[3]);
 
 }
 

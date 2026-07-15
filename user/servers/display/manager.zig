@@ -96,6 +96,14 @@ pub const Window = struct {
 
     }
 
+    /// A window opted into the procedural "liquid glass" backdrop material (`draw.glass`) instead
+    /// of an opaque content blit.
+    pub fn is_glass(self: *const Window) bool {
+
+        return self.flags & proto.window.flag_glass != 0;
+
+    }
+
     pub fn stack_kind(self: *const Window) StackKind {
 
         if (self.is_panel()) return .panel;
@@ -1224,6 +1232,20 @@ test "desktop layers track the screen size" {
     try testing.expectEqual(@as(u32, 1024), desktop.width);
     try testing.expectEqual(@as(u32, 768), desktop.height);
     try testing.expect(manager.tracks_screen(desktop));
+
+}
+
+test "the glass flag is independent of panel and decoration state" {
+
+    var manager = test_manager();
+
+    const glass_panel = manager.create(1, 0, 44, proto.window.flag_panel | proto.window.flag_glass, "taskbar").?;
+    const glass_popup = manager.create(1, 200, 200, proto.window.flag_undecorated | proto.window.flag_glass, "menu").?;
+    const opaque_panel = manager.create(1, 0, 44, proto.window.flag_panel, "dock").?;
+
+    try testing.expect(glass_panel.is_glass());
+    try testing.expect(glass_popup.is_glass());
+    try testing.expect(!opaque_panel.is_glass());
 
 }
 

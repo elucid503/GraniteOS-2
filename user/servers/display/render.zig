@@ -167,13 +167,25 @@ fn stroke_line(back: *const Surface, x0: i32, y0: i32, x1: i32, y1: i32, color: 
 
 }
 
-/// Blits the client's content into the back buffer, cutting decorated windows' bottom corners with quarter-circle coverage masks.
-pub fn blit_content(back: *const Surface, window: *const Window, surface: *const Surface, clip: Rect, matte: Color) void {
+/// Blits the client's content into the back buffer, cutting decorated windows' bottom corners with
+/// quarter-circle coverage masks. Glass windows skip all of that: the compositor's own rounded-rect
+/// backdrop (`draw.glass`, painted just before this call) already owns the shape and its
+/// anti-aliased edge, so the client surface is composited hole-aware (`blit_glass`) instead, letting
+/// its see-through pixels (including its own true corners) show the backdrop underneath untouched.
+pub fn blit_content(back: *const Surface, window: *const Window, surface: *const Surface, clip: Rect, matte: Color, glass: bool) void {
 
     const content = window.content();
     const visible = content.intersect(clip);
 
     if (visible.is_empty()) return;
+
+    if (glass) {
+
+        back.blit_glass(visible.x, visible.y, surface, visible.translated(-content.x, -content.y));
+
+        return;
+
+    }
 
     if (window.is_panel() and content.h > 2 * corner_radius and content.w > 2 * corner_radius) {
 
