@@ -53,6 +53,67 @@ fn clock_width() i32 {
 
 }
 
+fn calendar_width() u32 {
+
+    return 292;
+
+}
+
+fn calendar_cell() i32 {
+
+    return 34;
+
+}
+
+fn calendar_pad() i32 {
+
+    return 10;
+
+}
+
+fn calendar_header_height() i32 {
+
+    return 32;
+
+}
+
+fn calendar_weekday_height() i32 {
+
+    return 20;
+
+}
+
+fn popup_gap() i32 {
+
+    return 8;
+
+}
+
+fn weather_height() u32 {
+
+    return 76;
+
+}
+
+/// Week rows needed for the current local month (4..=6).
+fn calendar_week_rows() i32 {
+
+    const local = lib.localtime.now(lib.prefs.tz_offset_minutes);
+    const first = lib.localtime.weekday(local.year, local.month, 1);
+    const days = lib.localtime.days_in_month(local.year, local.month);
+    const slots = first + days;
+
+    return @intCast((slots + 6) / 7);
+
+}
+
+fn calendar_height() u32 {
+
+    // Month title, weekday labels, only as many week rows as the month needs, outer pad.
+    return @intCast(calendar_pad() + calendar_header_height() + calendar_weekday_height() + calendar_cell() * calendar_week_rows() + calendar_pad());
+
+}
+
 fn window_button_max() i32 {
 
     return 184;
@@ -117,6 +178,23 @@ var pin_menu_program: [lib.prefs.max_pin_program]u8 = undefined;
 var pin_menu_program_len: usize = 0;
 var pin_menu_pinned = false;
 
+var calendar: ?lib.window.Window = null;
+var weather_popup: ?lib.window.Window = null;
+var calendar_open = false;
+
+const WeatherState = struct {
+
+    ready: bool = false,
+    failed: bool = false,
+    temperature_c: f64 = 0,
+    code: u32 = 0,
+    city: [proto.metrics.max_city]u8 = .{0} ** proto.metrics.max_city,
+    city_len: usize = 0,
+
+};
+
+var weather: WeatherState = .{};
+
 const pin_action_row = [_]ui.Menu.Row{.{ .item = "Pin to Taskbar" }};
 const unpin_action_row = [_]ui.Menu.Row{.{ .item = "Unpin from Taskbar" }};
 
@@ -162,16 +240,23 @@ var bar_regions = ui.HitRegions{};
 var menu_regions = ui.HitRegions{};
 
 const launcher_id: u32 = 1;
+const clock_id: u32 = 2;
 const overflow_id: u32 = 99;
 const window_id_base: u32 = 100;
 const category_id_base: u32 = 1000;
 const browse_id_base: u32 = 2000;
 const search_id_base: u32 = 3000;
 
+// Open-Meteo forecast API (plain HTTP, no key) for the weather card above the calendar.
+const weather_host = "api.open-meteo.com";
+
 var ready: cap.Handle = 0;
-// Separate wake bits so the clock tick does not re-list every window over IPC.
+
+// Separates wake bits so the clock tick does not re-list every window over IPC.
 var clock_tick: u32 = 0;
 var list_tick: u32 = 0;
+var weather_tick: u32 = 0;
+var weather_pending: u32 = 0;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -206,6 +291,12 @@ fn run() !void {
 
     try start_ticker();
     try start_list_watcher();
+    try start_weather_worker();
+
+    // Prefetch weather and warm the popup surfaces so the first clock click is immediate.
+    ensure_weather_popup() catch {};
+    ensure_calendar() catch {};
+    request_weather_refresh();
 
     while (true) {
 
@@ -219,6 +310,7 @@ fn run() !void {
 
         const list_due = @atomicRmw(u32, &list_tick, .Xchg, 0, .acquire) != 0;
         const clock_due = @atomicRmw(u32, &clock_tick, .Xchg, 0, .acquire) != 0;
+        const weather_due = @atomicRmw(u32, &weather_tick, .Xchg, 0, .acquire) != 0;
 
         if (list_due) refresh_windows();
 
@@ -230,7 +322,12 @@ fn run() !void {
 
             paint_clock_only();
 
+            // Backstop: prefs_changed can be dropped when the event ring is full.
+            if (calendar_open and lib.prefs.refresh_if_changed()) paint_calendar();
+
         }
+
+        if (weather_due and calendar_open) paint_calendar();
 
     }
 
@@ -366,6 +463,18 @@ fn handle(event: events.Event) void {
 
     }
 
+    if (weather_popup) |weather_window| {
+
+        if (event.window == weather_window.id) return handle_weather_popup(event);
+
+    }
+
+    if (calendar) |calendar_window| {
+
+        if (event.window == calendar_window.id) return handle_calendar(event);
+
+    }
+
     if (menu) |menu_window| {
 
         if (event.window == menu_window.id) return handle_menu(event);
@@ -385,6 +494,12 @@ fn update_bar_cursor(x: i32, y: i32) void {
 
 }
 
+fn update_calendar_cursor(_: i32, _: i32) void {
+
+    lib.cursor.set(&connection, .pointer);
+
+}
+
 fn update_menu_cursor(x: i32, y: i32) void {
 
     if (y < search_height()) lib.cursor.set(&connection, .selector)
@@ -395,8 +510,8 @@ fn update_menu_cursor(x: i32, y: i32) void {
 
 fn apply_prefs_changed() void {
 
-    lib.prefs.refresh();
-    reload_pins();
+    // Forces a full re-read. Should not reload pins from disk here
+    _ = lib.prefs.force_reload();
     rebuild_items();
 
     bar.resize(bar.surface.width, @intCast(bar_height())) catch {};
@@ -416,6 +531,23 @@ fn apply_prefs_changed() void {
     paint_bar();
 
     if (menu_open) paint_menu();
+    // Always repaint both cards so C/F (and theme) apply while the popup is open.
+    if (calendar_open) paint_calendar();
+
+}
+
+fn clock_hover_rect(clock_rect: Rect) Rect {
+
+    const hover_w: i32 = 76;
+
+    return .{
+
+        .x = clock_rect.x + @divTrunc(clock_rect.w - hover_w, 2),
+        .y = 4,
+        .w = hover_w,
+        .h = bar_height() - 8,
+
+    };
 
 }
 
@@ -433,10 +565,20 @@ fn handle_bar(event: events.Event) void {
 
                 if (id == launcher_id) {
 
+                    close_calendar();
                     toggle_menu();
                     return;
 
                 }
+
+                if (id == clock_id) {
+
+                    toggle_calendar();
+                    return;
+
+                }
+
+                close_calendar();
 
                 if (id >= window_id_base) activate_item(id - window_id_base);
 
@@ -475,6 +617,7 @@ fn handle_bar(event: events.Event) void {
             }
 
             close_pin_menu();
+            close_calendar();
 
             refresh_windows();
             paint_bar();
@@ -930,6 +1073,7 @@ fn ensure_menu() !void {
 fn open_menu() void {
 
     close_pin_menu();
+    close_calendar();
 
     ensure_menu() catch return;
 
@@ -1010,6 +1154,7 @@ fn open_pin_menu(index: usize, local_x: i32) void {
     if (!item.has_app) return;
 
     close_menu();
+    close_calendar();
     ensure_pin_menu() catch return;
 
     const program = apps[item.app_index].program;
@@ -1138,6 +1283,583 @@ fn pin_menu_click(x: i32, y: i32) void {
 
     rebuild_items();
     paint_bar();
+
+}
+
+// Clock popups: separate weather card + calendar card (two windows).
+
+fn toggle_calendar() void {
+
+    if (calendar_open) {
+
+        close_calendar();
+
+    } else {
+
+        open_calendar();
+
+    }
+
+}
+
+fn ensure_weather_popup() !void {
+
+    if (weather_popup) |*window| {
+
+        window.resize(calendar_width(), weather_height()) catch {};
+        return;
+
+    }
+
+    var window = try connection.create_window(calendar_width(), weather_height(), proto.window.flag_undecorated, "weather");
+
+    window.surface.fill(ui.theme.surface);
+
+    try lib.wm.minimize(&connection, window.id);
+
+    weather_popup = window;
+
+}
+
+fn ensure_calendar() !void {
+
+    if (calendar) |*window| {
+
+        window.resize(calendar_width(), calendar_height()) catch {};
+        return;
+
+    }
+
+    var window = try connection.create_window(calendar_width(), calendar_height(), proto.window.flag_undecorated, "calendar");
+
+    window.surface.fill(ui.theme.surface);
+
+    try lib.wm.minimize(&connection, window.id);
+
+    calendar = window;
+
+}
+
+fn open_calendar() void {
+
+    close_menu();
+    close_pin_menu();
+
+    // Prefer latest temp unit before painting (covers missed prefs_changed while closed).
+    _ = lib.prefs.refresh_if_changed();
+
+    ensure_weather_popup() catch return;
+    ensure_calendar() catch return;
+
+    const weather_window = weather_popup orelse return;
+    const calendar_window = calendar orelse return;
+
+    if (lib.wm.screen_info(&connection)) |screen| {
+
+        const popup_x = @as(i32, @intCast(screen.width)) - @as(i32, @intCast(calendar_width())) - dock_margin();
+        const calendar_y = @as(i32, @intCast(screen.height)) - bar_height() - dock_margin() - @as(i32, @intCast(calendar_height())) - 10;
+        const weather_y = calendar_y - popup_gap() - @as(i32, @intCast(weather_height()));
+
+        lib.wm.move_window(&connection, weather_window.id, @max(0, popup_x), @max(0, weather_y)) catch {};
+        lib.wm.move_window(&connection, calendar_window.id, @max(0, popup_x), @max(0, calendar_y)) catch {};
+
+    } else |_| {}
+
+    calendar_open = true;
+
+    // Paint cached/loading weather immediately; HTTP runs on the weather worker.
+    paint_weather_content();
+    paint_calendar_content();
+
+    gfx.fence();
+    lib.wm.restore(&connection, weather_window.id) catch {};
+    weather_window.present_all() catch {};
+    lib.wm.restore(&connection, calendar_window.id) catch {};
+    calendar_window.present_all() catch {};
+
+    paint_bar();
+    request_weather_refresh();
+
+}
+
+fn close_calendar() void {
+
+    if (!calendar_open) return;
+
+    if (weather_popup) |window| lib.wm.minimize(&connection, window.id) catch {};
+    if (calendar) |window| lib.wm.minimize(&connection, window.id) catch {};
+
+    calendar_open = false;
+
+    paint_bar();
+
+}
+
+fn handle_weather_popup(event: events.Event) void {
+
+    switch (event.kind) {
+
+        events.kind_pointer_move => update_calendar_cursor(event.x, event.y),
+
+        events.kind_key_down => {
+
+            if (keyboard.modifier(events.kind_key_down, event.code)) return;
+
+            var buffer: [3]u8 = undefined;
+            const bytes = keyboard.bytes(event.code, &buffer);
+
+            if (bytes.len == 1 and bytes[0] == 0x1b) close_calendar();
+
+        },
+
+        events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
+        // Weather is display-only; ignore blur so focus can sit on the calendar card below.
+        else => {},
+
+    }
+
+}
+
+fn handle_calendar(event: events.Event) void {
+
+    switch (event.kind) {
+
+        events.kind_pointer_move => update_calendar_cursor(event.x, event.y),
+
+        events.kind_key_down => {
+
+            if (keyboard.modifier(events.kind_key_down, event.code)) return;
+
+            var buffer: [3]u8 = undefined;
+            const bytes = keyboard.bytes(event.code, &buffer);
+
+            if (bytes.len == 1 and bytes[0] == 0x1b) close_calendar();
+
+        },
+
+        events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
+        events.kind_window_blur => close_calendar(),
+
+        else => {},
+
+    }
+
+}
+
+fn paint_calendar() void {
+
+    paint_weather_content();
+    paint_calendar_content();
+
+    if (weather_popup) |window| window.present_all() catch {};
+    if (calendar) |window| window.present_all() catch {};
+
+}
+
+fn paint_weather_content() void {
+
+    const window = weather_popup orelse return;
+    const surface = &window.surface;
+
+    panel(surface, surface.bounds(), ui.theme.surface);
+
+    const pad = calendar_pad();
+    const rect = Rect{
+
+        .x = pad,
+        .y = pad,
+        .w = @as(i32, @intCast(surface.width)) - pad * 2,
+        .h = @as(i32, @intCast(surface.height)) - pad * 2,
+
+    };
+
+    if (weather.ready) {
+
+        const city = weather.city[0..weather.city_len];
+        const place = if (city.len == 0) "Local weather" else city;
+
+        var temp_buffer: [24]u8 = undefined;
+        const temp_text = format_temperature(&temp_buffer, weather.temperature_c) catch "-";
+        const condition = weather_condition(weather.code);
+        const icon = weather_icon(weather.code);
+        const icon_size: i32 = 32;
+        const icon_rect = Rect{
+
+            .x = rect.x + rect.w - icon_size - 2,
+            .y = rect.y + @divTrunc(rect.h - icon_size, 2),
+            .w = icon_size,
+            .h = icon_size,
+
+        };
+
+        draw_text(surface, rect.x + 4, rect.y + 2, 13, place, ui.theme.text_dim);
+        draw_text(surface, rect.x + 4, rect.y + 24, 20, temp_text, ui.theme.text);
+
+        const temp_w = font.text_width(temp_text, 20);
+
+        draw_text(surface, rect.x + 4 + temp_w + 10, rect.y + 30, 13, condition, ui.theme.text_dim);
+        lib.draw.vector.icon_in(surface, icon_rect, icon, ui.theme.text);
+
+        return;
+
+    }
+
+    if (weather.failed) {
+
+        draw_text(surface, rect.x + 4, rect.y + 20, 13, "Weather unavailable", ui.theme.text_dim);
+        return;
+
+    }
+
+    draw_text(surface, rect.x + 4, rect.y + 20, 13, "Loading weather...", ui.theme.text_dim);
+
+}
+
+fn format_temperature(buffer: []u8, celsius: f64) ![]const u8 {
+
+    if (lib.prefs.temp_unit == .fahrenheit) {
+
+        const fahrenheit = celsius * 9.0 / 5.0 + 32.0;
+
+        return std.fmt.bufPrint(buffer, "{d:.0} F", .{fahrenheit});
+
+    }
+
+    return std.fmt.bufPrint(buffer, "{d:.0} C", .{celsius});
+
+}
+
+fn paint_calendar_content() void {
+
+    const window = calendar orelse return;
+    const surface = &window.surface;
+    const pad = calendar_pad();
+
+    panel(surface, surface.bounds(), ui.theme.surface);
+
+    const grid_rect = Rect{
+
+        .x = pad,
+        .y = pad,
+        .w = @as(i32, @intCast(surface.width)) - pad * 2,
+        .h = @as(i32, @intCast(surface.height)) - pad * 2,
+
+    };
+
+    paint_month_grid(surface, grid_rect);
+
+}
+
+fn paint_month_grid(surface: *const gfx.Surface, rect: Rect) void {
+
+    const local = lib.localtime.now(lib.prefs.tz_offset_minutes);
+    const year = local.year;
+    const month = local.month;
+    const today = local.day;
+
+    var title_buffer: [32]u8 = undefined;
+    const title = std.fmt.bufPrint(&title_buffer, "{s} {d}", .{ lib.localtime.month_name(month), year }) catch "Calendar";
+
+    const title_y = rect.y + @divTrunc(calendar_header_height() - font.line_height(15), 2);
+
+    draw_text(surface, rect.x + 4, title_y, 15, title, ui.theme.text);
+
+    const weekday_names = [_][]const u8{ "Su", "Mo", "Tu", "We", "Th", "Fr", "Sa" };
+    const cell_w = @divTrunc(rect.w, 7);
+    const labels_y = rect.y + calendar_header_height();
+
+    for (weekday_names, 0..) |name, index| {
+
+        const cell = Rect{
+
+            .x = rect.x + @as(i32, @intCast(index)) * cell_w,
+            .y = labels_y,
+            .w = cell_w,
+            .h = calendar_weekday_height(),
+
+        };
+
+        text_center(surface, cell, 11, name, ui.theme.text_faint);
+
+    }
+
+    const first_weekday = lib.localtime.weekday(year, month, 1);
+    const month_days = lib.localtime.days_in_month(year, month);
+    const grid_y = labels_y + calendar_weekday_height();
+    const cell_h = calendar_cell();
+
+    var day: u32 = 1;
+
+    while (day <= month_days) : (day += 1) {
+
+        const slot = first_weekday + day - 1;
+        const col: i32 = @intCast(slot % 7);
+        const row: i32 = @intCast(slot / 7);
+
+        const cell = Rect{
+
+            .x = rect.x + col * cell_w,
+            .y = grid_y + row * cell_h,
+            .w = cell_w,
+            .h = cell_h,
+
+        };
+
+        var day_buffer: [4]u8 = undefined;
+        const day_text = std.fmt.bufPrint(&day_buffer, "{d}", .{day}) catch continue;
+
+        if (day == today) {
+
+            const mark_size: i32 = 24;
+            const mark = Rect{
+
+                .x = cell.x + @divTrunc(cell.w - mark_size, 2),
+                .y = cell.y + @divTrunc(cell.h - mark_size, 2),
+                .w = mark_size,
+                .h = mark_size,
+
+            };
+
+            ui.fill_round_rect(surface, mark, mark_size, ui.theme.accent_dim);
+            text_center(surface, cell, 13, day_text, ui.theme.text);
+
+        } else {
+
+            text_center(surface, cell, 13, day_text, ui.theme.text);
+
+        }
+
+    }
+
+}
+
+/// Ask the weather worker to refresh; no-op if a fetch is already in flight.
+fn request_weather_refresh() void {
+
+    if (@atomicRmw(u32, &weather_pending, .Xchg, 1, .acq_rel) != 0) return;
+
+    sys.notify(ready, proto.window.ring_bit) catch {};
+
+}
+
+/// Metrics location must succeed before the Open-Meteo call runs.
+fn refresh_weather() void {
+
+    var next: WeatherState = .{};
+
+    const location = metrics_location() catch {
+
+        // Keep a previous good reading if a later refresh fails.
+        if (!weather.ready) {
+
+            next.failed = true;
+            weather = next;
+
+        }
+
+        return;
+
+    };
+
+    const city_len = @min(location.city_len, next.city.len);
+
+    @memcpy(next.city[0..city_len], location.city[0..city_len]);
+    next.city_len = city_len;
+
+    fetch_weather_into(&next, location.lat, location.lon) catch {
+
+        if (!weather.ready) {
+
+            next.failed = true;
+            weather = next;
+
+        }
+
+        return;
+
+    };
+
+    weather = next;
+
+}
+
+const MetricsLocation = struct {
+
+    lat: f64,
+    lon: f64,
+    city: [proto.metrics.max_city]u8,
+    city_len: usize,
+
+};
+
+fn metrics_location() !MetricsLocation {
+
+    const endpoint = try lib.stream.lookup_endpoint("metrics");
+    const reply = try ipc.request(endpoint, proto.metrics.get_location, &.{}, &.{});
+
+    if (reply.data[1] != proto.metrics.status_ready) return error.Unavailable;
+
+    var city = [_]u8{0} ** proto.metrics.max_city;
+
+    std.mem.writeInt(u64, city[0..8], reply.data[4], .little);
+    std.mem.writeInt(u64, city[8..16], reply.data[5], .little);
+
+    var city_len: usize = 0;
+
+    while (city_len < city.len and city[city_len] != 0) : (city_len += 1) {}
+
+    return .{
+
+        .lat = @bitCast(reply.data[2]),
+        .lon = @bitCast(reply.data[3]),
+        .city = city,
+        .city_len = city_len,
+
+    };
+
+}
+
+fn fetch_weather_into(out: *WeatherState, lat: f64, lon: f64) !void {
+
+    var path_buffer: [128]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buffer, "/v1/forecast?latitude={d:.4}&longitude={d:.4}&current_weather=true", .{ lat, lon });
+
+    var socket = try lib.net.Socket.connect_host(cap.memory, weather_host, 80);
+    defer socket.close();
+
+    var request_buffer: [256]u8 = undefined;
+    const http_request = try std.fmt.bufPrint(&request_buffer, "GET {s} HTTP/1.0\r\nHost: {s}\r\nConnection: close\r\n\r\n", .{ path, weather_host });
+
+    try socket.send_all(http_request);
+
+    var response: [4096]u8 = undefined;
+    var length: usize = 0;
+
+    while (length < response.len) {
+
+        const read = socket.recv(response[length..]) catch break;
+
+        if (read == 0) break;
+
+        length += read;
+
+    }
+
+    try parse_weather_response(out, response[0..length]);
+
+}
+
+fn parse_weather_response(out: *WeatherState, bytes: []const u8) !void {
+
+    const body_start = std.mem.indexOf(u8, bytes, "\r\n\r\n") orelse return error.Invalid;
+    const body = bytes[body_start + 4 ..];
+
+    // Open-Meteo emits unit strings under current_weather_units first (same key names).
+    // Scope parsing to the current_weather object so temperature/weathercode are numeric.
+    const marker = "\"current_weather\":{";
+    const at = std.mem.indexOf(u8, body, marker) orelse return error.Invalid;
+    const section = body[at + marker.len - 1 ..];
+
+    const temperature = json_float_near(section, "\"temperature\":") orelse return error.Invalid;
+    const code = json_int_near(section, "\"weathercode\":") orelse
+        json_int_near(section, "\"weather_code\":") orelse
+        return error.Invalid;
+
+    out.temperature_c = temperature;
+    out.code = @intCast(@max(code, 0));
+    out.ready = true;
+    out.failed = false;
+
+}
+
+fn json_float_near(body: []const u8, key: []const u8) ?f64 {
+
+    const token = json_number_token(body, key) orelse return null;
+
+    return std.fmt.parseFloat(f64, token) catch null;
+
+}
+
+fn json_int_near(body: []const u8, key: []const u8) ?i64 {
+
+    const token = json_number_token(body, key) orelse return null;
+
+    return std.fmt.parseInt(i64, token, 10) catch null;
+
+}
+
+fn json_number_token(body: []const u8, key: []const u8) ?[]const u8 {
+
+    const at = std.mem.indexOf(u8, body, key) orelse return null;
+    var rest = body[at + key.len ..];
+
+    while (rest.len > 0 and (rest[0] == ' ' or rest[0] == '\t')) rest = rest[1..];
+
+    var end: usize = 0;
+
+    while (end < rest.len) : (end += 1) {
+
+        const c = rest[end];
+
+        if (c == '-' or c == '+' or c == '.' or c == 'e' or c == 'E' or (c >= '0' and c <= '9')) continue;
+
+        break;
+
+    }
+
+    if (end == 0) return null;
+
+    return rest[0..end];
+
+}
+
+fn weather_condition(code: u32) []const u8 {
+
+    return switch (code) {
+
+        0 => "Clear",
+        1, 2 => "Partly cloudy",
+        3 => "Overcast",
+        45, 48 => "Fog",
+        51, 53, 55, 56, 57 => "Drizzle",
+        61, 63, 65, 66, 67 => "Rain",
+        71, 73, 75, 77 => "Snow",
+        80, 81, 82 => "Showers",
+        85, 86 => "Snow showers",
+        95, 96, 99 => "Thunderstorm",
+        else => "Weather",
+
+    };
+
+}
+
+/// Rough day window (local): 06:00 inclusive … 20:00 exclusive. No sunrise/sunset model yet.
+fn weather_is_daytime() bool {
+
+    const local = lib.localtime.now(lib.prefs.tz_offset_minutes);
+
+    return local.hour >= 6 and local.hour < 20;
+
+}
+
+fn weather_icon(code: u32) []const u8 {
+
+    const day = weather_is_daytime();
+
+    return switch (code) {
+
+        0 => if (day) lib.icons.weather_clear else lib.icons.weather_clear_night,
+        1, 2 => if (day) lib.icons.weather_partly else lib.icons.weather_partly_night,
+        3 => lib.icons.weather_cloud,
+        45, 48 => lib.icons.weather_fog,
+        51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82 => lib.icons.weather_rain,
+        71, 73, 75, 77, 85, 86 => lib.icons.weather_snow,
+        95, 96, 99 => lib.icons.weather_storm,
+        else => lib.icons.weather_cloud,
+
+    };
 
 }
 
@@ -1379,6 +2101,9 @@ fn paint_bar() void {
 
     }
 
+    const clock_rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
+
+    bar_regions.add(clock_id, clock_hover_rect(clock_rect));
     paint_clock(surface, width);
 
     bar.present_all() catch {};
@@ -1388,6 +2113,18 @@ fn paint_bar() void {
 fn paint_clock(surface: *const gfx.Surface, width: i32) void {
 
     const rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
+    const hover = clock_hover_rect(rect);
+
+    if (calendar_open) {
+
+        ui.fill_round_rect(surface, hover, 5, ui.theme.accent_dim);
+
+    } else if (bar_regions.hovered(clock_id)) {
+
+        ui.fill_round_rect(surface, hover, 5, ui.theme.hover);
+
+    }
+
     const local = lib.localtime.now(lib.prefs.tz_offset_minutes);
 
     const hour12 = if (local.hour % 12 == 0) 12 else local.hour % 12;
@@ -1739,6 +2476,18 @@ fn start_list_watcher() !void {
 
 }
 
+fn start_weather_worker() !void {
+
+    const stack = try sys.create(.region, ticker_stack_pages * page_size, cap.memory);
+    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
+    const thread = try sys.create_thread(@intFromPtr(&weather_worker), base + ticker_stack_pages * page_size);
+
+    sys.close(stack) catch {};
+
+    try sys.start(thread);
+
+}
+
 fn ticker() callconv(.c) noreturn {
 
     while (true) {
@@ -1763,6 +2512,23 @@ fn list_watcher() callconv(.c) noreturn {
 
         @atomicStore(u32, &list_tick, 1, .release);
 
+        sys.notify(ready, proto.window.ring_bit) catch {};
+
+    }
+
+}
+
+fn weather_worker() callconv(.c) noreturn {
+
+    while (true) {
+
+        lib.time.sleep_ms(50);
+
+        if (@atomicRmw(u32, &weather_pending, .Xchg, 0, .acquire) == 0) continue;
+
+        refresh_weather();
+
+        @atomicStore(u32, &weather_tick, 1, .release);
         sys.notify(ready, proto.window.ring_bit) catch {};
 
     }

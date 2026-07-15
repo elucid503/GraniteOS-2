@@ -340,14 +340,17 @@ pub const socket = struct {
 
 };
 
-// Metrics interface: boot-time timezone lookup (v1); separate interface so later machine facts have a home.
+// Metrics interface: boot-time timezone and coarse geo from public IP (v1).
 
 pub const metrics = struct {
 
     pub const interface_id: u32 = 0x4d45_5452; // "METR"
     pub const version: u32 = 1;
 
-    pub const get_timezone: u16 = 1; // request: -   reply: status (status_*), offset minutes (data[2], signed via bitcast), country code packed as 2 ascii bytes (data[3])
+    pub const get_timezone: u16 = 1; // request: - reply: status (status_*), offset minutes (data[2], signed via bitcast), country code packed as 2 ascii bytes (data[3])
+    pub const get_location: u16 = 2; // request: - reply: status (status_*), lat f64 bits (data[2]), lon f64 bits (data[3]), city in data[4..5] (16 bytes little-endian)
+
+    pub const max_city: usize = 16;
 
     pub const status_pending: u64 = 0; // lookup has not completed yet
     pub const status_ready: u64 = 1; // offset/country below came from a successful lookup

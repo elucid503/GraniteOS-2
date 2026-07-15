@@ -1,4 +1,4 @@
-// Boot-time timezone from public IP via HTTP geo lookup; saves to prefs and exposes via IPC.
+// Boot-time timezone and coarse geo from public IP via HTTP lookup; saves prefs and exposes via IPC.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -21,13 +21,17 @@ comptime {
 
 // ip-api.com's free tier serves plain HTTP (HTTPS is a paid feature there), matching this stack's client.
 const geo_host = "ip-api.com";
-const geo_path = "/json/?fields=status,offset,countryCode";
+const geo_path = "/json/?fields=status,offset,countryCode,lat,lon,city";
 
 const State = struct {
 
     ready: bool = false,
     offset_minutes: i32 = 0,
     country: [2]u8 = .{ '?', '?' },
+    lat: f64 = 0,
+    lon: f64 = 0,
+    city: [proto.metrics.max_city]u8 = .{0} ** proto.metrics.max_city,
+    city_len: usize = 0,
 
 };
 
@@ -94,12 +98,21 @@ fn parse_response(bytes: []const u8) !void {
     if (!std.mem.eql(u8, status, "success")) return error.Invalid;
 
     const offset_seconds = json_int(body, "\"offset\":") orelse return error.Invalid;
+    const lat = json_float(body, "\"lat\":") orelse return error.Invalid;
+    const lon = json_float(body, "\"lon\":") orelse return error.Invalid;
 
     var country_buffer: [2]u8 = .{ '?', '?' };
     _ = json_string(body, "\"countryCode\":", &country_buffer);
 
+    var city_buffer: [proto.metrics.max_city]u8 = .{0} ** proto.metrics.max_city;
+    const city = json_string(body, "\"city\":", &city_buffer);
+
     state.offset_minutes = std.math.clamp(@as(i32, @intCast(@divTrunc(offset_seconds, 60))), -12 * 60, 14 * 60);
     state.country = country_buffer;
+    state.lat = lat;
+    state.lon = lon;
+    state.city = city_buffer;
+    state.city_len = if (city) |slice| slice.len else 0;
     state.ready = true;
 
 }
@@ -107,16 +120,41 @@ fn parse_response(bytes: []const u8) !void {
 /// Minimal JSON int extractor for a known small response shape.
 fn json_int(body: []const u8, key: []const u8) ?i64 {
 
+    const token = json_number_token(body, key) orelse return null;
+
+    return std.fmt.parseInt(i64, token, 10) catch null;
+
+}
+
+/// Minimal JSON float extractor for a known small response shape.
+fn json_float(body: []const u8, key: []const u8) ?f64 {
+
+    const token = json_number_token(body, key) orelse return null;
+
+    return std.fmt.parseFloat(f64, token) catch null;
+
+}
+
+fn json_number_token(body: []const u8, key: []const u8) ?[]const u8 {
+
     const at = std.mem.indexOf(u8, body, key) orelse return null;
     const rest = body[at + key.len ..];
 
     var end: usize = 0;
 
-    while (end < rest.len and (rest[end] == '-' or (rest[end] >= '0' and rest[end] <= '9'))) : (end += 1) {}
+    while (end < rest.len) : (end += 1) {
+
+        const c = rest[end];
+
+        if (c == '-' or c == '+' or c == '.' or c == 'e' or c == 'E' or (c >= '0' and c <= '9')) continue;
+
+        break;
+
+    }
 
     if (end == 0) return null;
 
-    return std.fmt.parseInt(i64, rest[0..end], 10) catch null;
+    return rest[0..end];
 
 }
 
@@ -144,6 +182,7 @@ fn dispatch(_: u64, method: u64, _: *const Message, out: *Message) i64 {
 
         proto.identify => identify(out),
         proto.metrics.get_timezone => get_timezone(out),
+        proto.metrics.get_location => get_location(out),
 
         else => -7,
 
@@ -165,6 +204,24 @@ fn get_timezone(out: *Message) i64 {
     out.data[1] = if (state.ready) proto.metrics.status_ready else proto.metrics.status_unavailable;
     out.data[2] = @bitCast(@as(i64, state.offset_minutes));
     out.data[3] = (@as(u64, state.country[0]) << 8) | state.country[1];
+
+    return 0;
+
+}
+
+fn get_location(out: *Message) i64 {
+
+    out.data[1] = if (state.ready) proto.metrics.status_ready else proto.metrics.status_unavailable;
+    out.data[2] = @bitCast(state.lat);
+    out.data[3] = @bitCast(state.lon);
+
+    var city_bytes = [_]u8{0} ** proto.metrics.max_city;
+    const length = @min(state.city_len, city_bytes.len);
+
+    @memcpy(city_bytes[0..length], state.city[0..length]);
+
+    out.data[4] = std.mem.readInt(u64, city_bytes[0..8], .little);
+    out.data[5] = std.mem.readInt(u64, city_bytes[8..16], .little);
 
     return 0;
 

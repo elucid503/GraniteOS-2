@@ -177,3 +177,87 @@ pub const text_cursor =
     \\<line x1="12" y1="4" x2="12" y2="20"/>
     \\</svg>
 ;
+
+// Weather (WMO codes from Open-Meteo current_weather.weathercode).
+
+pub const weather_clear =
+    \\<svg viewBox="0 0 24 24">
+    \\<circle cx="12" cy="12" r="4"/>
+    \\<line x1="12" y1="2" x2="12" y2="5"/>
+    \\<line x1="12" y1="19" x2="12" y2="22"/>
+    \\<line x1="2" y1="12" x2="5" y2="12"/>
+    \\<line x1="19" y1="12" x2="22" y2="12"/>
+    \\<line x1="4.5" y1="4.5" x2="6.5" y2="6.5"/>
+    \\<line x1="17.5" y1="17.5" x2="19.5" y2="19.5"/>
+    \\<line x1="4.5" y1="19.5" x2="6.5" y2="17.5"/>
+    \\<line x1="17.5" y1="6.5" x2="19.5" y2="4.5"/>
+    \\</svg>
+;
+
+// Crescent moon for clear nights.
+pub const weather_clear_night =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M14 4 Q10 5 8 9 Q6 14 9 18 Q12 21 17 20 Q14 18 13 14 Q12 9 14 4 Z"/>
+    \\</svg>
+;
+
+pub const weather_partly =
+    \\<svg viewBox="0 0 24 24">
+    \\<circle cx="9" cy="10" r="3"/>
+    \\<line x1="9" y1="3" x2="9" y2="5"/>
+    \\<line x1="3" y1="10" x2="5" y2="10"/>
+    \\<line x1="4" y1="5" x2="5.5" y2="6.5"/>
+    \\<path d="M10 16 Q10 13 13 13 Q14 11 17 11 Q20 11 20 14.5 Q22 14.5 22 17 Q22 19.5 19.5 19.5 L11 19.5 Q10 19.5 10 16 Z"/>
+    \\</svg>
+;
+
+// Crescent + cloud for partly cloudy nights.
+pub const weather_partly_night =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M10 5 Q7 6 6 9 Q5 12 7 14 Q8 12 10 11 Q12 10 13 8 Q12 6 10 5 Z"/>
+    \\<path d="M10 16 Q10 13 13 13 Q14 11 17 11 Q20 11 20 14.5 Q22 14.5 22 17 Q22 19.5 19.5 19.5 L11 19.5 Q10 19.5 10 16 Z"/>
+    \\</svg>
+;
+
+pub const weather_cloud =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M7 17 Q5 17 5 14.5 Q5 12 8 12 Q8.5 9 12 9 Q16 9 16.5 12.5 Q19 12.5 19 15 Q19 17.5 16.5 17.5 Z"/>
+    \\</svg>
+;
+
+pub const weather_fog =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M7 11 Q5 11 5 9 Q5 7 8 7 Q8.5 5 12 5 Q16 5 16.5 7.5 Q19 7.5 19 10 Q19 12 16.5 12 L8 12 Q7 12 7 11 Z"/>
+    \\<line x1="5" y1="15" x2="19" y2="15"/>
+    \\<line x1="6" y1="18" x2="18" y2="18"/>
+    \\<line x1="7" y1="21" x2="17" y2="21"/>
+    \\</svg>
+;
+
+pub const weather_rain =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M7 13 Q5 13 5 10.5 Q5 8 8 8 Q8.5 5.5 12 5.5 Q16 5.5 16.5 8.5 Q19 8.5 19 11 Q19 13.5 16.5 13.5 Z"/>
+    \\<line x1="9" y1="16" x2="8" y2="20"/>
+    \\<line x1="13" y1="16" x2="12" y2="20"/>
+    \\<line x1="17" y1="16" x2="16" y2="20"/>
+    \\</svg>
+;
+
+pub const weather_snow =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M7 12 Q5 12 5 9.5 Q5 7 8 7 Q8.5 4.5 12 4.5 Q16 4.5 16.5 7.5 Q19 7.5 19 10 Q19 12.5 16.5 12.5 Z"/>
+    \\<line x1="9" y1="16" x2="9" y2="20"/>
+    \\<line x1="7.5" y1="17.5" x2="10.5" y2="18.5"/>
+    \\<line x1="7.5" y1="18.5" x2="10.5" y2="17.5"/>
+    \\<line x1="15" y1="16" x2="15" y2="20"/>
+    \\<line x1="13.5" y1="17.5" x2="16.5" y2="18.5"/>
+    \\<line x1="13.5" y1="18.5" x2="16.5" y2="17.5"/>
+    \\</svg>
+;
+
+pub const weather_storm =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M7 12 Q5 12 5 9.5 Q5 7 8 7 Q8.5 4.5 12 4.5 Q16 4.5 16.5 7.5 Q19 7.5 19 10 Q19 12.5 16.5 12.5 Z"/>
+    \\<polyline points="12 13 10 17 13 17 11 21"/>
+    \\</svg>
+;

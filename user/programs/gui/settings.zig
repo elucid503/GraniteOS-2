@@ -1,4 +1,4 @@
-// Theme preferences only; timezone comes from Metrics at boot.
+// Theme and temperature-unit preferences; timezone comes from Metrics at boot.
 
 const lib = @import("lib");
 
@@ -23,7 +23,11 @@ comptime {
 const pad: i32 = 24;
 const swatch_size: i32 = 36;
 const theme_col_w: i32 = 88;
+const unit_btn_w: i32 = 100;
+const unit_btn_h: i32 = 36;
 const swatch_id_base: u32 = 100;
+const unit_celsius_id: u32 = 200;
+const unit_fahrenheit_id: u32 = 201;
 
 var font: lib.draw.text.Face = undefined;
 var page: ui.Page = .{ .font = &font };
@@ -47,7 +51,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(520, 200, 0, "Settings");
+    window = try connection.create_window(520, 320, 0, "Settings");
 
     paint();
 
@@ -91,14 +95,31 @@ fn click(x: i32, y: i32) void {
 
     const hit = page.hit(x, y);
 
-    if (hit < swatch_id_base or hit >= swatch_id_base + lib.prefs.theme_count) return;
+    if (hit >= swatch_id_base and hit < swatch_id_base + lib.prefs.theme_count) {
 
-    const col = hit - swatch_id_base;
+        const col = hit - swatch_id_base;
 
-    lib.prefs.apply_theme(@enumFromInt(@as(u8, @intCast(col))));
-    lib.prefs.save();
-    lib.prefs.broadcast_change(&connection);
-    paint();
+        lib.prefs.apply_theme(@enumFromInt(@as(u8, @intCast(col))));
+        lib.prefs.save();
+        lib.prefs.broadcast_change(&connection);
+        paint();
+
+        return;
+
+    }
+
+    if (hit == unit_celsius_id or hit == unit_fahrenheit_id) {
+
+        const next: lib.prefs.TempUnit = if (hit == unit_fahrenheit_id) .fahrenheit else .celsius;
+
+        if (lib.prefs.temp_unit == next) return;
+
+        lib.prefs.temp_unit = next;
+        lib.prefs.save();
+        lib.prefs.broadcast_change(&connection);
+        paint();
+
+    }
 
 }
 
@@ -129,18 +150,37 @@ fn paint() void {
     const content = page.box(ui.Page.root, .{
 
         .direction = .column,
+        .gap = 18,
+
+    });
+
+    paint_theme_section(content);
+    paint_temp_section(content);
+
+    page.end();
+    page.paint(surface);
+
+    window.present_all() catch {};
+
+}
+
+fn paint_theme_section(parent: i16) void {
+
+    const section = page.box(parent, .{
+
+        .direction = .column,
         .gap = 14,
 
     });
 
-    _ = page.label(content, "Color theme", .{
+    _ = page.label(section, "Color theme", .{
 
         .size = 14,
         .color = ui.theme.text,
 
     });
 
-    const row = page.box(content, .{
+    const row = page.box(section, .{
 
         .direction = .row,
         .gap = 8,
@@ -190,10 +230,62 @@ fn paint() void {
 
     }
 
-    page.end();
-    page.paint(surface);
+}
 
-    window.present_all() catch {};
+fn paint_temp_section(parent: i16) void {
+
+    const section = page.box(parent, .{
+
+        .direction = .column,
+        .gap = 14,
+
+    });
+
+    _ = page.label(section, "Temperature unit", .{
+
+        .size = 14,
+        .color = ui.theme.text,
+
+    });
+
+    const row = page.box(section, .{
+
+        .direction = .row,
+        .gap = 8,
+
+    });
+
+    paint_unit_button(row, unit_celsius_id, "Celsius", lib.prefs.temp_unit == .celsius);
+    paint_unit_button(row, unit_fahrenheit_id, "Fahrenheit", lib.prefs.temp_unit == .fahrenheit);
+
+}
+
+fn paint_unit_button(parent: i16, id: u32, label: []const u8, selected: bool) void {
+
+    const item = page.box(parent, .{
+
+        .id = id,
+        .direction = .row,
+        .width = .{ .px = unit_btn_w },
+        .height = .{ .px = unit_btn_h },
+        .padding = ui.Edge.symmetric(10, 8),
+        .align_main = .center,
+        .align_cross = .center,
+        .background = if (selected) ui.theme.accent_dim else ui.theme.surface,
+        .hover_background = ui.theme.hover,
+        .border = if (selected) ui.theme.accent else ui.theme.border,
+        .border_width = 1,
+        .radius = 6,
+
+    });
+
+    _ = page.label(item, label, .{
+
+        .size = 13,
+        .color = if (selected) ui.theme.text else ui.theme.text_dim,
+        .center_text = true,
+
+    });
 
 }
 
@@ -204,6 +296,13 @@ fn update_cursor(x: i32, y: i32) void {
     const hit = page.hit(x, y);
 
     if (hit >= swatch_id_base and hit < swatch_id_base + lib.prefs.theme_count) {
+
+        lib.cursor.set(&connection, .clicker);
+        return;
+
+    }
+
+    if (hit == unit_celsius_id or hit == unit_fahrenheit_id) {
 
         lib.cursor.set(&connection, .clicker);
         return;

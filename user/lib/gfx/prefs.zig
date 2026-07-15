@@ -58,6 +58,16 @@ pub const Chrome = struct {
 pub var active_theme: ThemeId = .mono;
 pub var tz_offset_minutes: i32 = 0;
 
+/// Display unit for weather temperatures (stored in Celsius from the API).
+pub const TempUnit = enum(u8) {
+
+    celsius = 0,
+    fahrenheit = 1,
+
+};
+
+pub var temp_unit: TempUnit = .celsius;
+
 var loaded_generation: u64 = 0;
 
 const Palette = struct {
@@ -278,7 +288,25 @@ pub fn refresh_if_changed() bool {
 
 }
 
-/// Force a reload from disk; keeps the current theme when the file is missing or unreadable.
+/// Always re-reads and re-parses settings.cfg (ignores the generation short-circuit).
+pub fn force_reload() bool {
+
+    var client = fs.Client.connect(cap.memory) catch return false;
+
+    const file = client.open_path(config_path, 0) catch return false;
+    defer client.close_file(file) catch {};
+
+    var buffer: [256]u8 = undefined;
+    const read = client.read(file, 0, &buffer) catch return false;
+
+    parse_config(buffer[0..read]);
+    loaded_generation = config_generation(buffer[0..read]);
+
+    return true;
+
+}
+
+/// Reload from disk when the on-disk generation changes; keeps the current theme when missing.
 pub fn refresh() void {
 
     _ = refresh_if_changed();
@@ -289,9 +317,16 @@ pub fn save() void {
 
     var client = fs.Client.connect(cap.memory) catch return;
 
-    var buffer: [128]u8 = undefined;
+    var buffer: [160]u8 = undefined;
     const stamp = loaded_generation +% 1;
-    const text = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\nstamp={d}\n", .{ @intFromEnum(active_theme), tz_offset_minutes, stamp }) catch return;
+    const text = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\ntemp={d}\nstamp={d}\n", .{
+
+        @intFromEnum(active_theme),
+        tz_offset_minutes,
+        @intFromEnum(temp_unit),
+        stamp,
+
+    }) catch return;
 
     if (client.open_path(config_path, 0)) |file| {
 
@@ -622,6 +657,12 @@ fn parse_config(text: []const u8) void {
         } else if (std.mem.startsWith(u8, line, "tz=")) {
 
             tz_offset_minutes = std.fmt.parseInt(i32, line[3..], 10) catch tz_offset_minutes;
+
+        } else if (std.mem.startsWith(u8, line, "temp=")) {
+
+            const value = std.fmt.parseInt(u8, line[5..], 10) catch continue;
+
+            if (value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(value);
 
         }
 

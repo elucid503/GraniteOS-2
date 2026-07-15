@@ -25,6 +25,62 @@ pub fn now(tz_offset_minutes: i32) LocalTime {
 
 }
 
+/// Full English month name for 1..=12; empty string outside that range.
+pub fn month_name(month: u32) []const u8 {
+
+    return switch (month) {
+
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        else => "",
+
+    };
+
+}
+
+/// Days in the civil month for a proleptic Gregorian year.
+pub fn days_in_month(year: i64, month: u32) u32 {
+
+    return switch (month) {
+
+        1, 3, 5, 7, 8, 10, 12 => 31,
+        4, 6, 9, 11 => 30,
+        2 => if (is_leap(year)) 29 else 28,
+        else => 0,
+
+    };
+
+}
+
+/// Weekday of a civil date: 0 = Sunday … 6 = Saturday.
+pub fn weekday(year: i64, month: u32, day: u32) u32 {
+
+    const days = days_from_civil(year, month, day);
+    const shifted = days + 4; // 1970-01-01 is Thursday → index 4 when Sunday is 0.
+
+    return @intCast(@mod(shifted, 7));
+
+}
+
+fn is_leap(year: i64) bool {
+
+    if (@mod(year, 400) == 0) return true;
+    if (@mod(year, 100) == 0) return false;
+
+    return @mod(year, 4) == 0;
+
+}
+
 fn civil_time(total_seconds: i64) LocalTime {
 
     const days = @divFloor(total_seconds, 86400);
@@ -36,6 +92,23 @@ fn civil_time(total_seconds: i64) LocalTime {
     const civil = civil_from_days(days);
 
     return .{ .year = civil.year, .month = civil.month, .day = civil.day, .hour = hour, .minute = minute };
+
+}
+
+/// Howard Hinnant days-from-civil: civil (y, m, d) → days since Unix epoch.
+fn days_from_civil(year: i64, month: u32, day: u32) i64 {
+
+    var y = year;
+
+    if (month <= 2) y -= 1;
+
+    const era = @divFloor(if (y >= 0) y else y - 399, 400);
+    const yoe: u64 = @intCast(y - era * 400);
+    const mp: u64 = if (month > 2) month - 3 else month + 9;
+    const doy: u64 = (153 * mp + 2) / 5 + day - 1;
+    const doe: u64 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+
+    return era * 146097 + @as(i64, @intCast(doe)) - 719468;
 
 }
 
@@ -86,5 +159,20 @@ test "civil_time splits seconds into hour and minute" {
     try testing.expectEqual(@as(u32, 13), t.day);
     try testing.expectEqual(@as(u32, 23), t.hour);
     try testing.expectEqual(@as(u32, 30), t.minute);
+
+}
+
+test "weekday of known dates" {
+
+    try testing.expectEqual(@as(u32, 4), weekday(1970, 1, 1)); // Thursday
+    try testing.expectEqual(@as(u32, 1), weekday(2026, 7, 13)); // Monday
+
+}
+
+test "days_in_month handles leap Februaries" {
+
+    try testing.expectEqual(@as(u32, 29), days_in_month(2024, 2));
+    try testing.expectEqual(@as(u32, 28), days_in_month(2025, 2));
+    try testing.expectEqual(@as(u32, 31), days_in_month(2026, 7));
 
 }
