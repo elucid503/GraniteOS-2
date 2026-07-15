@@ -1,5 +1,4 @@
-// System cursor shapes: clients pick a kind for the element under the pointer and the compositor uploads it to
-// the hardware cursor plane.
+// System cursor kinds uploaded to the compositor hardware cursor plane.
 
 const cap = @import("../cap/cap.zig");
 const ipc = @import("../ipc/ipc.zig");

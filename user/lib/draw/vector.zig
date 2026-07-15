@@ -1,7 +1,4 @@
-// SVG icon and cursor renderer (M10 GUI rewrite): parses the shape subset used by the outline icon set
-// (path M/L/H/V/Q/C/T/Z, line, polyline, polygon, circle, rect) and renders it through the analytic raster -
-// fills as direct path contours, strokes through the round-cap stroker. Icons are cached as 8-bit coverage
-// masks per (source, size), so per-frame cost is one blended blit.
+// SVG icon/cursor renderer for the outline icon set; icons cached as 8-bit coverage per source and size.
 
 const std = @import("std");
 
@@ -80,8 +77,7 @@ const FixedPoint = struct {
 
 };
 
-/// Build the stroked outline of every shape in `svg` into `path`, sized to `rect`. `width_fx` zero picks the
-/// icon-set default (a twelfth of the box).
+/// Build stroked SVG shapes into path; width_fx zero uses the icon-set default (side/12).
 pub fn build_stroked(path: *Path, rect: Rect, svg: []const u8, width_fx: i32) void {
 
     // Slightly heavier default at tiny sizes so 16px icons do not thin out after AA.
@@ -233,8 +229,7 @@ pub fn draw_icon(surface: *const Surface, rect: Rect, svg: []const u8, color: Co
 
 }
 
-// Icon cache: static vector strokes rasterize once per (source, size) into a coverage mask, then blit in any
-// tint. Same shape as the glyph cache; single render thread, no locking.
+// Icon cache: rasterize once per source/size, blit in any tint; single-threaded like the glyph cache.
 
 const icon_box: u32 = 48;
 const icon_capacity: usize = 64;
@@ -351,8 +346,7 @@ fn render_icon(slot: usize, svg: []const u8, hash: u64, w: u32, h: u32) ?usize {
 
 }
 
-// Cursor rasterization: cursors composite into an ARGB plane (alpha in the high byte), an outline pass under
-// a fill or inner-stroke pass, so the pointer stays readable on any background.
+// Cursor rasterization: ARGB plane with outline under fill/stroke so the pointer reads on any background.
 
 pub const CursorStyle = enum {
 

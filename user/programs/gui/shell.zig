@@ -60,21 +60,18 @@ var marble_running: u32 = 0;
 var marble_cwd_storage: [256]u8 = undefined;
 var marble_cwd_len: usize = 0;
 
-// The character grid, its cursor, and the escape-sequence parser. Guarded by screen_lock: the tty workers mutate it
-// on write/echo, the GUI thread snapshots it to paint.
+// Character grid and escape parser; screen_lock guards tty writes vs GUI paint snapshots.
 
 var screen_lock: ipc.Lock = .{};
 
-// Row-major storage with a fixed stride of `max_cols` so a resize only changes the visible
-// width/height - not the buffer layout. Using a live `cols` stride was what scrambled text on maximize.
+// Fixed max_cols stride so resize only changes visible dims, not buffer layout (avoids maximize scramble).
 var cells: [max_rows * max_cols]u8 = [_]u8{' '} ** (max_rows * max_cols);
 var cols: usize = 80;
 var rows: usize = 24;
 var cx: usize = 0;
 var cy: usize = 0;
 
-// Scrollback ring: lines that have scrolled off the top of the live screen. View offset is measured from
-// the oldest history line (scrollback + live), matching notepad's scroll_row model.
+// Scrollback ring; scroll_row counts from oldest history line like notepad.
 var scrollback: [max_scrollback * max_cols]u8 = [_]u8{' '} ** (max_scrollback * max_cols);
 var scrollback_head: usize = 0;
 var scrollback_count: usize = 0;
@@ -510,8 +507,7 @@ fn input_pop() ?u8 {
 
 }
 
-// tty server (the Stream interface). Multiple worker threads share the endpoint so a blocked read never stalls a
-// write from another program.
+// Stream tty with worker pool so a blocked read never stalls another client's write.
 
 fn start_tty_workers() !void {
 
@@ -617,8 +613,7 @@ fn write(badge: u64, offset: u64, length: u64) i64 {
 
 }
 
-// A read pulls from the shared keystroke queue. Raw mode returns a single byte; cooked mode gathers a line with echo
-// and local editing, mirroring the console driver so programs like `cat` and MARBLE's editor both behave.
+// Reads drain the keystroke queue; raw is one byte, cooked echoes/edits a line like the console driver.
 
 fn read(badge: u64, offset: u64, capacity: u64) i64 {
 
@@ -751,8 +746,7 @@ fn wake_paint() void {
 
 }
 
-// The terminal emulator: a small VT100 subset covering what MARBLE and the bundled programs emit - printable text,
-// CR/LF/backspace/tab, and the erase and cursor-move CSI sequences.
+// Small VT100 subset: printable text, CR/LF/backspace/tab, and erase/cursor CSI sequences.
 
 fn feed(byte: u8) void {
 
@@ -1069,9 +1063,7 @@ fn marble_cwd() []const u8 {
 
 }
 
-// MARBLE runs as a child with its stdio wired to this terminal's tty, exactly as Flint launches it against the
-// console - so it is the real shell, not a reimplementation. When it exits (the `exit` builtin), the reaper starts a
-// fresh session so the window stays alive.
+// Real MARBLE child on this tty; reaper respawns after exit so the window stays alive.
 
 fn spawn_marble() !void {
 
@@ -1188,8 +1180,7 @@ fn reaper() callconv(.c) noreturn {
 
         if (@atomicLoad(u32, &shutting_down, .acquire) != 0) lib.start.exit();
 
-        // MARBLE exited (its `exit` builtin, or a crash): a short backoff keeps a crash-on-start from respawning in a
-        // tight loop, then start a fresh session.
+        // Back off before respawn so a crash-on-start does not tight-loop.
 
         lib.time.sleep_ms(300);
 

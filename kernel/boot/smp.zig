@@ -1,6 +1,4 @@
-// Secondary-core bring-up (06-kernel-ddd.md Section 16.2): give every DTB-discovered core a boot stack, PSCI-start
-// it at the arch's secondary entry, and wait for it to register with the scheduler. No fixed core count anywhere -
-// whatever the tree lists (up to config.max_cores) comes up.
+// PSCI-start every DTB-listed secondary (up to max_cores) and wait for scheduler registration; no fixed core count.
 
 const std = @import("std");
 

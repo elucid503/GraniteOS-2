@@ -33,8 +33,7 @@ pub fn send_event() void {
 
 }
 
-/// Open CPACR_EL1.FPEN to 0b11 so the current core permits EL0 FP/SIMD (Stage 1.1 lazy-FP trap-in). The matching
-/// re-disable to 0b01 happens in `switch.S` when switching to a thread that has not used FP.
+/// Open CPACR_EL1.FPEN for EL0 FP/SIMD; `switch.S` re-disables when switching to a thread that never trapped in.
 pub fn enable_fp_el0() void {
 
     var cpacr = asm volatile ("mrs %[out], cpacr_el1"
@@ -64,9 +63,7 @@ pub fn sync_instruction_cache() void {
 
 }
 
-/// Clean and invalidate data-cache lines covering a physical range currently reachable through the kernel's
-/// identity map. Used before remapping recycled RAM as uncached DMA memory, so old cacheable free-list writes cannot
-/// later evict over device-visible ring contents.
+/// Clean/invalidate identity-mapped cache lines before remapping recycled RAM as uncached DMA, so stale writes cannot clobber device rings.
 pub fn clean_invalidate_data_cache(base: usize, length: usize) void {
 
     if (length == 0) return;
@@ -147,8 +144,7 @@ pub fn halt() noreturn {
 
 }
 
-/// Park this core quietly (the panic halt IPI): mask everything and wait, with no semihosting exit,
-/// so the panicking core keeps the console and controls the QEMU exit in test builds.
+/// Park quietly on the halt IPI: no semihosting exit so the panicking core keeps the console and QEMU exit in test builds.
 pub fn park() noreturn {
 
     asm volatile ("msr daifset, #0xf");

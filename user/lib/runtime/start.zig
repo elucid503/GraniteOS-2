@@ -1,5 +1,4 @@
-// Program entry (07-userspace-ddd.md Section 3.3). ELF programs receive argv and stream metadata through an init
-// message on cap.startup_endpoint before root.main(args) runs. Flint owns its own entry.
+// Program entry: argv and stream metadata from init on startup_endpoint before root.main (Flint has its own entry).
 
 const cap = @import("../cap/cap.zig");
 const ipc = @import("../ipc/ipc.zig");
@@ -211,7 +210,7 @@ fn close_runtime_streams() void {
 
 }
 
-/// Report exit to the supervisor (a one-way death message carrying `status`, 07-userspace-ddd.md Section 10.4), then exit.
+/// Send one-way death message with status to supervisor, then exit.
 pub fn exit_with(status: u8) noreturn {
 
     window.shutdown_all();

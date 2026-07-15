@@ -1,6 +1,4 @@
-// User-space device-tree reader (07-userspace-ddd.md Section 3): hardware discovery lives above the kernel now. The
-// walker collects every node matching a `compatible` string, so the same scan finds the PL011 (M4) and the
-// virtio-mmio transports (M7); it grows with the drivers.
+// User-space DTB walker: find nodes by compatible string (PL011, virtio-mmio, etc.) without kernel help.
 
 const std = @import("std");
 

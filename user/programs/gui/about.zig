@@ -1,5 +1,4 @@
-// About: system identity and a short feature summary.
-// Opened from the desktop context menu only (not listed in the launcher).
+// About screen; desktop context menu only, not in the launcher.
 
 const std = @import("std");
 

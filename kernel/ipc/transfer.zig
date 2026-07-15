@@ -1,6 +1,4 @@
-// IPC transfer (06-kernel-ddd.md Section 9): the synchronous rendezvous behind send/receive/call/reply.
-// Queue and thread-state manipulation happens under the endpoint lock, released before any switch;
-// a blocking thread marks its context stale first, so a cross-core waker cannot run it mid-switch.
+// IPC rendezvous: endpoint lock released before switch; blockers mark context stale so cross-core wakers cannot run them mid-switch.
 
 const object = @import("../object/object.zig");
 const arch = @import("../arch/arch.zig");
@@ -129,8 +127,7 @@ pub fn call(from: *Thread, endpoint: *Endpoint) Error!void {
 
 }
 
-/// Receive: take a waiting sender's message, block until one arrives, or wake on the bound notification (multi-wait).
-/// Returns the sender's badge, or `notification_wake` with the event bits staged in `into.notify_bits`.
+/// Receive a sender, block, or wake on bound notification; returns badge or `notification_wake` with event bits in `into.notify_bits`.
 pub fn receive(into: *Thread, endpoint: *Endpoint, block: bool) Error!u64 {
 
     const saved = arch.disable_interrupts();
@@ -173,8 +170,7 @@ pub fn receive(into: *Thread, endpoint: *Endpoint, block: bool) Error!u64 {
 
         into.observed_badge = sender.send_badge;
 
-        // A plain sender completes once its message is taken; a caller stays blocked for its reply,
-        // lending this server its scheduling until then (06-kernel-ddd.md Section 10 donation).
+        // Plain senders unblock on delivery; callers stay blocked and donate scheduling until reply.
 
         if (sender.is_call) {
 
@@ -239,8 +235,7 @@ pub fn receive(into: *Thread, endpoint: *Endpoint, block: bool) Error!u64 {
 
 }
 
-/// Reply: answer the caller named by the one-shot `reply_handle`, settle the donated scheduling, and switch
-/// straight back to the caller (06-kernel-ddd.md Section 9). `from.staged` holds the reply.
+/// Reply via one-shot handle, settle donation, and hand straight back to the caller.
 pub fn reply(from: *Thread, reply_handle: Handle) Error!void {
 
     const saved = arch.disable_interrupts();

@@ -1,6 +1,4 @@
-// Bitmap-font text rendering (07-userspace-ddd.md Section 12.6): parses console font files in the open
-// PC Screen Font formats (PSF1 and PSF2), resolves the ASCII range through the font's unicode table, and
-// draws 1-bit glyphs with word-wrapped box layout. GUI mono text now uses TrueType (JetBrains Mono).
+// PSF1/PSF2 bitmap-font renderer for console text; GUI mono uses TrueType instead.
 
 const std = @import("std");
 
@@ -166,8 +164,7 @@ fn parse_psf1(bytes: []const u8) Error!Font {
 
 }
 
-// PSF1 unicode table: per glyph, little-endian u16 codepoints; 0xfffe starts combining sequences (skipped),
-// 0xffff terminates the glyph's entry.
+// PSF1 unicode table: u16 codepoints per glyph; 0xfffe skips combining, 0xffff ends the entry.
 
 fn map_psf1_table(font: *Font, table: []const u8) void {
 
@@ -239,8 +236,7 @@ fn parse_psf2(bytes: []const u8) Error!Font {
 
 }
 
-// PSF2 unicode table: per glyph, UTF-8 codepoints; 0xfe starts combining sequences (skipped), 0xff terminates.
-// Only the single-byte range matters for the ASCII map, so multi-byte UTF-8 heads are length-skipped.
+// PSF2 unicode table: UTF-8 per glyph; 0xfe skips combining, 0xff ends; multi-byte heads are length-skipped.
 
 fn map_psf2_table(font: *Font, table: []const u8) void {
 
@@ -307,8 +303,7 @@ fn read_u32(bytes: []const u8, offset: usize) u32 {
 
 }
 
-// Greedy word wrap over byte columns: break at the last space that fits, hard-break words longer than a
-// line, and honor embedded newlines. Layout is pure so it host-tests without a surface.
+// Greedy word wrap by byte columns; pure layout for host tests without a surface.
 
 pub const LineIterator = struct {
 

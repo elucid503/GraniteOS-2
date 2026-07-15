@@ -1,4 +1,4 @@
-// User-space ELF loader and spawn helper for M6 programs. It handles static non-PIE ELF64 images only.
+// User-space ELF loader/spawn for static non-PIE ELF64 images.
 
 const std = @import("std");
 
@@ -196,8 +196,7 @@ const PackedArgs = struct {
 
 };
 
-// argv rides as `argc` NUL-terminated strings; the working directory follows as one more trailing string, so no
-// init data-word is spent on it (07-userspace-ddd.md Section 3.3).
+// Pack argv plus trailing cwd into one init Region so no data word is spent on cwd.
 
 fn build_args(authority: Handle, args: []const []const u8, cwd: []const u8) Error!PackedArgs {
 

@@ -1,6 +1,4 @@
-// Fast rounded rectangles: the body is plain rect fills; only the four r×r corner cells go through
-// precomputed quarter-circle coverage masks (same analytic source as the full rasterizer). Large radii or
-// uncached values fall back to one full-path fill so every caller shares one correct implementation.
+// Fast rounded rects: rect body plus cached quarter-circle corner masks; large radii fall back to full-path fill.
 
 const std = @import("std");
 
@@ -164,8 +162,7 @@ pub fn stroke_round_rect(surface: *const Surface, rect: Rect, radius: i32, width
 
     if (rect.w <= 0 or rect.h <= 0 or width <= 0) return;
 
-    // Analytic outer/inner ring: corner arcs stay continuous with the filled chrome and meet the
-    // straight edges without the 1px perimeter approximation of stroke_round_rect_fast.
+    // Analytic border ring avoids the 1px rim approximation of stroke_round_rect_fast.
     var shape = Path{};
 
     stroke.round_rect_border(&shape, path_mod.from_px(rect.x), path_mod.from_px(rect.y), path_mod.from_px(rect.w), path_mod.from_px(rect.h), path_mod.from_px(radius), path_mod.from_px(width));
@@ -173,8 +170,7 @@ pub fn stroke_round_rect(surface: *const Surface, rect: Rect, radius: i32, width
 
 }
 
-/// Straight edges as rect fills; corner arcs from precomputed 1px rim masks. Hot path for the
-/// compositor — no path flatten/sweep per frame.
+/// Compositor hot path: rect edges plus precomputed 1px rim corner masks, no per-frame sweep.
 pub fn stroke_round_rect_fast(surface: *const Surface, rect: Rect, radius: i32, width: i32, color: Color) void {
 
     if (rect.w <= 0 or rect.h <= 0 or width <= 0) return;
@@ -199,8 +195,7 @@ pub fn stroke_round_rect_fast(surface: *const Surface, rect: Rect, radius: i32, 
 
         const side: u32 = @intCast(r);
 
-        // band > 1: expand by blending the solid fill mask under a second inset pass is rare (resize
-        // rubber band). A second blend of the full fill at the rim is enough for a short 2px stroke.
+        // band > 1: rare; a second rim blend from the fill mask suffices for a 2px stroke.
         surface.blend_coverage(rect.x, rect.y, masks.rim_tl, side, side, color);
         surface.blend_coverage(rect.x + rect.w - r, rect.y, masks.rim_tr, side, side, color);
         surface.blend_coverage(rect.x, rect.y + rect.h - r, masks.rim_bl, side, side, color);
@@ -498,8 +493,7 @@ test "corner masks are opaque inside and clear outside the arc" {
     const masks = masks_for(8) orelse return error.TestExpectedEqual;
     const r: usize = 8;
 
-    // Interior of each quarter (toward the rect center) is solid; the outer open corner is clear.
-    // Allow a small undershoot from cubic circle arcs (linear coverage, no display gamma).
+    // Interior quarters are solid; outer corner clear (cubic arcs may undershoot slightly).
     try testing.expect(masks.tl[(r - 1) * r + (r - 1)] >= 240);
     try testing.expect(masks.tl[0] < 64);
     try testing.expect(masks.br[0] >= 240);

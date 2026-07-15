@@ -1,6 +1,4 @@
-// PNG codec: decode IHDR + zlib IDAT into XRGB, encode XRGB to RGB8 PNG (filter-None + stored zlib).
-// Decode supports 8-bit greyscale, RGB, greyscale+alpha, and RGBA (no interlacing, no palette).
-// Integer-only; freestanding-safe via std.compress.flate for inflate and hand-rolled store blocks for deflate.
+// PNG codec: decode/encode 8-bit images to XRGB; freestanding inflate via std.compress.flate, hand-rolled store deflate.
 
 const std = @import("std");
 
@@ -92,8 +90,7 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) Error!Image {
 
     if (idat.len == 0) return error.BadPng;
 
-    // Stream one scanline at a time so peak RAM is pixels + IDAT + two rows (not a full filtered frame).
-    // Inflate window lives on the heap so large decodes do not pressure the user stack (512 KiB).
+    // Scanline decode limits RAM; inflate window on heap to avoid 512 KiB on the user stack.
     const pixels = allocator.alloc(u32, pixel_count) catch return error.OutOfMemory;
     errdefer allocator.free(pixels);
 
@@ -168,8 +165,7 @@ pub fn raw_scratch_size(width: u32, height: u32) usize {
 
 }
 
-/// Encode into caller-owned buffers (no allocator). `scratch` holds filtered scanlines;
-/// `dest` receives the complete PNG. Returns the used prefix of `dest`.
+/// Encode into caller-owned scratch/dest buffers; returns the used prefix of dest.
 pub fn encodeTo(dest: []u8, scratch: []u8, pixels: []const u32, width: u32, height: u32) Error![]u8 {
 
     if (width == 0 or height == 0) return error.BadPng;

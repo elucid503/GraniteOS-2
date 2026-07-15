@@ -193,8 +193,7 @@ pub const Thread = struct {
 
     }
 
-    /// IPC teardown at death (06-kernel-ddd.md Section 9): wake a caller this thread still owes a reply, drop the
-    /// endpoint it served (breaking it once no server remains), and release its bound notification. No timeouts, no hangs.
+    /// IPC teardown at death (06-kernel-ddd.md Section 9): wake a caller this thread still owes a reply, drop the endpoint it served (breaking it once no server remains), and release its bound notification. No timeouts, no hangs.
     pub fn release_ipc(self: *Thread) void {
 
         if (self.serving) |endpoint| {

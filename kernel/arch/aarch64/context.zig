@@ -4,8 +4,7 @@ const types = @import("../../types.zig");
 
 const VirtAddr = types.VirtAddr;
 
-// Field order and offsets must match `asm/switch.S`: sp at 0, x19..x28 at 8, x29 at 88, x30 at 96, sp_el0 at 104,
-// used_fp at 112, fp_v (V0..V31) at 128, fpcr at 640, fpsr at 648.
+// Field order and offsets must match `asm/switch.S`; `_fp_pad` aligns `fp_v` for legal `stp q` immediates.
 
 pub const Context = extern struct {
 
@@ -15,9 +14,7 @@ pub const Context = extern struct {
     x30: u64, // link register: where the next switch-in resumes
     sp_el0: u64, // user stack pointer while the thread is in EL1
 
-    // Lazy FP/SIMD state (06-kernel-ddd.md Section 5): saved and restored by `switch.S` only for threads that
-    // trapped into FP. `used_fp` gates that work; `_fp_pad` lands `fp_v` on a 16-byte offset so the `stp q` form's
-    // scaled immediate is legal.
+    // Lazy FP: `switch.S` saves vector state only when `used_fp` is set.
 
     used_fp: u64,
     _fp_pad: u64,

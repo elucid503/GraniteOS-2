@@ -258,8 +258,7 @@ const Used = extern struct {
 
 };
 
-// Control DMA layout: two pages per queue (descriptors + avail, then used on its own page - the legacy
-// alignment rule), one page split between command and response buffers, then the cursor image.
+// Control DMA: two pages per queue (legacy used-page alignment), command/response page, then cursor image.
 
 const page_size = 4096;
 
@@ -458,13 +457,11 @@ fn init_queue(queue: u32, offset: usize) !void {
 
 }
 
-// Bring up (or rebuild, on resize) the scanout: query the host size, create a 2D resource, give it a fresh
-// contiguous DMA backing, and point scanout 0 at it.
+// Bring up or rebuild scanout: query host size, create 2D resource with DMA backing, point scanout 0 at it.
 
 fn init_scanout() !void {
 
-    // The host may not have wired a display surface yet (enabled=0). Build a scanout at the reported or
-    // fallback size immediately; EVENT_DISPLAY will rewire and flush when the SDL surface appears.
+    // Build scanout at reported or fallback size now; EVENT_DISPLAY rewires when the SDL surface appears.
 
     const size = try query_display();
 
@@ -850,8 +847,7 @@ fn move_cursor(position: u64) i64 {
 
 }
 
-// A config interrupt is the host window resizing or the SDL surface appearing: clear the event, requery,
-// rebuild or reattach scanout, wake the compositor, and push the backing to the host.
+// Config interrupt (resize or SDL surface): requery, rebuild/reattach scanout, wake compositor, flush to host.
 
 fn handle_interrupt() void {
 

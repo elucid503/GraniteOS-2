@@ -7,8 +7,7 @@ pub const Handle = packed struct(u32) {
 
 };
 
-// Reserved sentinel handles (03-syscall-abi.md): identity without a table slot. They sit at the very top of the
-// 32-bit handle space, far above any real index, so the syscall layer can recognise them before a table lookup.
+// Sentinel handles at the top of the 32-bit space so syscalls recognise identity without a table lookup.
 
 pub const self_process: u32 = 0xffff_ffff;
 pub const self_thread: u32 = 0xffff_fffe;

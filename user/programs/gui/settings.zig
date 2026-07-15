@@ -1,5 +1,4 @@
-// Settings: desktop preferences for color theme. Changes apply immediately and persist to disk. The clock
-// timezone is no longer set here - the Metrics service detects it automatically from the machine's IP at boot.
+// Theme preferences only; timezone comes from Metrics at boot.
 
 const lib = @import("lib");
 

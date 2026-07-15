@@ -1,5 +1,4 @@
-// Host tool `qemu-run <command> [args...]`: runs an interactive subprocess with inherited stdio and always exits 0.
-// QEMU's SDL window reports a non-zero status on normal close; zig build should not treat that as failure.
+// Run subprocess with inherited stdio; always exit 0 so QEMU SDL close does not fail the build.
 
 const std = @import("std");
 

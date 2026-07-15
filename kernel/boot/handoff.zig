@@ -27,18 +27,15 @@ const page_size = config.page_size;
 const read_only = arch.Permissions{ .read = true, .user = true };
 const read_write = arch.Permissions{ .read = true, .write = true, .user = true };
 
-// Flint is the one program allowed writable code pages: its flat image carries text, data, and the flatten-padded zero
-// BSS in a single raw-mapped span (04-boot-and-bootstrap.md).
+// Flint alone gets writable code pages: text, data, and flatten-padded BSS in one raw-mapped span.
 
 const image_permissions = arch.Permissions{ .read = true, .write = true, .execute = true, .user = true };
 
 // The bundle's fixed handle order; user/lib/cap/cap.zig relies on these indices.
 
-// 0: root MemoryAuthority   1: InterruptAuthority   2: DeviceAuthority   3: DTB Region   4: boot-module Region
-// 5: DmaAuthority
+// Bundle handle order: 0 MemoryAuthority, 1 InterruptAuthority, 2 DeviceAuthority, 3 DTB, 4 boot module, 5 DmaAuthority.
 
-/// Build the first AddressSpace, raw-map Flint from the initrd, pre-load its HandleTable with the capability bundle,
-/// and start its first thread. `arg` (x0) carries the DTB's byte offset into its page-aligned Region.
+/// Build the first world, raw-map Flint, preload the capability bundle, and start its first thread; `arg` carries DTB offset in its Region.
 pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {
 
     const space = try AddressSpace.create();

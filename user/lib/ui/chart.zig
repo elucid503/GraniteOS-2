@@ -1,6 +1,4 @@
-// Chart painters for canvas nodes: line charts, pie charts, per-core gantt strips, and proportion meters.
-// Everything renders through the analytic-AA renderer - pie slices are true filled wedges, chart lines are
-// stroked paths - so the Status app's graphs are smooth down to the subpixel.
+// Chart painters (line, pie, gantt, meter) via analytic-AA paths for subpixel-smooth Status graphs.
 
 const std = @import("std");
 
@@ -19,8 +17,7 @@ const Surface = draw.Surface;
 
 const max_samples = 256;
 
-/// A left-to-right line chart of `samples` (most recent last) scaled so `max` reaches the top, with a light
-/// area fill beneath the stroke.
+/// Line chart of samples (oldest left) scaled to max with a light area fill under the stroke.
 pub fn line(surface: *const Surface, rect: Rect, samples: []const u32, max_in: u32, color: Color) void {
 
     surface.fill_rect(rect, ui.theme.surface);

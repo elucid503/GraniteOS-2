@@ -29,13 +29,11 @@ const attribute_device: u64 = 0 << 2;
 const attribute_normal: u64 = 1 << 2;
 const attribute_normal_uncached: u64 = 2 << 2;
 
-// MAIR_EL1: attr0 = Device-nGnRnE (0x00), attr1 = Normal write-back (0xff),
-// attr2 = Normal non-cacheable (0x44) for DMA buffers shared with devices.
+// MAIR_EL1: device, write-back normal, and non-cacheable normal for DMA buffers.
 
 const memory_attributes: u64 = 0x00 | (0xff << 8) | (0x44 << 16);
 
-// TCR_EL1: 48-bit TTBR0, 4 KiB granule, write-back inner-shareable walks, TTBR1 disabled, 40-bit physical output,
-// 16-bit ASIDs defined by TTBR0 (AS=1; A1=0). ASIDs let a process switch skip the full TLB flush (Stage 1.4).
+// TCR_EL1: 48-bit TTBR0, 4 KiB granule, 16-bit ASIDs in TTBR0 so process switches skip full TLB flushes.
 
 const translation_control: u64 =
     16 | // T0SZ => 48-bit virtual address
@@ -180,8 +178,7 @@ pub const Permissions = packed struct(u8) {
     // Device/MMIO mapping: non-cacheable, non-gathering, never executable (06-kernel-ddd.md Section 16.3).
     device: bool = false,
 
-    // RAM used for DMA rings/buffers: normal memory, but non-cacheable so device writes and CPU writes are visible
-    // without explicit cache maintenance.
+    // DMA RAM: normal but non-cacheable so CPU and device see writes without cache maintenance.
     uncached: bool = false,
 
     _pad: u2 = 0,
@@ -190,9 +187,7 @@ pub const Permissions = packed struct(u8) {
 const page_descriptor: u64 = descriptor_valid | (1 << 1);
 const output_mask: u64 = 0x0000_ffff_ffff_f000;
 
-/// Allocate a fresh top-level (level-0) table for a user address space. Slot 0 is shared with the kernel's own
-/// level-0 entry, so the kernel's identity/device/RAM mappings (all privileged, EL0 has no access) remain reachable
-/// at EL1 once this root is loaded in TTBR0; user mappings go above 512 GiB (slot 1+), clear of that shared block.
+/// New user root shares slot 0 with the kernel so EL1 identity mappings stay reachable; user mappings use slot 1+ above 512 GiB.
 pub fn new_table() Error!PhysAddr {
 
     const frame = try frames.alloc();
@@ -205,8 +200,7 @@ pub fn new_table() Error!PhysAddr {
 
 }
 
-// Write one leaf descriptor (allocating intermediate tables as needed) without any TLB maintenance; the caller
-// batches that. `map_page` and `map_range` share it so single and bulk mappings agree on the walk.
+// Shared leaf write without TLB maintenance; callers batch flushes so `map_page` and `map_range` agree.
 
 fn write_leaf(root: PhysAddr, va: VirtAddr, pa: PhysAddr, perms: Permissions) Error!void {
 
@@ -264,12 +258,10 @@ pub fn unmap_page(root: PhysAddr, va: VirtAddr) void {
 
 }
 
-// Past this many pages, a per-VA TLBI loop costs more than one shot that drops the whole range's stale entries; the
-// range flush then broadcasts a single all-address invalidate instead (still inner-shareable, so cross-core).
+// Past this threshold, one inner-shareable all-address TLBI beats a per-VA loop.
 const tlb_range_threshold: usize = 64;
 
-/// Map `pages` contiguous frames from `pa` at `va`, deferring all TLB maintenance to a single batched flush at the
-/// end (Stage 1.4). On failure the partial run is rolled back. `pa` is contiguous because a Region's frames are.
+/// Map contiguous Region frames with one batched TLB flush; partial runs roll back on failure.
 pub fn map_range(root: PhysAddr, va: VirtAddr, pa: PhysAddr, pages: usize, perms: Permissions) Error!void {
 
     var mapped: usize = 0;
@@ -309,8 +301,7 @@ pub fn unmap_range(root: PhysAddr, va: VirtAddr, pages: usize) void {
 
 }
 
-/// One batched TLB invalidate over `[va, va + pages*page_size)`: a per-VA loop under one barrier pair, or a single
-/// all-address shootdown past the threshold. Inner-shareable, so it reaches every core with no IPI (Section 16.2).
+/// Batched TLB invalidate: per-VA loop or all-address shootdown past threshold; inner-shareable, no IPI.
 pub fn flush_tlb_range(va: VirtAddr, pages: usize) void {
 
     if (pages == 0) return;
@@ -361,13 +352,7 @@ pub fn translate(root: PhysAddr, va: VirtAddr) ?PhysAddr {
 
 }
 
-// --- ASIDs (Stage 1.4) ---
-//
-// Each AddressSpace holds a 16-bit ASID drawn from a monotonic counter within a generation. TTBR0 carries the ASID,
-// so a process switch just rewrites TTBR0 (no TLB flush) and TLB entries of different spaces cannot alias. When the
-// counter wraps, the generation bumps; every space re-derives a fresh ASID on its next activation, and each core
-// does one local full flush the first time it switches under the new generation (see `scheduler.activate_space`),
-// which is what keeps a reused ASID value from matching stale entries a core still holds.
+// ASIDs tag TTBR0 so process switches need no flush; generation rollover forces one local flush per core before reuse.
 
 const asid_max: u32 = 0xffff;
 
@@ -381,9 +366,7 @@ pub fn asid_generation() u64 {
 
 }
 
-/// Return the ASID for a space, allocating one when the space's recorded generation is stale. The fast path is a
-/// lockless generation compare; only a first activation (or a post-rollover one) takes the lock. Two cores racing the
-/// same space converge on one ASID because the second sees the generation already current.
+/// Return or allocate an ASID; fast path is lockless generation compare, lock only on first activation or rollover.
 pub fn ensure_space_asid(asid_ptr: *u16, generation_ptr: *u64) u16 {
 
     if (@atomicLoad(u64, generation_ptr, .acquire) == asid_generation()) {
@@ -426,8 +409,7 @@ pub fn tlb_flush_local() void {
 
 }
 
-/// Load a TTBR0 value (page-table root ORed with the ASID in bits [63:48]) with no TLB flush: the ASID tag keeps a
-/// stale space's entries from ever matching. Callers handle the rare post-rollover local flush.
+/// Load TTBR0 (root | ASID) without TLB flush; callers handle the rare post-rollover local flush.
 pub fn activate_space(ttbr0: u64) void {
 
     asm volatile (
@@ -439,8 +421,7 @@ pub fn activate_space(ttbr0: u64) void {
 
 }
 
-// The inner-shareable (`is`) TLBI broadcasts to every core, so an unmap on one core is the cross-core
-// TLB shootdown (06-kernel-ddd.md Section 16.2) with no IPI round-trip.
+// Inner-shareable TLBI broadcasts cross-core TLB shootdown without an IPI.
 
 pub fn flush_tlb_page(va: VirtAddr) void {
 
@@ -480,8 +461,7 @@ pub fn map_ram(ranges: []const frames.MemoryRange) void {
 
 }
 
-/// Free every table frame a user root owns (the leaf page frames belong to Regions and are left alone). Slot 0 is the
-/// shared kernel entry (new_table) and its subtree is the kernel's, never this space's, so it is skipped.
+/// Free user-owned table frames; skip slot 0 (shared kernel entry) and leaf pages owned by Regions.
 pub fn free_table(root: PhysAddr) void {
 
     const entries: *const [entries_per_table]u64 = @ptrFromInt(root);

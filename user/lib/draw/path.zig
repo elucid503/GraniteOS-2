@@ -1,6 +1,4 @@
-// Vector path model in 26.6 fixed point (64 subpixel units per pixel), the input language of the analytic
-// rasterizer. A Path is a bounded verb/point tape with shape helpers (rects, rounded rects, circles, arcs,
-// pie wedges); curves stay curves here and are flattened adaptively at raster time.
+// 26.6 fixed-point path tape for the analytic rasterizer; curves flatten at raster time.
 
 const std = @import("std");
 
@@ -172,8 +170,7 @@ pub const Path = struct {
 
     }
 
-    /// The same rounded rectangle traversed counter-clockwise: paired with add_round_rect it cuts a
-    /// ring, which is how crisp borders are filled in one pass.
+    /// Counter-clockwise round rect paired with add_round_rect to cut a border ring in one fill.
     pub fn add_round_rect_reversed(self: *Path, x: i32, y: i32, w: i32, h: i32, radius_in: i32) void {
 
         if (w <= 0 or h <= 0) return;
@@ -239,8 +236,7 @@ pub const Path = struct {
 
     }
 
-    /// Arc as a polyline appended from the current point: clockwise from `start_deg` sweeping `sweep_deg`
-    /// (degrees, 0 = up / twelve o'clock). Steps stay under ~4 degrees so the chords sit within a subpixel.
+    /// Arc polyline clockwise from twelve o'clock; ~4° steps keep chords within a subpixel.
     pub fn arc_to(self: *Path, cx: i32, cy: i32, radius: i32, start_deg: i32, sweep_deg: i32) void {
 
         if (radius <= 0 or sweep_deg == 0) return;
@@ -283,8 +279,7 @@ pub const Path = struct {
 
 };
 
-// Cubic circle-arc control distance: radius * 0.5523 (the standard 4/3 * tan(pi/8) constant), computed as
-// radius * 36195 / 65536 to stay integer-exact for large radii.
+// Integer-exact cubic arc kappa: radius * 36195 / 65536 (≈0.5523).
 
 fn kappa(radius: i32) i32 {
 

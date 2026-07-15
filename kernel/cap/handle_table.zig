@@ -77,8 +77,7 @@ pub const HandleTable = struct {
 
     }
 
-    /// Insert with a badge already attached - the kernel's way to hand a process a badged endpoint at bootstrap,
-    /// before that process exists to `copy` one for itself (04-boot-and-bootstrap.md).
+    /// Insert with a badge already attached - the kernel's way to hand a process a badged endpoint at bootstrap, before that process exists to `copy` one for itself (04-boot-and-bootstrap.md).
     pub fn insert_badged(self: *HandleTable, target: *object.Object, badge: u64) Error!Handle {
 
         return self.insert_with_badge(target, badge);
@@ -116,8 +115,7 @@ pub const HandleTable = struct {
 
     }
 
-    /// Resolve the object and read its badge under a single lock: the IPC transfer path needs both, so
-    /// this spares it a second acquire per handle slot moved across a message.
+    /// Resolve the object and read its badge under a single lock: the IPC transfer path needs both, so this spares it a second acquire per handle slot moved across a message.
     pub fn resolve_with_badge(self: *HandleTable, handle: Handle) Error!struct { target: *object.Object, badge: u64 } {
 
         const saved = self.lock.acquire();

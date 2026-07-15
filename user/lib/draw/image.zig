@@ -1,5 +1,4 @@
-// Image painting: blit decoded pixel buffers onto surfaces, including cover-fit scaling so a
-// wallpaper fills its destination without letterboxing.
+// Image painting: 1:1 blit and cover/contain scaling onto surfaces.
 
 const draw = @import("draw.zig");
 

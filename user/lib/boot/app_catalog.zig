@@ -1,5 +1,4 @@
-// Runtime parser for the build-generated `app-catalog` bundle module. Marble seeds disk programs from the
-// program table; the taskbar launcher menu reads the desktop table.
+// Runtime parser for the build-generated app-catalog bundle (program table for Marble, desktop table for the launcher).
 
 const std = @import("std");
 

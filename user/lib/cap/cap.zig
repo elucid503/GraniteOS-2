@@ -1,4 +1,4 @@
-// Handle helpers and reserved handle indices (07-userspace-ddd.md Section 3.2). A handle is `{index, generation}` transported as one non-negative word; a fresh table hands out generation-zero handles in insertion order, which is what makes the grant layouts below plain integers.
+// Handle helpers and reserved grant indices; generation-zero handles in insertion order keep layouts as plain integers.
 
 pub const Handle = u32;
 
@@ -18,8 +18,7 @@ pub const Attribute = enum(u64) {
 
 };
 
-// The sentinel badge `receive` returns when the wake came from a bound notification, not a request (03-syscall-abi.md
-// Multi-wait). Matches the kernel's `message.notification_wake`: a large positive value, so it survives the signed ABI.
+// Sentinel receive badge for notification wake (not a request); large positive so it survives the signed ABI.
 
 pub const notification_wake: u64 = 0x7fff_ffff_ffff_ffff;
 
@@ -41,8 +40,7 @@ pub const flint = struct {
 
 };
 
-// M6 reserved grant layout (07-userspace-ddd.md Section 3.2). Spawners fill these first, in order, so every program
-// can start before it has dynamic discovery.
+// M6 reserved grants: spawners fill these first so every program can start without dynamic discovery.
 
 pub const stdin: Handle = 0;
 pub const stdout: Handle = 1;
@@ -89,10 +87,7 @@ pub const filesystem = struct {
 
 };
 
-// The input server owns every virtio-input transport at once (in-process drivers, 07-userspace-ddd.md
-// Section 12.4): init word 3 carries the device count `n`, the windows sit at `devices..devices+n`, the
-// matching interrupts at `devices+n..devices+2n`, the DmaAuthority sub-grant follows at `devices+2n`,
-// and init word 4 packs each transport's in-page offset as 16 bits per device.
+// Input server grant layout: n MMIO windows, n interrupts, DMA sub-grant, per-device offsets packed in init word 4.
 
 pub const input = struct {
 
@@ -114,8 +109,7 @@ pub const compositor = struct {
 
 };
 
-// GUI clients reach the compositor through the name service; their one extra grant is the bundle the
-// fonts load from.
+// GUI grant layout: compositor via name service plus bundle Region for fonts.
 
 pub const gui = struct {
 
@@ -123,9 +117,7 @@ pub const gui = struct {
 
 };
 
-// The launcher server (the desktop program spawner). Its request endpoint sits in the STDIN/OUT/ERR slots (like the
-// naming server); it holds a console endpoint to hand its GUI children as their tty, and the module bundle to load
-// program images from. Children it spawns get the plain `gui` layout above.
+// Launcher server grants: endpoint in stdio slots, console for GUI children, bundle for program images.
 
 pub const launcher = struct {
 

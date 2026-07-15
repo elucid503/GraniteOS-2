@@ -1,5 +1,4 @@
-// Fine-grained IPC stress: clients call two endpoints concurrently, copy a handle in every request, and make each
-// server signal that notification before replying. This drives independent endpoint queues and notification wakeups.
+// IPC stress: concurrent calls to two endpoints with handle copy and notification wake per request.
 
 const lib = @import("lib");
 

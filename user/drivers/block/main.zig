@@ -107,8 +107,7 @@ const RequestHeader = extern struct {
 
 };
 
-// DMA region layout: descriptors + avail on page 0, used on page 1 (the legacy alignment rule), the request
-// header, status byte, and a 4 KiB bounce buffer starting on page 2.
+// DMA layout: rings on pages 0-1 (legacy alignment), then header, status, and 4 KiB bounce buffer.
 
 const page_size = 4096;
 const dma_pages = 4;

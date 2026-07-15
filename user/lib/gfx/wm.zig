@@ -1,5 +1,4 @@
-// Window-manager client: screen geometry, open-window tracking, focus, and placement on top of the compositor's
-// Window interface. Desktop chrome (the taskbar) uses this instead of hand-rolling IPC.
+// Window-manager client for taskbar chrome: screen info, window list, focus, and launch helpers.
 
 const std = @import("std");
 
@@ -76,8 +75,7 @@ pub const List = struct {
 
         self.list_ready = notify;
         self.subscribed = true;
-        // Leave `attached` false so the next `list` call maps the session-side buffer; subscribe only
-        // installs the compositor's publish mapping and does not satisfy list_windows' session attach.
+        // Subscribe maps compositor-side only; next list still attaches the session buffer.
 
     }
 

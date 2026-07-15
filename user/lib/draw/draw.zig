@@ -1,7 +1,4 @@
-// The drawing library root (M10 GUI rewrite): pixel surfaces, colors, and rectangles. Every visual element in
-// the system - window chrome, text, icons, charts, images - renders through this module and its companions
-// (path.zig, raster.zig, stroke.zig, text.zig, vector.zig, png.zig, image.zig). All arithmetic is integer
-// fixed-point; lazy FP/SIMD context switching allows hot pixel paths to use integer NEON vectors.
+// Drawing library root: XRGB surfaces, colors, rects; integer fixed-point with optional NEON on hot paths.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -376,8 +373,7 @@ pub const Surface = struct {
 
         const start_x = x + @as(i32, @intCast(first));
 
-        // The coverage row can also fall entirely to the right of the clip; guard before the cast so a
-        // right-of-clip run yields no pixels instead of a negative `room` wrapping to a huge count.
+        // Guard right-of-clip runs so room does not wrap negative into a huge blend count.
         if (start_x >= limit.x + limit.w) return;
 
         const room: usize = @intCast(limit.x + limit.w - start_x);
@@ -446,8 +442,7 @@ pub const Surface = struct {
 
     }
 
-    /// Blend `color` through a `w`x`h` coverage mask (row-major) with its top-left at (x, y): the blit path
-    /// for cached glyph and icon bitmaps.
+    /// Blend through a row-major w×h coverage mask (cached glyph/icon blit path).
     pub fn blend_coverage(self: *const Surface, x: i32, y: i32, coverage: []const u8, w: u32, h: u32, color: Color) void {
 
         var row: u32 = 0;
@@ -491,8 +486,7 @@ pub const Surface = struct {
 
     }
 
-    /// Blit `src_rect` but weight each pixel by a coverage mask spanning the destination rect (row-major,
-    /// `mask_w` wide): the compositor's rounded-window path. Zero coverage leaves the destination untouched.
+    /// Masked blit for rounded windows; zero coverage leaves the destination untouched.
     pub fn blit_masked(self: *const Surface, dst_x: i32, dst_y: i32, src: *const Surface, src_rect: Rect, mask: []const u8, mask_w: u32, opaque_rows: ?[]const bool) void {
 
         var from = src_rect.intersect(src.bounds());
@@ -574,8 +568,7 @@ pub const Surface = struct {
 
     }
 
-    // A 4x4 ordered-dither vertical gradient: the Bayer offsets break the 8-bit quantization steps into
-    // sub-pixel noise, so large fills show no banding.
+    // 4x4 Bayer-dithered vertical gradient to hide 8-bit banding on large fills.
 
     pub fn fill_gradient(self: *const Surface, rect: Rect, top: Color, bottom: Color) void {
 
@@ -744,8 +737,7 @@ test "blend_row drops a run that starts past the right edge" {
     var buffer: [16]u32 = [_]u32{0} ** 16;
     const surface = test_surface(&buffer, 4, 4);
 
-    // A coverage run whose start is well right of the clip must paint nothing - not compute a negative
-    // `room` that wraps to a huge count and runs the blend loop off the end of the surface.
+    // A run starting past the right clip edge must paint nothing (no negative room wrap).
 
     surface.blend_row(10, 1, &[_]u8{ 255, 255, 255 }, 0xabcdef);
 

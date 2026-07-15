@@ -1,5 +1,4 @@
-// Modal file selector for GUI apps: open or save against the Strata filesystem.
-// Hosts paint the dialog over their window and feed pointer/key events until take_result() yields a path.
+// Modal open/save file picker; host paints overlay and feeds events until take_result().
 
 const std = @import("std");
 

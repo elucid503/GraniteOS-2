@@ -1,6 +1,4 @@
-// Buddy physical-frame allocator (06-kernel-ddd.md Section 6.1). Single-page alloc/free go through a per-core
-// magazine that refills and drains the buddy pool in batches, so the hot path never touches the global lock;
-// contiguous/DMA allocations and the batch transfers take it.
+// Buddy frame allocator: single-page traffic uses per-core magazines; contiguous/DMA and batch transfers take the global lock.
 
 const std = @import("std");
 

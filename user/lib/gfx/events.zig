@@ -1,7 +1,4 @@
-// The normalized input/window event record and the single-producer single-consumer ring it rides in
-// (07-userspace-ddd.md Section 10.8, Section 3.5). The same record shape flows on both hops: input server to
-// compositor (window 0, pointer normalized to proto.input.pointer_range) and compositor to client (window set,
-// pointer in window-content coordinates).
+// Normalized input/window Event and its SPSC ring; same shape from input server and compositor to client.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -54,8 +51,7 @@ pub fn ring_bytes(capacity: u32) usize {
 
 }
 
-// Monotonic head/tail (the stream Ring's arithmetic): the producer owns tail, the consumer owns head, and
-// wrap-around subtraction gives the fill level without a shared lock.
+// Monotonic head/tail fill count without locks (producer owns tail, consumer owns head).
 
 pub const Ring = struct {
 
@@ -93,8 +89,7 @@ pub const Ring = struct {
 
     }
 
-    /// Producer: append one event, dropping it when the ring is full (input is lossy by design; the
-    /// consumer coalesces pointer motion anyway).
+    /// Producer push; drops when full because input is lossy and motion is coalesced anyway.
     pub fn push(self: Ring, event: Event) bool {
 
         const capacity = self.header.capacity;

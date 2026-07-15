@@ -48,8 +48,7 @@ export fn kernel_irq() callconv(.c) void {
 
         gic.complete(irq);
 
-        // A halt IPI parks this core for good (a peer panicked); a reschedule IPI just runs the tick,
-        // which picks up freshly admitted or stealable work.
+        // Halt IPI parks this core after a peer panic; reschedule IPI runs `tick` to pick up fresh or stealable work.
 
         if (irq == gic.sgi_halt) cpu.park();
 
@@ -57,9 +56,7 @@ export fn kernel_irq() callconv(.c) void {
 
     } else if (interrupt_module.find(irq)) |device| {
 
-        // fire masks the line before the end-of-interrupt so a level-triggered device cannot storm; the driver's
-        // acknowledge re-arms it. Only a driver-band preemption check is owed here (Stage 1.5) - not the full MLFQ
-        // tick a timer IRQ runs - so the just-woken driver thread runs right away without the quantum/boost sweep.
+        // Mask before EOI so level-triggered lines cannot storm; driver IRQ only owes driver-band preemption, not a full MLFQ tick.
 
         device.fire();
         gic.complete(irq);
@@ -81,9 +78,7 @@ export fn kernel_syscall(frame: *SyscallFrame) callconv(.c) void {
 
 }
 
-// Lazy FP/SIMD trap (06-kernel-ddd.md Section 5): the running EL0 thread just executed its first FP/SIMD
-// instruction. Flag it so future switches carry its vector file, open CPACR for EL0 on this core, and hand back the
-// context whose (zeroed-on-first-use) vector file `fp_common` loads before retrying the instruction.
+// First EL0 FP/SIMD use: flag the thread, open CPACR, return its context so `fp_common` can load the vector file and retry.
 
 export fn kernel_fp_trap() callconv(.c) *context.Context {
 

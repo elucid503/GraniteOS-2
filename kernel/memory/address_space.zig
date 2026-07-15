@@ -15,8 +15,7 @@ const page_size = config.page_size;
 
 const max_mappings = 64;
 
-// Kernel-chosen mappings land in the user window (config.user_space_base): above 512 GiB, clear of the kernel's
-// block-mapped identity range that every process root shares (06-kernel-ddd.md Section 6.3; arch/aarch64/mmu.zig).
+// Kernel-chosen mappings start above 512 GiB, clear of the shared kernel identity block in every process root.
 const default_base: VirtAddr = config.user_space_base;
 
 var cache: slab.Cache(AddressSpace) = .{};
@@ -87,8 +86,7 @@ pub const AddressSpace = struct {
         effective.device = region.device;
         effective.uncached = region.uncached;
 
-        // A Region's frames are physically contiguous, so the whole placement is one batched map with a single TLB
-        // flush at the end instead of a per-page broadcast (Stage 1.4).
+        // Contiguous Region frames map in one batched `map_range` with a single TLB flush.
 
         try arch.map_range(self.root, base, region.frame(0), region.pages, effective);
 

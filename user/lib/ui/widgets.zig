@@ -495,9 +495,7 @@ pub const Grid = struct {
 
 };
 
-// Horizontal slider: a draggable knob over a track with a filled lead. Value is carried as permille of
-// `span` (default 1000) so callers map it onto any domain — volume, seek position, brightness — without
-// overflow. App-wide: feed button-down through `press`, pointer-move through `drag`, button-up to `release`.
+// Horizontal slider in permille of span; press/drag/release for pointer interaction.
 
 pub const Slider = struct {
 

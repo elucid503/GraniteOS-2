@@ -1,6 +1,4 @@
-// Shared start-up scaffolding for the desktop GUI programs: retry the compositor lookup while it registers, and
-// open the fonts that ride in the module bundle. Every GUI app is spawned with the bundle Region at cap.gui.bundle
-// and its span in init words 3 (length) and 4 (offset), exactly as Flint hands the welcome screen its assets.
+// GUI boot helpers: retry compositor lookup at startup and open fonts from the module bundle grant.
 
 const builtin = @import("builtin");
 

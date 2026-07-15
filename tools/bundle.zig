@@ -1,5 +1,4 @@
-// Host tool `bundle <out.img> <name> <image>...`: packs the user module bundle. The Flint image is flat; all other
-// images are ELF files copied verbatim.
+// Pack user module bundle; Flint is flat, other images are verbatim ELF.
 
 const std = @import("std");
 

@@ -95,9 +95,7 @@ const Table = struct {
 
 var table: Table = .{};
 
-// Every lookup hands back a distinctly badged copy of the service endpoint, so badge-keyed servers can tell their
-// clients apart (05-server-protocol.md). Minting starts above the low badges Flint and Marble assign by hand in their
-// grant lists, so a granted session and a looked-up one never collide on the same server.
+// Lookup returns a uniquely badged endpoint copy; minted badges start above Flint/Marble grant badges.
 
 const first_minted_badge: u64 = 64;
 

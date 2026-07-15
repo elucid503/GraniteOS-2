@@ -22,8 +22,7 @@ pub const PowerMethod = enum {
 
 };
 
-// What a secondary core needs before it can run Zig; the primary fills one per core and passes its
-// physical address through `start_core` as the PSCI context argument.
+// Secondary boot context: primary fills one per core and passes its physical address through PSCI `start_core`.
 
 pub const BootRecord = extern struct {
 

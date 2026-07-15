@@ -129,8 +129,7 @@ const InputEvent = extern struct {
 
 };
 
-// Per-device DMA layout: eventq descriptors + avail, eventq used (the legacy alignment rule), statusq
-// descriptors + avail, statusq used, then the event buffers.
+// Per-device DMA: eventq and statusq rings (legacy used-page alignment), then event buffers.
 
 const page_size = 4096;
 

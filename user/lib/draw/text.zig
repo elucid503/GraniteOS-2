@@ -1,7 +1,4 @@
-// TrueType text engine (M10 GUI rewrite): parses cmap/metrics/loca/glyf, converts quadratic outlines into
-// 26.6 paths, and fills them with the analytic rasterizer. Proportional text advances in 26.6 so fractional
-// advances accumulate, and each glyph rasterizes at one of four subpixel x-phases. Monospace text snaps to
-// an integer cell grid (phase 0) so columns stay crisp. Rasterized glyphs are cached as 8-bit coverage.
+// TrueType engine: 26.6 paths, subpixel x-phases, mono grid at phase 0; glyphs cached as 8-bit coverage.
 
 const std = @import("std");
 
@@ -146,8 +143,7 @@ pub const Face = struct {
 
     }
 
-    /// Draw monospaced text on an integer cell grid. Each glyph is placed at phase 0 so vertical stems
-    /// align across columns; the pen steps by `mono_width` rather than the glyph's fractional advance.
+    /// Monospace draw on an integer cell grid at phase 0; pen steps by mono_width, not fractional advance.
     pub fn draw_mono(self: *const Face, surface: *const Surface, x: i32, y: i32, px: u32, text: []const u8, color: draw_mod.Color) void {
 
         const cell = self.mono_width(px);
@@ -367,8 +363,7 @@ pub const Face = struct {
 
     }
 
-    // Outline extraction: one contour at a time into `path`, on-curve runs as lines, off-curve points as
-    // quadratics with implied midpoints.
+    // Outline extraction: on-curve as lines, off-curve as quadratics with implied midpoints.
 
     fn build_glyph_path(self: *const Face, path: *Path, glyph: u16, origin_x: i32, origin_y: i32, px: u32, depth: u8) Error!void {
 
@@ -716,11 +711,9 @@ fn emit_contour(path: *Path, xs: []const i32, ys: []const i32, on: []const bool)
 
 }
 
-// Glyph coverage cache: keyed by (face, glyph, px, subpixel phase). Apps may load more than one face in a
-// process (UI + mono), so the face identity is mixed into the key. One render thread per process, no locks.
+// Glyph cache keyed by face, glyph, px, phase; face tag avoids Inter/mono slot collisions; single-threaded.
 
-// Sized to keep GUI ELF images under Flint's default 4 MiB child_budget (welcome/taskbar). Growing this
-// array without raising that budget makes those processes fail to spawn while larger-budget apps still work.
+// Cache size tuned to Flint's 4 MiB child_budget so welcome/taskbar still spawn.
 const cache_max_px: u32 = 32;
 const cache_box_w: u32 = 40;
 const cache_box_h: u32 = 46;
@@ -879,11 +872,7 @@ fn rasterize_into(face: *const Face, slot: usize, glyph: u16, px: u32, phase: u3
 
 }
 
-// Stem darkening for UI- and code-size glyphs. Unhinted, an upright stem often lands as a ~40%-covered
-// column split across two pixels, which reads as speckle. This lifts partial coverage toward solid without
-// moving any edge: fully-on and fully-off cells are untouched, so the glyph shape, subpixel x-phase, and
-// fractional advances are all preserved. Only midtones (the thin stems) thicken. Gated to small sizes so
-// larger display text stays undistorted; the gain is a touch higher for mono code sizes (JetBrains Mono).
+// Stem darkening lifts split-stem midtones at small sizes without moving edges or changing phase/advances.
 
 const stem_darken_max_px: u32 = 16;
 const stem_gain: u32 = 220;

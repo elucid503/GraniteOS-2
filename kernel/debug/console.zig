@@ -7,8 +7,7 @@ const data_register = 0x00; // DR: write a byte to transmit
 const flag_register = 0x18; // FR
 const transmit_fifo_full = 1 << 5; // FR.TXFF
 
-// Serializes whole prints across cores; a panicking core seizes the console instead, so a peer
-// holding the lock mid-print can never wedge the diagnostic.
+// Serialize prints across cores; panic seizes the console so a peer mid-print cannot wedge diagnostics.
 
 var lock: spinlock.SpinLock = .{};
 var panicking: bool = false;

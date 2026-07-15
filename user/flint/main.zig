@@ -23,8 +23,7 @@ const context_budget = 32 * 1024 * 1024;
 // The compositor allocates the back buffer and every window surface, so its budget scales with the display.
 const compositor_budget = 64 * 1024 * 1024;
 
-// The launcher holds one shared pool for all GUI children (see lib.budget); keep it small enough that welcome still
-// spawns on the default 256 MiB QEMU machine.
+// Launcher pool must stay small enough for welcome on a 256 MiB QEMU machine.
 const launcher_budget = lib.budget.launcher_pool;
 
 var bundle: lib.bundle.Bundle = undefined;
@@ -51,8 +50,7 @@ var block_device: ?lib.dtb.Device = null;
 var audio_device: ?lib.dtb.Device = null;
 var net_device: ?lib.dtb.Device = null;
 
-// The graphical stack is optional by hardware presence (08-roadmap.md M9): it spawns only when the DTB
-// reports a virtio-gpu transport together with virtio input.
+// GUI stack spawns only when DTB reports virtio-gpu plus virtio input.
 
 const max_input_devices = 4;
 
@@ -148,8 +146,7 @@ fn run(arg: u64) !void {
 
     }
 
-    // The filesystem server is spawned either way: without a disk it reports unavailable and exits cleanly
-    // (07-userspace-ddd.md Section 7.2), and the shell still comes up.
+    // Spawn filesystem either way; without a disk it exits cleanly and the shell still runs.
 
     try spawn_files();
 
@@ -174,8 +171,7 @@ fn run(arg: u64) !void {
 
     if (net_device != null) {
 
-        // Spawned after start_gui so the compositor is already registered: Metrics' one-shot boot lookup
-        // connects to it to broadcast the detected timezone to already-open GUI clients.
+        // After GUI start so Metrics can broadcast timezone to already-open clients.
 
         try spawn_metrics();
         try lib.stream.register_with(naming_endpoint, "metrics", metrics_endpoint);
@@ -198,20 +194,17 @@ fn start_gui() !void {
 
         }
 
-        // Flint owns the window endpoint, so it registers the name up front: clients resolve "window"
-        // immediately and their calls simply block until the compositor starts receiving.
+        // Register "window" up front so client calls block until the compositor is live.
 
         try spawn_compositor();
         try lib.stream.register_with(naming_endpoint, "window", window_endpoint);
 
-        // The launcher server backs the taskbar's app menu; register it up front too so the menu resolves it
-        // immediately. The welcome screen is the splash - clicking it hands off to the persistent taskbar desktop.
+        // Register "launch" up front for the taskbar menu; welcome is the splash before the persistent desktop.
 
         try spawn_launcher();
         try lib.stream.register_with(naming_endpoint, "launch", launcher_endpoint);
 
-        // The desktop wallpaper layer sits beneath the welcome splash so the handoff never shows bare compositor fill.
-        // Taskbar starts only after welcome exits (panels would otherwise cover the splash).
+        // Context wallpaper under welcome; taskbar starts after splash so panels do not cover it.
         try spawn_context();
         try spawn_welcome();
 
@@ -219,9 +212,7 @@ fn start_gui() !void {
 
 }
 
-// Probe each virtio-mmio transport from the DTB and sort them by device id: block (2), gpu (16), input (18).
-// The transports are 0x200-byte windows sharing pages, so probing maps the containing page and reads at the
-// in-page offset.
+// Probe DTB virtio-mmio transports; map the containing page and read device id at the in-page offset.
 
 const virtio_magic: u32 = 0x7472_6976;
 const device_id_net: u32 = 1;
@@ -752,8 +743,7 @@ fn spawn_launcher() !void {
     const init_endpoint = try sys.create(.endpoint, 0, 0);
     const report = try sys.copy(supervisor_endpoint, launcher_id);
 
-    // Layout per cap.launcher: the request endpoint in the stdio slots, then naming, its budget, startup, report, a
-    // console endpoint to pass on to GUI children, and the module bundle to load their images from.
+    // Launcher grants: endpoint slots, naming, budget, startup, report, console, and module bundle.
 
     const grants = [_]Handle{
 
@@ -996,8 +986,7 @@ fn restart(who: u64) !void {
 
         },
 
-        // The welcome splash hands off to the taskbar on exit; the taskbar is the persistent desktop, so it is
-        // relaunched if it ever dies. The rest of the apps are user-launched through the launcher.
+        // Welcome hands off to taskbar on exit; relaunch taskbar if it dies; other apps are user-launched.
 
         welcome_id => {
 

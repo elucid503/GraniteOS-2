@@ -1,5 +1,4 @@
-// PSCI (06-kernel-ddd.md Section 16.5): firmware power control drives secondary-core bring-up. The conduit
-// (hvc vs smc) comes from the DTB, so the same kernel works whether it was entered at EL1 or EL2.
+// PSCI firmware bring-up; hvc vs smc comes from the DTB so one kernel works at EL1 or EL2.
 
 const types = @import("../../types.zig");
 
@@ -22,8 +21,7 @@ pub fn start_core(method: types.PowerMethod, target_mpidr: u64, record: *const t
 
 }
 
-// One SMCCC call: function in x0, arguments in x1-x3, result back in x0. x1-x3 are bound as outputs
-// because the firmware may clobber them.
+// SMCCC call: x1-x3 are outputs because firmware may clobber them.
 
 fn call(method: types.PowerMethod, function: u64, a1: u64, a2: u64, a3: u64) i64 {
 

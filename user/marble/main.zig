@@ -172,8 +172,7 @@ fn ensure_layout() void {
 
 }
 
-// Install every bundled user program into the search path, once, so the executables are real, discoverable files.
-// Only a fresh disk pays the copy; a note prints when it happens, since writing the whole set takes a moment.
+// Install bundled programs into the search path once; only a fresh disk pays the copy cost.
 
 fn install_programs(out: *lib.stream.Stream) void {
 
@@ -449,8 +448,7 @@ fn change_directory(stage: *const Stage, out: *lib.stream.Stream) !void {
 
 fn run_pipeline(pipeline: *const Pipeline) !void {
 
-    // Resolve every stage before spawning any: a missing program aborts the whole pipeline cleanly, and no half-wired
-    // pipeline is ever left waiting on a stage that never launched.
+    // Resolve all stages before spawning so a missing program aborts cleanly with no half-wired pipeline.
 
     var resolved: [max_stages]Resolved = undefined;
     var path_storage: [max_stages][max_path]u8 = undefined;
@@ -504,8 +502,7 @@ fn run_pipeline(pipeline: *const Pipeline) !void {
 
 }
 
-// Find a command: an installed file on the search path (loaded from disk), else a module in the boot bundle. A name
-// with a slash is a path taken relative to the working directory; a bare name is looked up under the programs directory.
+// Resolve commands: slash paths relative to cwd, bare names under programs_dir, else boot bundle.
 
 fn resolve(command: []const u8, path_buffer: *[max_path]u8) ?Resolved {
 

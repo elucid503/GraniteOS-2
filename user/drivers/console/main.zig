@@ -41,8 +41,7 @@ var uart: usize = 0;
 var rx_notification: Handle = 0;
 var uart_lock: ipc.Lock = .{};
 
-// Per-client shared buffers (05-server-protocol.md): attached once, then reused by every read/write. Sessions are keyed
-// by the caller's badge — small ones granted by Flint/Marble, larger ones minted per lookup by the name service.
+// Per-client session buffers keyed by badge; attached once and reused per read/write.
 
 const max_sessions = 16;
 
@@ -322,8 +321,7 @@ fn put_text(text: []const u8) void {
 
 fn put_byte(byte: u8) void {
 
-    // PL011 TX is polled; yield while the host chardev drains - a tight spin here blocks the console
-    // server's reply and every caller waiting on stream.write (including drivers mid-startup).
+    // Yield while TX is full; spinning would block every stream.write caller.
 
     while (true) {
 

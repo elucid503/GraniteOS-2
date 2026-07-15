@@ -82,8 +82,7 @@ pub const now_ns = timer.now_ns;
 pub const arm_deadline = timer.arm_deadline;
 pub const disarm_deadline = timer.stop;
 
-// SMP (06-kernel-ddd.md Section 16.2): secondary bring-up and cross-core pokes. Cross-core TLB shootdown
-// needs no call here - the aarch64 impl broadcasts its TLB invalidates (inner-shareable) from map/unmap.
+// SMP bring-up and IPIs; cross-core TLB shootdown needs no call here because aarch64 TLBI is inner-shareable.
 
 pub const Ipi = enum {
 

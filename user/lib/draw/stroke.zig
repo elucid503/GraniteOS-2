@@ -1,6 +1,4 @@
-// Stroke geometry: turns segments, polylines, and outlined shapes into fill contours appended to a Path,
-// which the analytic raster then fills in a single pass. Overlapping caps and joins saturate rather than
-// double-blend, so joints stay seamless. Round caps and round joins throughout - the house style.
+// Stroke geometry as filled Path contours; round caps/joins with matching winding so overlaps do not cancel.
 
 const std = @import("std");
 
@@ -42,9 +40,7 @@ fn segment_body(path: *Path, x0: i32, y0: i32, x1: i32, y1: i32, half: i32) void
     const nx: i32 = @intCast(@divTrunc(-dy * half, length));
     const ny: i32 = @intCast(@divTrunc(dx * half, length));
 
-    // Wind the body the same way add_circle winds the round caps/joins. If they disagree, a single
-    // nonzero-winding fill cancels coverage where a cap overlaps its own body - which for sub-2px icon
-    // strokes is nearly the whole segment, and is what dots them out.
+    // Match add_circle winding so cap/body overlap does not cancel sub-2px icon strokes.
 
     path.move_to(x0 + nx, y0 + ny);
     path.line_to(x0 - nx, y0 - ny);
@@ -176,8 +172,7 @@ test "round caps do not cancel the stroke body" {
 
     var path = Path{};
 
-    // A horizontal stroke whose round caps overlap the body. The endpoint pixel lands inside both the body
-    // quad and the left cap disc; with mismatched winding a nonzero fill would drop it out entirely.
+    // Caps overlapping the body must stay solid under nonzero winding (endpoint sits in both).
 
     segment(&path, path_mod.from_px(4), path_mod.from_px(8), path_mod.from_px(12), path_mod.from_px(8), path_mod.from_px(4));
 
@@ -194,7 +189,7 @@ test "a continuous polyline has no interior gaps at its joins" {
 
     var path = Path{};
 
-    // A sharp elbow: the shared join disc sits over both segment bodies. The corner pixel must stay solid.
+    // Elbow join disc overlaps both bodies; the corner pixel must stay solid.
 
     const points = [_]Point{
         .{ .x = path_mod.from_px(4), .y = path_mod.from_px(6) },

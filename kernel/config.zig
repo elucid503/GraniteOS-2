@@ -2,9 +2,7 @@
 
 pub const page_size: usize = 4096;
 
-// Largest buddy block the frame allocator tracks: 2^frame_max_order pages (here 16 MiB). Regions and DMA
-// backings are physically contiguous, and M9's scanout needs width*height*4 in one run - 16 MiB covers a
-// 2560x1600 display.
+// Max buddy block order (16 MiB here) sized for contiguous DMA and 2560x1600 scanout in one allocation.
 
 pub const frame_max_order: usize = 12;
 
@@ -18,8 +16,7 @@ pub const boost_interval_ns: u64 = 1_000_000_000; // 1 second
 
 pub const max_cores: usize = 64;
 
-// Per-core frame magazine capacity (06-kernel-ddd.md Section 6.1): single-page traffic stays off the buddy lock,
-// refilling and draining in batches of half this size.
+// Per-core frame magazine: single-page traffic avoids the buddy lock, refilling/draining in half-capacity batches.
 
 pub const frame_magazine: usize = 32;
 

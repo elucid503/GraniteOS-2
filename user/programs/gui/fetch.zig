@@ -77,8 +77,7 @@ var port_storage: [port_storage_size]u8 = undefined;
 var url_buffer: ui.EditBuffer = undefined;
 var port_buffer: ui.EditBuffer = undefined;
 
-// Hidden by default: most addresses need no explicit port, so the field only takes toolbar space once the
-// user asks for it via the toggle.
+// Port field hidden until toggled; most URLs need no explicit port.
 var port_enabled = false;
 
 var focused: Focus = .url;
@@ -278,8 +277,7 @@ fn key_down(code: u16) bool {
 
 }
 
-/// Maps a click at window x `x` to a byte index in `buffer` and moves the cursor there (extending the
-/// selection when `extend` - a held Shift, or an in-progress drag). Returns whether anything changed.
+/// Map a click to a byte index in buffer; extend selection when extend is true.
 fn position_field(buffer: *ui.EditBuffer, rect: Rect, x: i32, extend: bool) bool {
 
     const inner_w = rect.w - 2 * ui.field_pad;
@@ -290,8 +288,7 @@ fn position_field(buffer: *ui.EditBuffer, rect: Rect, x: i32, extend: bool) bool
 
 }
 
-/// Continues a click-drag started in `mouse_down` as the pointer moves, extending the focused field's
-/// selection to the new x.
+/// Continue click-drag from mouse_down, extending the focused field selection.
 fn field_drag_to(x: i32) bool {
 
     return switch (focused) {
@@ -400,8 +397,7 @@ fn drag_scrollbar(y: i32) bool {
 
 // --- fetch request lifecycle ---
 
-/// Fills in a missing "scheme://" so bare shorthand like "example.com/path" parses the same as a full URL;
-/// `lib.url.parse` itself stays strict about requiring one, so this just meets the user halfway first.
+/// Prepend http:// when missing so bare hosts parse; lib.url.parse still requires a scheme.
 fn with_scheme(raw: []const u8, scratch: []u8) ?[]const u8 {
 
     if (std.mem.indexOf(u8, raw, "://") != null) return raw;
@@ -564,8 +560,7 @@ fn do_fetch() void {
 
     defer socket.close();
 
-    // The Host header carries the port too once it is not the default - otherwise a name-based virtual host
-    // behind a non-standard port would see the wrong address.
+    // Include port in Host header when non-default for name-based virtual hosts.
     var host_header_buffer: [host_storage_size + 8]u8 = undefined;
     const host_header = if (port == 80)
         host_local[0..host_len]

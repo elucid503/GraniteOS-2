@@ -8,8 +8,7 @@ const sys = @import("../syscall/sys.zig");
 const Handle = cap.Handle;
 const Error = sys.Error;
 
-// The envelope, byte-for-byte the kernel's layout (kernel/ipc/message.zig): 6 data words, 4 handle slots, a reply
-// slot, and the live slot count.
+// Message envelope matching kernel/ipc/message.zig: 6 data words, 4 handle slots, reply, handle_count.
 
 pub const HandleSlot = extern struct {
 
@@ -30,8 +29,7 @@ pub const Message = extern struct {
 
 };
 
-/// Build and `call` a request per the shared envelope (data word 0 = method, then scalar arguments, then handles).
-/// A negative status word decodes into the shared error set; the full reply is returned for its result words.
+/// Build/call a request; negative status decodes to Error, else returns the full reply.
 pub fn request(endpoint: Handle, method: u16, arguments: []const u64, handles: []const HandleSlot) Error!Message {
 
     if (arguments.len > message_argument_words) return error.Invalid;
@@ -82,9 +80,7 @@ pub fn serve(endpoint: Handle, dispatch: Dispatch) noreturn {
 
 }
 
-// Worker pools (05-server-protocol.md): N threads all `receive` on the same endpoint, so a request blocked
-// downstream does not stall other clients. Every request carries its own one-shot reply handle, so workers share no
-// per-request state; the server guards its own data structures with a `Lock`.
+// Worker pool: N threads receive on one endpoint; per-request reply handles need only a Lock around server state.
 
 const worker_stack_pages = 16;
 const page_size = 4096;
@@ -92,8 +88,7 @@ const page_size = 4096;
 var pool_endpoint: Handle = 0;
 var pool_dispatch: Dispatch = undefined;
 
-/// The pooled server loop: start `workers - 1` sibling threads on the same endpoint, then serve on this one.
-/// Worker stacks come from the standard memory-authority grant (cap.memory).
+/// Pooled server: spawn workers-1 threads on cap.memory stacks, then serve on this one.
 pub fn serve_pool(endpoint: Handle, workers: usize, dispatch: Dispatch) noreturn {
 
     pool_endpoint = endpoint;

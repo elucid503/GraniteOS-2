@@ -162,8 +162,7 @@ var disk: CachedDisk = .{};
 var volume: Volume = undefined;
 var sessions: Sessions = .{};
 
-// One coarse lock over the volume, cache, and session tables; requests serialize inside the pool but every worker
-// still shields its own caller from a crash mid-request.
+// Coarse lock over volume/cache/sessions; pool workers still isolate callers from mid-request crashes.
 
 var lock: ipc.Lock = .{};
 

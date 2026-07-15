@@ -1,10 +1,8 @@
-// Shared interface constants (07-userspace-ddd.md Section 3.4, Section 10; 05-server-protocol.md): word 0 is method in, status out; method 0 is always Identify; methods are append-only.
+// Shared interface constants: word 0 is method in/status out; method 0 is Identify; methods are append-only.
 
 pub const identify: u16 = 0;
 
-// The Stream interface (07-userspace-ddd.md Section 10.2), spoken by the console driver (and later pipes and
-// terminals). `attach` extends the table with the per-session shared buffer setup of 05-server-protocol.md:
-// the client shares one Region up front, and every read/write after that passes only offset/length into it.
+// Stream interface (console, pipes, terminals): attach shares one Region; reads/writes pass offset/length only.
 
 pub const stream = struct {
 
@@ -51,8 +49,7 @@ pub const name = struct {
 
 };
 
-// Block interface (07-userspace-ddd.md Section 10.5), spoken by the virtio-blk driver. `attach` extends the table
-// with the per-session shared buffer setup of 05-server-protocol.md; sectors then ride at offsets into it.
+// Block interface (virtio-blk): attach shares a session buffer; sector I/O uses offsets into it.
 
 pub const block = struct {
 
@@ -88,8 +85,7 @@ pub const audio = struct {
 
 };
 
-// Filesystem interface (07-userspace-ddd.md Section 10.3). Paths, file data, and result records ride in the
-// per-session shared buffer as (offset, length) pairs; `attach` (appended) shares that buffer once.
+// Filesystem interface: paths, data, and results ride in one attached session buffer as (offset, length) pairs.
 
 pub const filesystem = struct {
 
@@ -165,10 +161,7 @@ pub const filesystem = struct {
 
 };
 
-// Display interface (07-userspace-ddd.md Section 10.6), spoken by the virtio-gpu display driver. The compositor is
-// its one client: it maps the scanout Region once and pushes damage rectangles through `flush`. `attach_events`
-// extends the table so a host-side window resize (a mode change) can wake the compositor through a Notification;
-// the cursor methods expose the device's hardware cursor plane, so pointer motion never forces a recomposite.
+// Display interface (virtio-gpu): compositor maps scanout once, flushes damage; attach_events and cursor avoid full recomposites.
 
 pub const display = struct {
 
@@ -193,11 +186,7 @@ pub const display = struct {
 
 };
 
-// Window interface (07-userspace-ddd.md Section 10.7), spoken by the compositor. A client renders into the surface
-// Region `create` returns and `present`s a damage rectangle; the compositor blits visible windows into the
-// framebuffer. `attach_events` extends the table with a per-client event ring (a shared Region of
-// `events.Event` records plus a Notification), carrying input routed to the client's windows and window
-// lifecycle events; `resize` extends it so fullscreen clients can follow display mode changes.
+// Window interface (compositor): create/present surfaces; attach_events delivers input and lifecycle via an event ring.
 
 pub const window = struct {
 
@@ -261,9 +250,7 @@ pub const window = struct {
 
 };
 
-// Launcher interface (the desktop program spawner): GUI clients ask it to start a bundled program by name, so a
-// taskbar menu can launch apps without holding any spawn authority of its own. Names ride inline like the name
-// service's, in words 1-4.
+// Launcher interface: taskbar spawns bundled programs by inline name without holding spawn authority.
 
 pub const launch = struct {
 
@@ -276,10 +263,7 @@ pub const launch = struct {
 
 };
 
-// Input interface (07-userspace-ddd.md Section 10.8), spoken by the input server. Events are delivered through a
-// shared event ring plus a Notification, so the client blocks in its endpoint receive rather than polling; the
-// docs' `next_event`/`set_focus` numbers stay reserved for pull-mode clients. Pointer positions are normalized
-// to `pointer_range` on both axes; the compositor scales them to the live mode.
+// Input interface: events via shared ring + Notification; pointers normalized to pointer_range for compositor scaling.
 
 pub const input = struct {
 
@@ -296,9 +280,7 @@ pub const input = struct {
 
 };
 
-// The process-supervision (death) convention (07-userspace-ddd.md Section 10.4): a child's runtime `send`s a one-way
-// death message here on exit; the spawner (Flint) receives these to reap and restart. The sender's badge
-// identifies the child; data[1] carries its exit status.
+// Supervisor death convention: child sends one-way exit message; badge identifies child, data[1] is status.
 
 pub const supervisor = struct {
 
@@ -306,9 +288,7 @@ pub const supervisor = struct {
 
 };
 
-// virtio-net driver interface: the netstack's one client, speaking raw Ethernet frames. RX is asynchronous (frames
-// arrive unbidden into a shared frame ring the netstack owns); TX is a synchronous per-frame call into a shared
-// staging buffer, matching the block/audio drivers' bounce-buffer convention.
+// Net driver interface: async RX into a frame ring, synchronous TX via a shared staging buffer.
 
 pub const net = struct {
 
@@ -325,11 +305,7 @@ pub const net = struct {
 
 };
 
-// Socket interface (07-userspace-ddd.md Section 10.x style), spoken by the netstack server. One shared session
-// buffer per client (attach, once), then `(offset, length)` pairs into it for payloads - the filesystem/audio
-// convention. Sockets are non-blocking at the wire: a call that cannot complete immediately returns `WouldBlock`
-// (or, for `connect`, simply "accepted, in progress") and the client waits on the per-session readiness
-// Notification before retrying. `lib.net` hides this behind a blocking facade.
+// Socket interface: one attached session buffer; wire is non-blocking (WouldBlock + readiness Notification); lib.net blocks.
 
 pub const socket = struct {
 
@@ -364,10 +340,7 @@ pub const socket = struct {
 
 };
 
-// Metrics interface: machine facts derived from the outside world. v1 carries only the timezone UTC offset,
-// looked up once at boot from a public IP-geolocation API over `lib.net`; the method table is deliberately its
-// own interface (rather than folded into an existing one) so later additions - network status, a refined
-// geolocation query, and so on - have a natural home without growing an unrelated server's protocol.
+// Metrics interface: boot-time timezone lookup (v1); separate interface so later machine facts have a home.
 
 pub const metrics = struct {
 

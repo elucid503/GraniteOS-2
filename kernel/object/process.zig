@@ -17,8 +17,7 @@ var list_lock: spinlock.SpinLock = .{};
 var list_head: ?*Process = null;
 var next_pid: u32 = 1;
 
-// One pre-placed capability: the object plus the badge it should carry in the child's table, so a
-// badged endpoint survives the grant (the child cannot mint its own badge before it exists).
+// Grant carries object plus badge so badged endpoints survive spawn before the child can mint its own.
 
 pub const Grant = struct {
 
@@ -74,10 +73,7 @@ pub const Process = struct {
 
     }
 
-    /// The capability-passing replacement for fork+exec (03-syscall-abi.md spawn): build a process over a prepared
-    /// `space`, pre-load its handle table with the `grants`, then create and start its first user thread at `entry`.
-    /// `arg` reaches that thread as its first argument (the init-message pointer). Callers hand `Grant`s (object plus
-    /// badge); the syscall layer resolves the grant *handles* from the parent's table before calling in.
+    /// Capability-passing spawn: preload grants (object plus badge), then start the first user thread at `entry` with `arg`.
     pub fn spawn(space: *AddressSpace, entry: VirtAddr, user_stack: VirtAddr, grants: []const Grant, arg: u64) Error!*Process {
 
         const process = try create(space);
@@ -149,9 +145,7 @@ pub fn snapshot(out: *inspect.ProcessSnapshot) void {
 
     };
 
-    // Collect a retained snapshot of the process list under the lock, then compute per-process handle stats after
-    // releasing it: `stats`/`memory_usage` each take a process's own handle-table lock, which must never nest under
-    // the global list lock (06-kernel-ddd.md Section 15 lock order). The retain keeps each process alive across the gap.
+    // Retain processes under the list lock, then stats per process after release to avoid nesting handle-table locks.
 
     var collected: [inspect.max_processes]*Process = undefined;
     var collected_count: usize = 0;

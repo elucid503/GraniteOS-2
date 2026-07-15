@@ -1,5 +1,4 @@
-// Aggregates the host-testable pieces of the user runtime (the envelope layout, the device-tree reader, and the
-// Strata on-disk format); anything that traps stays on the target.
+// Host-testable user runtime pieces; target-only code stays off the host.
 
 test {
 

@@ -1,7 +1,4 @@
-// Analytic-coverage scanline rasterizer (the FreeType "smooth" cell algorithm, integer-only): curves are
-// flattened adaptively to 26.6 segments, each segment scatters exact signed area/cover into per-row cells, and
-// a left-to-right sweep turns the cells into an 8-bit alpha run per scanline. Coverage is exact to the
-// subpixel - no sample grids, no banding - and nonzero winding falls out of the signed accumulation.
+// Analytic-coverage rasterizer: adaptive curve flatten, per-cell area/cover sweep, exact subpixel alpha via nonzero winding.
 
 const std = @import("std");
 
@@ -48,8 +45,7 @@ pub const Raster = struct {
     cover: [max_width]i32 = [_]i32{0} ** max_width,
     alphas: [max_width]u8 = undefined,
 
-    /// Fill `path` with nonzero winding, clipped to `clip` (pixels), delivering alpha runs to
-    /// `writer.row(y, x, coverage)`. Overflowing or truncated paths draw nothing rather than draw wrong.
+    /// Fill path with nonzero winding into writer row callbacks; overflowed paths draw nothing.
     pub fn fill(self: *Raster, path: *const Path, clip: Rect, writer: anytype) void {
 
         if (path.overflowed or clip.is_empty()) return;
@@ -178,8 +174,7 @@ pub const Raster = struct {
 
         };
 
-        // Horizontal clamp: an edge outside the clip still carries its winding into the visible span, so it
-        // pins to the boundary instead of being dropped.
+        // Clamp horizontal edges to clip so out-of-view geometry still contributes winding at the boundary.
 
         edge.x0 = std.math.clamp(edge.x0, x_min, x_max);
         edge.x1 = std.math.clamp(edge.x1, x_min, x_max);
@@ -243,8 +238,7 @@ pub const Raster = struct {
 
     }
 
-    // Row sweep: keep edges sorted by top, maintain the active set, scatter each active edge's slice of the
-    // row into cells, then resolve cells to alphas.
+    // Row sweep: active edges scatter into cells, then resolve to alphas.
 
     fn sweep(self: *Raster, clip: Rect, writer: anytype) void {
 
@@ -384,8 +378,7 @@ pub const Raster = struct {
 
         if (dy == 0) return;
 
-        // Cell indices are clip-relative; a clamped column measures fractions from its own left edge so
-        // boundary-pinned geometry lands at the cell border, not inside it.
+        // Clip-relative cells so boundary-pinned edges deposit at the cell border, not inside it.
 
         const col = std.math.clamp(col_in - clip.x, 0, @as(i32, @intCast(@min(max_width, @as(usize, @intCast(clip.w))))) - 1);
 
@@ -420,14 +413,12 @@ pub const Raster = struct {
 
             const magnitude: i64 = @intCast(@abs(total));
 
-            // Linear coverage only: masks/glyphs need exact analytic alpha. Display gamma is applied
-            // in SurfaceWriter so compositing masks stay unbiased.
+            // Linear analytic alpha here; display gamma belongs in SurfaceWriter compositing.
             self.alphas[index] = @intCast(@min(255, @divTrunc(magnitude * 255, full_coverage)));
 
         }
 
-        // Everything right of the last touched cell inherits the running accumulator (the interior of a
-        // shape whose right edge lies past the clip).
+        // Tail past the last touched cell inherits the running accumulator (interior extends beyond clip).
 
         var run_end = max_col;
 
@@ -500,8 +491,7 @@ fn round_div(numerator: i64, denominator: i64) i64 {
 
 }
 
-// Shared instance and the two standard writers. Painting is single-threaded per process (one render thread),
-// so one static raster serves the whole program without locking.
+// Single shared raster: one render thread per process, no locking.
 
 pub var shared: Raster = .{};
 
@@ -579,8 +569,7 @@ const CoverageWriter = struct {
 
 };
 
-/// Rasterize `path` into an 8-bit coverage bitmap of `w`x`h` pixels whose top-left is pixel
-/// (origin_x, origin_y): the cache path for glyphs, icons, and corner masks.
+/// Rasterize path into w×h 8-bit coverage at (origin_x, origin_y) for glyph/icon/mask caches.
 pub fn fill_coverage(path: *const Path, buffer: []u8, w: u32, h: u32, origin_x: i32, origin_y: i32) void {
 
     const clip = Rect{ .x = origin_x, .y = origin_y, .w = @intCast(w), .h = @intCast(h) };

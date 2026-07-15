@@ -1,5 +1,4 @@
-// IPC lock ordering (06-kernel-ddd.md Section 15): object locks are ordered by address when two are needed, then
-// per-core runqueue locks; never the inverse. No object lock may be held across a context switch.
+// Lock pairs by address; never hold object locks across a context switch.
 
 const spinlock = @import("spinlock.zig");
 

@@ -1,7 +1,4 @@
-// MLFQ scheduler core (06-kernel-ddd.md Section 10): per-core queues, the fixed driver band, quantum accounting,
-// demotion, and the periodic boost. SMP since M8: cores join at the discovered count, fresh threads round-robin,
-// idle cores steal, and IPC hand-offs donate the caller's scheduling state until the reply. Per-core queues are
-// guarded by their own spinlock (stealers reach in); everything else per-core is touched only by its core.
+// MLFQ per-core scheduler: driver band, quanta, boost, work-stealing, and IPC donation; queue locks guard stealers.
 
 const builtin = @import("builtin");
 const std = @import("std");
@@ -62,8 +59,7 @@ pub const Core = struct {
     // The thread being switched away from; whoever runs next on this core publishes its saved context.
     outgoing: ?*Thread,
 
-    // Threads parked in a timed `sleep`, woken by this core's tick once their deadline passes. Only ever touched by
-    // this core with interrupts off (sleep on the running thread, or the tick), so it needs no lock.
+    // Deadline-sorted sleepers; touched only by this core with IRQs off, so no lock.
     sleepers: ?*Thread,
 
     online: bool,
@@ -337,8 +333,7 @@ fn next_admit_core() *Core {
 
 }
 
-/// Timer tick: charge elapsed time, demote on quantum exhaustion, periodic global boost,
-/// then return the thread that should run next (or null for idle). Pure policy - no switch.
+/// Timer policy: charge quanta, demote, boost, return next runnable (or null); no switch.
 pub fn on_tick(core: *Core, now_ns: u64) ?*Thread {
 
     wake_sleepers(core, now_ns);
@@ -409,8 +404,7 @@ fn pop_local(core: *Core) ?*Thread {
 
 }
 
-// Work-stealing: an idle core robs the MLFQ of the next online peer that has anything queued.
-// Only one runqueue lock is ever held at a time, so stealing cannot deadlock against a stealing peer.
+// Steal from the next online peer with queued work; one runqueue lock at a time avoids deadlock.
 
 fn steal_from_peers(core: *Core) ?*Thread {
 
@@ -461,10 +455,7 @@ pub fn dispatch(core: *Core, thread: *Thread, now_ns: u64) void {
 
 }
 
-/// The device-IRQ path (Stage 1.5): a driver's line fired and woke its handler onto this core, so all that is owed is
-/// the strict driver-band preemption check - not the full MLFQ tick (quantum accounting, demotion, boost, sleeper
-/// sweep) a timer tick runs. If a normal thread is running and a driver is now ready it yields to it; an idle core
-/// just picks up the newly-runnable work.
+/// Device IRQ path: only driver-band preemption, not a full MLFQ tick; idle cores pick up newly runnable drivers.
 pub fn driver_preempt() void {
 
     // Runs only from the device-IRQ path, where interrupts are already masked (like `tick`).
@@ -527,9 +518,7 @@ pub fn yield() void {
 
 }
 
-/// Syscall `sleep`: park the current thread until `now + ns`, then it returns to its syscall. Self-contained like
-/// `yield` - it stages the thread onto its core's sleeper list, which `on_tick` drains once the deadline passes.
-/// This is what lets user code wait on time (a chart ticker, a respawn backoff) without ever busy-spinning.
+/// Park until `now + ns` on this core's sleeper list; `on_tick` drains it so user code can wait without spinning.
 pub fn sleep(ns: u64) void {
 
     if (ns == 0) return yield();
@@ -554,8 +543,7 @@ pub fn sleep(ns: u64) void {
 
 }
 
-// The sleeper list is kept sorted by deadline, so expiry is an O(expired) pop from the front and the next wakeup is
-// the head - no full scan per tick (Stage 1.5). Insert is O(n) in the (small) sleeper count.
+// Deadline-sorted sleepers: expiry pops from the front; insert is O(n) in the small sleeper count.
 
 fn insert_sleeper(core: *Core, thread: *Thread) void {
 
@@ -574,8 +562,7 @@ fn insert_sleeper(core: *Core, thread: *Thread) void {
 
 }
 
-// Move every sleeper whose deadline has passed back onto the run queues. Runs at the top of `on_tick`, so a woken
-// sleeper is immediately eligible to be picked.
+// Drain expired sleepers at the top of `on_tick` so they are immediately pickable.
 
 fn wake_sleepers(core: *Core, now_ns: u64) void {
 
@@ -594,8 +581,7 @@ fn wake_sleepers(core: *Core, now_ns: u64) void {
 
 }
 
-// The soonest deadline among this core's sleepers, so an otherwise-idle core still arms a timer to wake them. The
-// list is deadline-sorted, so the head is the answer.
+// Soonest sleeper deadline (the sorted list head) for idle-core timer arming.
 
 fn earliest_sleeper(core: *Core) ?u64 {
 
@@ -605,9 +591,7 @@ fn earliest_sleeper(core: *Core) ?u64 {
 
 }
 
-/// Park the current thread; the caller set its blocked state, queued it, and called `defer_dispatch`,
-/// all under its object lock (released again before coming here). Blocking before the quantum runs out
-/// keeps the level (I/O-bound threads stay responsive).
+/// Park after caller blocked and deferred dispatch; blocking before quantum expiry keeps the MLFQ level.
 pub fn block(core: *Core, thread: *Thread) void {
 
     if (core.current != thread) return;
@@ -618,25 +602,20 @@ pub fn block(core: *Core, thread: *Thread) void {
 
 }
 
-/// Wake `thread` on the waker's core - it is cache-warm there (06-kernel-ddd.md Section 10 wakeup locality).
-/// Callers hold the wait object's lock, which serializes competing wakers.
+/// Wake on the waker's core for cache warmth; wait-object lock serializes competing wakers.
 pub fn unblock(waker: *Core, thread: *Thread) void {
 
     thread.blocked_on = null;
 
     enqueue(waker, thread);
 
-    // The waker core is mid-syscall (busy), so a freshly-woken normal thread would otherwise wait for this core's next
-    // reschedule or a peer's 5 ms idle steal-poll. Poke an idle peer to steal it now (Stage 1.5), extending the
-    // admit-time IPI pattern. Driver-band wakeups skip this: they preempt locally and are never stolen.
+    // Busy waker core: poke an idle peer to steal normal threads now; driver wakeups preempt locally instead.
 
     if (thread.scheduling.class == .normal) poke_idle_peer(waker);
 
 }
 
-// Send a reschedule IPI to one online, currently-idle peer so it wakes from wfi and steals newly-available work. The
-// current==null read is an unlocked heuristic: a false negative just defers to the peer's own idle timer, a false
-// positive wastes one spurious wakeup - neither is a correctness problem.
+// Reschedule IPI to one idle peer; unlocked current==null heuristic may spuriously wake but stays correct.
 
 fn poke_idle_peer(waker: *Core) void {
 
@@ -666,9 +645,7 @@ pub fn abort_ipc(thread: *Thread) void {
 
 }
 
-/// The IPC direct hand-off (06-kernel-ddd.md Section 9): switch straight from `from` to an already-waiting `to` on
-/// this core, no run-queue trip. The caller parked `from`, cleared `to`'s wait state, and donated `from`'s
-/// scheduling under the endpoint lock.
+/// IPC hand-off: switch `from` to waiting `to` on this core without a run-queue trip.
 pub fn hand_off(from: *Thread, to: *Thread) void {
 
     const core = current_core();
@@ -679,8 +656,7 @@ pub fn hand_off(from: *Thread, to: *Thread) void {
 
 }
 
-/// The reply-time switch straight back to the caller (06-kernel-ddd.md Section 9): the server goes ready
-/// on this core's queue and the caller resumes immediately on its donated-back state.
+/// Reply hand-back: enqueue server, resume caller immediately on restored scheduling.
 pub fn hand_back(server: *Thread, caller: *Thread) void {
 
     const saved = arch.disable_interrupts();
@@ -696,10 +672,7 @@ pub fn hand_back(server: *Thread, caller: *Thread) void {
 
 }
 
-/// Lend the caller's scheduling state to the server until the matching reply (06-kernel-ddd.md Section 10 donation):
-/// the server serves at the caller's priority and its time is accounted to the caller. Held under the endpoint lock.
-/// Donation cures priority inversion, so it only ever raises the server - a driver-class server keeps its band
-/// when a normal client calls it.
+/// Donate caller scheduling to server until reply; only raises priority, never demotes a driver-class server.
 pub fn donate(from: *Thread, to: *Thread) void {
 
     if (to.donated_scheduling != null) return;
@@ -719,8 +692,7 @@ fn outranks(a: *const SchedulingState, b: *const SchedulingState) bool {
 
 }
 
-/// Undo a donation at reply: the caller takes back the (depleted) state its request ran on, the server
-/// returns to its own.
+/// At reply, caller takes back depleted scheduling and server restores its own.
 pub fn settle_donation(server: *Thread, caller: *Thread) void {
 
     const own = server.donated_scheduling orelse return;
@@ -731,8 +703,7 @@ pub fn settle_donation(server: *Thread, caller: *Thread) void {
 
 }
 
-/// Mark a running thread's saved context as stale before it becomes poppable by another core; the switch
-/// path republishes it once the register frame is really parked (the wake-before-save handshake).
+/// Mark context stale before enqueue so stealers wait for the wake-before-save handshake.
 pub fn defer_dispatch(thread: *Thread) void {
 
     @atomicStore(bool, &thread.context_saved, false, .monotonic);
@@ -749,8 +720,7 @@ fn wait_context_saved(thread: *Thread) void {
 
 }
 
-/// Retire the running thread. Its alive reference is dropped here; if that was the last one, the object is reaped by
-/// the next thread once we are off this thread's stack (freeing a running stack in place is not safe).
+/// Drop running thread's refcount; zombie reaped after switch off its stack.
 pub fn exit_current() noreturn {
 
     _ = arch.disable_interrupts();
@@ -773,8 +743,7 @@ pub fn exit_current() noreturn {
 
 }
 
-// Free a thread that exited on this core. Safe only once we have switched onto another stack, so it runs from the
-// point a thread resumes a switch (or first reaches a trampoline), never on the exiting thread itself.
+// Reap zombie only after switching off the exited thread's stack.
 
 fn reap(core: *Core) void {
 
@@ -787,8 +756,7 @@ fn reap(core: *Core) void {
 
 }
 
-// Runs the moment anything lands on this core after a switch: publish the outgoing thread's saved context
-// (peers spinning in `wait_context_saved` may now dispatch it) and reap any exited predecessor.
+// After switch: publish outgoing context for `wait_context_saved` and reap any zombie.
 
 fn after_switch(core: *Core) void {
 
@@ -940,9 +908,7 @@ pub fn idle() noreturn {
 
 }
 
-// Whether the armed timer deadline is still pending. A voluntary reschedule that keeps the
-// same thread must leave it alone - re-arming on every yield would postpone the tick (and
-// the boost) forever under a tight yield loop.
+// Pending deadline must survive same-thread reschedules or tight yield loops would never tick/boost.
 
 const Deadline = enum {
 
@@ -951,9 +917,7 @@ const Deadline = enum {
 
 };
 
-// Re-arm the deadline as needed and switch to the chosen thread, saving into `previous`'s
-// context (or the idle context). Runs with interrupts off; a preempted thread resumes here
-// (possibly on a different core, so the post-switch bookkeeping re-reads the current core).
+// Re-arm deadline and switch with IRQs off; preempted threads resume here and re-read current core after switch.
 
 fn reschedule(core: *Core, previous: ?*Thread, next: ?*Thread, now_ns: u64, deadline: Deadline) void {
 
@@ -1008,9 +972,7 @@ fn reschedule(core: *Core, previous: ?*Thread, next: ?*Thread, now_ns: u64, dead
 
 }
 
-// Load the incoming thread's page-table root into TTBR0 when it differs from what is live. Every process root shares
-// the kernel's top-level entry, so kernel code keeps running after the switch (config.user_space_base). Host test
-// builds have no MMU and construct threads without a real process, so the activation is compiled out there.
+// Reload TTBR0 when space changes; shared kernel slot keeps EL1 mappings live; compiled out in host tests.
 
 fn activate_space(core: *Core, thread: *Thread) void {
 
@@ -1021,8 +983,7 @@ fn activate_space(core: *Core, thread: *Thread) void {
 
     if (ttbr == core.space_root) return;
 
-    // After an ASID rollover a reused ASID value could match stale entries this core still holds; a one-shot local
-    // full flush per generation clears them before adopting the incoming space (Stage 1.4).
+    // One local full flush per ASID generation before adopting a new space after rollover.
 
     const generation = arch.asid_generation();
 

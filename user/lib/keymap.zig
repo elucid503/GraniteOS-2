@@ -1,6 +1,4 @@
-// US keyboard mapping from the Linux evdev keycodes the input server forwards (events.kind_key_down/up carry
-// raw KEY_* codes) into the byte stream a text program expects. Shared by the taskbar's search box and the shell
-// terminal, so both handle Shift, Caps Lock, Ctrl, and the arrow escape sequences the same way.
+// US keyboard: evdev keycodes to bytes with shared Shift/Caps/Ctrl and arrow escape handling.
 
 const events = @import("gfx/events.zig");
 

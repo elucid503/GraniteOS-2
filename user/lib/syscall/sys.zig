@@ -92,8 +92,7 @@ pub const DmaRegion = struct {
 
 };
 
-/// A contiguous, DMA-capable buffer (06-kernel-ddd.md Section 16.3): the one syscall with a second return register,
-/// carrying the physical base the driver writes into device descriptors.
+/// DMA-capable buffer; second return register carries physical base for device descriptors.
 pub fn create_dma(length: u64, authority: Handle) Error!DmaRegion {
 
     var physical_base: u64 = 0;
@@ -140,8 +139,7 @@ pub fn yield() void {
 
 }
 
-/// Block this thread for at least `ns` nanoseconds (the kernel wakes it off the generic timer). Unlike a yield loop
-/// it consumes no CPU while waiting, so it is how periodic user work (chart tickers, backoffs) should pace itself.
+/// Sleep at least ns on the kernel timer without spinning; use for chart tickers and backoffs.
 pub fn sleep(ns: u64) void {
 
     _ = invoke(.sleep, ns, 0, 0, 0, 0);

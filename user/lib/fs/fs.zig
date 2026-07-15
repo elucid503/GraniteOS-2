@@ -1,6 +1,4 @@
-// Filesystem client (07-userspace-ddd.md Section 10.3): typed calls over the Filesystem interface with the
-// per-session shared buffer of 05-server-protocol.md. Paths ride at the front of the buffer, file data and result
-// records in the payload half; both are (offset, length) pairs into the one attached Region.
+// Filesystem client: attached session buffer; paths up front, payload half for data and result records.
 
 const std = @import("std");
 
@@ -24,9 +22,7 @@ const max_abs = 512;
 /// The largest span one read/write/list call can move through the session buffer.
 pub const payload_capacity = 64 * 1024;
 
-/// Resolve `path` against absolute `base`, collapsing "." and ".." into a canonical absolute path written to `out`.
-/// A leading "/" makes `path` absolute; otherwise it extends `base`. The filesystem server itself is path-stateless,
-/// so this is where a client's working directory (07-userspace-ddd.md Section 8) is applied.
+/// Canonicalize path against base (client-side cwd because the server is path-stateless).
 pub fn canonicalize(base: []const u8, path: []const u8, out: []u8) Error![]const u8 {
 
     if (path.len == 0) return error.Invalid;

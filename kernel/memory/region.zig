@@ -64,9 +64,7 @@ pub const Region = struct {
 
     }
 
-    /// A RAM region intended for device DMA. It owns ordinary contiguous frames, but user mappings use the
-    /// non-cacheable normal-memory attribute so descriptors, rings, and bounce buffers are visible to hardware
-    /// without cache maintenance.
+    /// A RAM region intended for device DMA.
     pub fn create_dma(length: usize) Error!*Region {
 
         const region = try create(length);

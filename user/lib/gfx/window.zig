@@ -84,8 +84,7 @@ fn teardown(entry: *Tracked) void {
 
 }
 
-/// Drop every window this process still owns at the compositor. Called from the runtime on exit so surfaces and
-/// launcher memory are reclaimed even when a program forgets to destroy a window explicitly.
+/// Destroy tracked windows on exit so surfaces and launcher memory are reclaimed if the app forgets.
 pub fn shutdown_all() void {
 
     for (&tracked) |*entry| {

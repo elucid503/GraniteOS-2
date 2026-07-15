@@ -285,9 +285,7 @@ fn app_index_for_program(program: []const u8) ?usize {
 
 }
 
-/// Merge open windows with pinned-but-not-running apps into one indicator list: every open window gets
-/// a button (its pin state resolved from the catalog match, if any), followed by any pinned app that has
-/// no window currently open for it.
+/// Merge open windows with pinned idle apps into one indicator list.
 fn rebuild_items() void {
 
     item_count = 0;
@@ -853,8 +851,7 @@ fn toggle_menu() void {
 
 }
 
-// Browse view is sized to the tallest column so hovering between categories never resizes the window;
-// only the browse/search transition (and a changing result count) moves it.
+// Browse height tracks tallest category column so hover does not resize the menu.
 fn browse_rows() usize {
 
     var rows = category_count;
@@ -1061,8 +1058,7 @@ fn paint_pin_menu_content() void {
     const window = pin_menu orelse return;
     const surface = &window.surface;
 
-    // The menu's own rounded fill leaves its true corner pixels untouched, so prime them first (matches
-    // ensure_menu()'s treatment of the launcher popup).
+    // Prime corner pixels before rounded fill; same trick as the launcher popup.
     surface.fill(ui.theme.surface);
 
     pin_menu_widget.paint(surface, &font);
@@ -1469,8 +1465,7 @@ fn search_box_rect(width: i32) Rect {
 
 }
 
-/// Where the search box's text content starts and ends, past its leading icon - shared by the paint routine
-/// and by click-to-position so the two never disagree about where the text actually sits.
+/// Search text rect past the icon; shared by paint and click-to-position.
 fn search_text_rect(width: i32) Rect {
 
     const search_rect = search_box_rect(width);

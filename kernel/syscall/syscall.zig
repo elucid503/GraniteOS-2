@@ -57,8 +57,7 @@ pub const Number = enum(u64) {
 
 };
 
-// `create` kinds, in this ABI's own numbering (03-syscall-abi.md appendix); the numbers are append-only. The gated
-// kinds carry the granting authority's handle as their last argument.
+// `create` kinds (append-only ABI numbering); gated kinds take the granting authority handle last.
 
 pub const CreateKind = enum(u64) {
 
@@ -81,8 +80,7 @@ pub var debug_last_arg1: u64 = 0;
 /// Trap entry: decode the verb in x8, run its handler, and write the signed ABI result back into x0.
 pub fn dispatch(frame: *SyscallFrame) void {
 
-    // These per-syscall stores are only read by the panic path; gate them off the hot path unless asked for
-    // (build with -Ddebug-syscall-trace).
+    // Panic-only syscall trace; gated by -Ddebug-syscall-trace to stay off the hot path.
 
     if (build_options.debug_syscall_trace) {
 
@@ -215,8 +213,7 @@ fn create_device_region(base: u64, length: u64, authority_raw: u64) Error!*Regio
 
 }
 
-// A DMA buffer is contiguous RAM whose physical base the driver must know (06-kernel-ddd.md Section 16.3): the one
-// place a syscall uses a second return register, keeping the core ABI small.
+// DMA region returns physical base in x1 — the one syscall that uses a second return register.
 
 fn create_dma_region(frame: *SyscallFrame, length: u64, authority_raw: u64) Error!*Region {
 
@@ -234,8 +231,7 @@ fn create_dma_region(frame: *SyscallFrame, length: u64, authority_raw: u64) Erro
 
 }
 
-// A worker thread for a server pool (05-server-protocol.md): it lives in the calling process, begins suspended, and
-// `start` admits it. The space handle must name the caller's own AddressSpace.
+// Server-pool worker in the caller's AddressSpace; created suspended and admitted by `start`.
 
 fn create_thread(space_raw: u64, entry: u64, stack_top: u64) Error!*Thread {
 

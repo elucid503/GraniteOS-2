@@ -1,7 +1,4 @@
-// Lazy FP/SIMD verification (Stage 1.1): spin up worker threads that each grind a bank of chaotic double-precision
-// recurrences concurrently, then check every worker reproduced the single-threaded golden result bit-for-bit. A
-// context switch that failed to save or restore a thread's vector file would perturb one of the live accumulators and
-// the logistic map's sensitivity turns that into a diverging, mismatched checksum. Usage: `neon [workers]`.
+// FP/SIMD save-restore test: workers run chaotic logistic maps and must match a single-threaded golden checksum.
 
 const std = @import("std");
 
@@ -21,8 +18,7 @@ const page_size = 4096;
 const stack_pages = 4;
 const max_workers = 16;
 
-// Enough rounds that each worker runs for several scheduler quanta, so preemption interleaves live FP state across
-// threads many times over.
+// Long enough for preemption to interleave live FP state across workers many times.
 const rounds = 400_000;
 const lanes = 8;
 
@@ -123,9 +119,7 @@ fn worker_entry() callconv(.c) noreturn {
 
 }
 
-// A bank of independent logistic maps (r = 3.9, chaotic and bounded to (0,1)) advanced in lock-step. Interleaving the
-// lanes keeps several distinct double values live in vector registers across each round, and a periodic yield forces
-// switches while they are live. The final states are folded into one integer checksum.
+// Eight logistic maps advanced in lock-step with periodic yields to keep FP state live across preemption.
 
 fn compute() u64 {
 

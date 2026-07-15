@@ -1,7 +1,4 @@
-// Badge-keyed per-client sessions for the pooled/looped servers (05-server-protocol.md). Every client reaches a
-// server on a badge the name service mints uniquely per lookup, so sessions are found by scanning rather than by
-// indexing a fixed slot. When the table fills, the least recently used slot is reclaimed — which naturally evicts the
-// sessions of clients that have already exited, since a live client refreshes its slot on every request.
+// Badge-keyed session table with LRU reclaim; live clients refresh on each request, dead ones age out.
 
 const cap = @import("../cap/cap.zig");
 const sys = @import("../syscall/sys.zig");
@@ -49,8 +46,7 @@ pub fn Sessions(comptime Extra: type, comptime capacity: usize) type {
 
         }
 
-        /// The session for `badge`, created fresh if new — reclaiming the least recently used slot when the table is
-        /// full. Any buffer the reclaimed (or re-attaching) client had mapped is released first.
+        /// Open or create a session for badge, LRU-evicting and unmapping any reclaimed buffer first.
         pub fn open(self: *Self, badge: u64) *Session {
 
             if (self.find(badge)) |existing| {

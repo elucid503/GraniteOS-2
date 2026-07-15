@@ -1,9 +1,4 @@
-// Metrics: a small headless service that derives this machine's timezone UTC offset from its public IP,
-// looked up once at boot through a free geolocation API over plain HTTP (the only scheme `lib.net`'s TCP
-// client speaks). The result is pushed straight into desktop prefs so the whole GUI picks it up immediately,
-// and kept around behind an IPC query for anything that wants it directly. A dedicated interface - rather than
-// folding this into an existing server - gives later metrics (network status, a refined location query, ...)
-// a natural home.
+// Boot-time timezone from public IP via HTTP geo lookup; saves to prefs and exposes via IPC.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -53,9 +48,7 @@ fn detect() void {
     lib.prefs.tz_offset_minutes = state.offset_minutes;
     lib.prefs.save();
 
-    // Best-effort: a window connection lets already-open GUI clients pick up the change live. If the
-    // compositor is not running (headless boot) the value is still persisted above for anything that reads
-    // prefs on its own startup, so there is nothing more to do here.
+    // Broadcast live to open GUI clients; headless boot still has prefs persisted for later readers.
 
     var connection = lib.window.Connection.connect(cap.memory) catch return;
 
@@ -111,9 +104,7 @@ fn parse_response(bytes: []const u8) !void {
 
 }
 
-/// Scans for `"key":value` and reads the run of digits (and a leading '-') right after the colon. Not a
-/// general JSON parser - just enough to pull one integer field out of a small, well-known response shape,
-/// regardless of what order the API happens to emit fields in.
+/// Minimal JSON int extractor for a known small response shape.
 fn json_int(body: []const u8, key: []const u8) ?i64 {
 
     const at = std.mem.indexOf(u8, body, key) orelse return null;

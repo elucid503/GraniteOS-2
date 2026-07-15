@@ -132,8 +132,7 @@ pub const Notification = struct {
 
     }
 
-    /// Wait: take the accumulated bits if any, otherwise park `by` on this notification and return null,
-    /// leaving the caller to block through the scheduler once the lock is dropped.
+    /// Takes the accumulated bits if any, otherwise park `by` on this notification and return null, leaving the caller to block through the scheduler once the lock is dropped.
     pub fn poll_or_block(self: *Notification, by: *Thread) ?u64 {
 
         const saved = self.lock.acquire();
