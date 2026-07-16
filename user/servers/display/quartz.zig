@@ -342,7 +342,7 @@ pub const Renderer = struct {
 
     fn output_reusable(self: *const Renderer, window: u32, content: Rect, visible: Rect) bool {
 
-        for (self.output_cache) |entry| {
+        for (&self.output_cache) |*entry| {
 
             if (!entry.valid or entry.window != window) continue;
             if (!rect_equal(entry.content, content)) continue;
@@ -367,45 +367,31 @@ pub const Renderer = struct {
 
     fn store_output_cache(self: *Renderer, window: u32, content: Rect, visible: Rect, backdrop: Rect) void {
 
-        for (&self.output_cache) |*entry| {
-
-            if (!entry.valid or entry.window != window) continue;
-
-            entry.* = .{
-
-                .valid = true,
-                .window = window,
-                .content = content,
-                .visible = visible,
-                .backdrop = backdrop,
-
-            };
-
-            return;
-
-        }
+        var available: ?*OutputCache = null;
 
         for (&self.output_cache) |*entry| {
 
-            if (entry.valid) continue;
+            if (!entry.valid) {
 
-            entry.* = .{
+                if (available == null) available = entry;
 
-                .valid = true,
-                .window = window,
-                .content = content,
-                .visible = visible,
-                .backdrop = backdrop,
+                continue;
 
-            };
+            }
 
-            return;
+            if (entry.window == window) {
+
+                available = entry;
+
+                break;
+
+            }
 
         }
 
-        const index = @as(usize, window) % self.output_cache.len;
+        const target = available orelse &self.output_cache[@as(usize, window) % self.output_cache.len];
 
-        self.output_cache[index] = .{
+        target.* = .{
 
             .valid = true,
             .window = window,
@@ -449,24 +435,32 @@ pub const Renderer = struct {
 
         const max_x = scene_rect.x + scene_rect.w - 1;
         const max_y = scene_rect.y + scene_rect.h - 1;
+        const scene_width = @as(usize, self.width);
+        const scale: usize = @intCast(frost_scale);
+        const compact_width = (scene_width + scale - 1) / scale;
         var y = rect.y;
 
         while (y < rect.y + rect.h) : (y += 1) {
 
             const source_y = clamp_axis(y * frost_scale, scene_rect.y, max_y);
             const next_y = @min(source_y + 1, max_y);
+            const source_top = @as(usize, @intCast(source_y)) * scene_width;
+            const source_bottom = @as(usize, @intCast(next_y)) * scene_width;
+            const destination_row = @as(usize, @intCast(y)) * compact_width;
             var x = rect.x;
 
             while (x < rect.x + rect.w) : (x += 1) {
 
                 const source_x = clamp_axis(x * frost_scale, scene_rect.x, max_x);
                 const next_x = @min(source_x + 1, max_x);
+                const source_index: usize = @intCast(source_x);
+                const next_index: usize = @intCast(next_x);
 
-                self.temp[self.frost_index(x, y)] = average_four(
-                    self.scene[self.pixel_index(source_x, source_y)],
-                    self.scene[self.pixel_index(next_x, source_y)],
-                    self.scene[self.pixel_index(source_x, next_y)],
-                    self.scene[self.pixel_index(next_x, next_y)],
+                self.temp[destination_row + @as(usize, @intCast(x))] = average_four(
+                    self.scene[source_top + source_index],
+                    self.scene[source_top + next_index],
+                    self.scene[source_bottom + source_index],
+                    self.scene[source_bottom + next_index],
                 );
 
             }
@@ -480,17 +474,20 @@ pub const Renderer = struct {
         const min_x = rect.x;
         const max_x = rect.x + rect.w - 1;
         const max_y = rect.y + rect.h - 1;
+        const count: u32 = @intCast(radius * 2 + 1);
+        const scale: usize = @intCast(frost_scale);
+        const width = (@as(usize, self.width) + scale - 1) / scale;
         var y = rect.y;
 
         while (y <= max_y) : (y += 1) {
 
             var sum = PixelSum{};
-            const count: u32 = @intCast(radius * 2 + 1);
             var offset = -radius;
+            const row = @as(usize, @intCast(y)) * width;
 
             while (offset <= radius) : (offset += 1) {
 
-                sum.add(source[self.frost_index(clamp_axis(min_x + offset, min_x, max_x), y)]);
+                sum.add(source[row + @as(usize, @intCast(clamp_axis(min_x + offset, min_x, max_x)))]);
 
             }
 
@@ -498,13 +495,13 @@ pub const Renderer = struct {
 
             while (x <= max_x) : (x += 1) {
 
-                destination[self.frost_index(x, y)] = sum.average_frost(count);
+                destination[row + @as(usize, @intCast(x))] = sum.average_frost(count);
 
                 const leaving_x = clamp_axis(x - radius, min_x, max_x);
                 const entering_x = clamp_axis(x + radius + 1, min_x, max_x);
 
-                sum.remove(source[self.frost_index(leaving_x, y)]);
-                sum.add(source[self.frost_index(entering_x, y)]);
+                sum.remove(source[row + @as(usize, @intCast(leaving_x))]);
+                sum.add(source[row + @as(usize, @intCast(entering_x))]);
 
             }
 
@@ -517,17 +514,22 @@ pub const Renderer = struct {
         const min_y = rect.y;
         const max_x = rect.x + rect.w - 1;
         const max_y = rect.y + rect.h - 1;
+        const count: u32 = @intCast(radius * 2 + 1);
+        const scale: usize = @intCast(frost_scale);
+        const width = (@as(usize, self.width) + scale - 1) / scale;
         var x = rect.x;
 
         while (x <= max_x) : (x += 1) {
 
             var sum = PixelSum{};
-            const count: u32 = @intCast(radius * 2 + 1);
             var offset = -radius;
+            const column: usize = @intCast(x);
 
             while (offset <= radius) : (offset += 1) {
 
-                sum.add(source[self.frost_index(x, clamp_axis(min_y + offset, min_y, max_y))]);
+                const sample_y = clamp_axis(min_y + offset, min_y, max_y);
+
+                sum.add(source[@as(usize, @intCast(sample_y)) * width + column]);
 
             }
 
@@ -535,13 +537,13 @@ pub const Renderer = struct {
 
             while (y <= max_y) : (y += 1) {
 
-                destination[self.frost_index(x, y)] = sum.average_frost(count);
+                destination[@as(usize, @intCast(y)) * width + column] = sum.average_frost(count);
 
                 const leaving_y = clamp_axis(y - radius, min_y, max_y);
                 const entering_y = clamp_axis(y + radius + 1, min_y, max_y);
 
-                sum.remove(source[self.frost_index(x, leaving_y)]);
-                sum.add(source[self.frost_index(x, entering_y)]);
+                sum.remove(source[@as(usize, @intCast(leaving_y)) * width + column]);
+                sum.add(source[@as(usize, @intCast(entering_y)) * width + column]);
 
             }
 
@@ -617,6 +619,8 @@ pub const Renderer = struct {
 
             const source_y: u32 = @intCast(y - content.y);
             const row = source_y * foreground.stride;
+            const destination_row = @as(usize, @intCast(y)) * back.stride;
+            const cache_row = @as(usize, @intCast(y)) * @as(usize, self.width);
             var x = visible.x;
 
             while (x < visible.x + visible.w) : (x += 1) {
@@ -624,8 +628,8 @@ pub const Renderer = struct {
                 const source_x: u32 = @intCast(x - content.x);
                 const source = foreground.pixels[row + source_x];
                 const opacity = draw.pixel_alpha(source);
-                const destination_index = @as(usize, @intCast(y)) * back.stride + @as(usize, @intCast(x));
-                const cache_index = self.pixel_index(x, y);
+                const destination_index = destination_row + @as(usize, @intCast(x));
+                const cache_index = cache_row + @as(usize, @intCast(x));
                 const original = back.pixels[destination_index];
                 var resolved = original;
 
@@ -679,16 +683,20 @@ pub const Renderer = struct {
         const masks = draw.round.masks_for(r);
         const bezel = header_bezel;
         const refraction = lib.quartz.safe_refraction(header_refraction, bezel);
+        const profile = HeaderProfile.init(bezel, refraction);
         var y = visible.y;
 
         while (y < visible.y + visible.h) : (y += 1) {
 
+            const displacement_y = header_vertical(content, y, &profile, joined);
+            const destination_row = @as(usize, @intCast(y)) * back.stride;
+            const cache_row = @as(usize, @intCast(y)) * @as(usize, self.width);
             var x = visible.x;
 
             while (x < visible.x + visible.w) : (x += 1) {
 
-                const destination_index = @as(usize, @intCast(y)) * back.stride + @as(usize, @intCast(x));
-                const cache_index = self.pixel_index(x, y);
+                const destination_index = destination_row + @as(usize, @intCast(x));
+                const cache_index = cache_row + @as(usize, @intCast(x));
                 const coverage = header_coverage(content, x, y, r, masks);
                 const original = back.pixels[destination_index];
 
@@ -700,7 +708,12 @@ pub const Renderer = struct {
 
                 }
 
-                const displacement = attenuate_displacement(header_displacement(content, x, y, bezel, refraction, joined), coverage);
+                const displacement = attenuate_displacement(.{
+
+                    .x = header_horizontal(content, x, &profile),
+                    .y = displacement_y,
+
+                }, coverage);
                 const ray = self.ray_from_displacement(x, y, displacement);
                 var optical = self.sample_frost(ray.x, ray.y, frost_bounds);
 
@@ -757,14 +770,19 @@ pub const Renderer = struct {
         const next_y = @min(y + 1, max_y);
         const fraction_x = fixed_fraction(x_fixed, x, min_x, max_x);
         const fraction_y = fixed_fraction(y_fixed, y, min_y, max_y);
+        const width = @as(usize, self.width);
+        const x_index: usize = @intCast(x);
+        const next_x_index: usize = @intCast(next_x);
+        const top = @as(usize, @intCast(y)) * width;
+        const bottom = @as(usize, @intCast(next_y)) * width;
 
-        if (fraction_x == 0 and fraction_y == 0) return self.scene[self.pixel_index(x, y)] & color_mask;
+        if (fraction_x == 0 and fraction_y == 0) return self.scene[top + x_index] & color_mask;
 
         return bilinear_color(
-            self.scene[self.pixel_index(x, y)],
-            self.scene[self.pixel_index(next_x, y)],
-            self.scene[self.pixel_index(x, next_y)],
-            self.scene[self.pixel_index(next_x, next_y)],
+            self.scene[top + x_index],
+            self.scene[top + next_x_index],
+            self.scene[bottom + x_index],
+            self.scene[bottom + next_x_index],
             fraction_x,
             fraction_y,
         );
@@ -785,14 +803,20 @@ pub const Renderer = struct {
         const next_y = @min(y + 1, max_y);
         const fraction_x = fixed_fraction(low_x_fixed, x, min_x, max_x);
         const fraction_y = fixed_fraction(low_y_fixed, y, min_y, max_y);
+        const scale: usize = @intCast(frost_scale);
+        const width = (@as(usize, self.width) + scale - 1) / scale;
+        const x_index: usize = @intCast(x);
+        const next_x_index: usize = @intCast(next_x);
+        const top = @as(usize, @intCast(y)) * width;
+        const bottom = @as(usize, @intCast(next_y)) * width;
 
-        if (fraction_x == 0 and fraction_y == 0) return self.temp[self.frost_index(x, y)] & color_mask;
+        if (fraction_x == 0 and fraction_y == 0) return self.temp[top + x_index] & color_mask;
 
         return bilinear_color(
-            self.temp[self.frost_index(x, y)],
-            self.temp[self.frost_index(next_x, y)],
-            self.temp[self.frost_index(x, next_y)],
-            self.temp[self.frost_index(next_x, next_y)],
+            self.temp[top + x_index],
+            self.temp[top + next_x_index],
+            self.temp[bottom + x_index],
+            self.temp[bottom + next_x_index],
             fraction_x,
             fraction_y,
         );
@@ -802,15 +826,6 @@ pub const Renderer = struct {
     inline fn pixel_index(self: *const Renderer, x: i32, y: i32) usize {
 
         return @as(usize, @intCast(y)) * @as(usize, self.width) + @as(usize, @intCast(x));
-
-    }
-
-    inline fn frost_index(self: *const Renderer, x: i32, y: i32) usize {
-
-        const scale: usize = @intCast(frost_scale);
-        const width = (@as(usize, self.width) + scale - 1) / scale;
-
-        return @as(usize, @intCast(y)) * width + @as(usize, @intCast(x));
 
     }
 
@@ -871,6 +886,40 @@ const Displacement = struct {
 
 };
 
+const HeaderProfile = struct {
+
+    bezel: i32,
+    components: [header_bezel]i32 = [_]i32{0} ** header_bezel,
+
+    fn init(bezel: i32, refraction: i32) HeaderProfile {
+
+        var result = HeaderProfile{
+
+            .bezel = bezel,
+
+        };
+        var distance: i32 = 0;
+
+        while (distance < bezel) : (distance += 1) {
+
+            result.components[@intCast(distance)] = header_profile(distance, bezel, refraction);
+
+        }
+
+        return result;
+
+    }
+
+    inline fn component(self: *const HeaderProfile, distance: i32) i32 {
+
+        if (distance < 0 or distance >= self.bezel) return 0;
+
+        return self.components[@intCast(distance)];
+
+    }
+
+};
+
 inline fn attenuate_displacement(displacement: Displacement, coverage: u8) Displacement {
 
     if (coverage == 255) return displacement;
@@ -884,20 +933,40 @@ inline fn attenuate_displacement(displacement: Displacement, coverage: u8) Displ
 
 }
 
-inline fn header_displacement(rect: Rect, x: i32, y: i32, bezel: i32, refraction: i32, joined: bool) Displacement {
+inline fn header_horizontal(rect: Rect, x: i32, profile: *const HeaderProfile) i32 {
 
     const local_x = x - rect.x;
-    const local_y = y - rect.y;
     const right = rect.w - 1 - local_x;
-    const bottom = rect.h - 1 - local_y;
-    var displacement = Displacement{};
+    var displacement: i32 = 0;
 
-    if (local_x < bezel) displacement.x -= header_profile(local_x, bezel, refraction);
-    if (right < bezel) displacement.x += header_profile(right, bezel, refraction);
-    if (local_y < bezel) displacement.y -= header_profile(local_y, bezel, refraction);
-    if (!joined and bottom < bezel) displacement.y += header_profile(bottom, bezel, refraction);
+    if (local_x < profile.bezel) displacement -= profile.component(local_x);
+    if (right < profile.bezel) displacement += profile.component(right);
 
     return displacement;
+
+}
+
+inline fn header_vertical(rect: Rect, y: i32, profile: *const HeaderProfile, joined: bool) i32 {
+
+    const local_y = y - rect.y;
+    const bottom = rect.h - 1 - local_y;
+    var displacement: i32 = 0;
+
+    if (local_y < profile.bezel) displacement -= profile.component(local_y);
+    if (!joined and bottom < profile.bezel) displacement += profile.component(bottom);
+
+    return displacement;
+
+}
+
+inline fn header_displacement(rect: Rect, x: i32, y: i32, profile: *const HeaderProfile, joined: bool) Displacement {
+
+    return .{
+
+        .x = header_horizontal(rect, x, profile),
+        .y = header_vertical(rect, y, profile, joined),
+
+    };
 
 }
 
@@ -1266,9 +1335,10 @@ test "Quartz header lens bends every edge outward" {
     const rect = Rect{ .x = 10, .y = 20, .w = 100, .h = 28 };
     const bezel = header_bezel;
     const refraction = lib.quartz.safe_refraction(header_refraction, bezel);
-    const left = header_displacement(rect, rect.x, rect.y + 14, bezel, refraction, false);
-    const right = header_displacement(rect, rect.x + rect.w - 1, rect.y + 14, bezel, refraction, false);
-    const center = header_displacement(rect, rect.x + 50, rect.y + 14, bezel, refraction, false);
+    const profile = HeaderProfile.init(bezel, refraction);
+    const left = header_displacement(rect, rect.x, rect.y + 14, &profile, false);
+    const right = header_displacement(rect, rect.x + rect.w - 1, rect.y + 14, &profile, false);
+    const center = header_displacement(rect, rect.x + 50, rect.y + 14, &profile, false);
 
     try std.testing.expect(left.x < 0);
     try std.testing.expect(right.x > 0);
@@ -1284,8 +1354,9 @@ test "Quartz joined header leaves its content seam optically flat" {
     const y = rect.y + rect.h - 1;
     const bezel = header_bezel;
     const refraction = lib.quartz.safe_refraction(header_refraction, bezel);
-    const separate = header_displacement(rect, x, y, bezel, refraction, false);
-    const joined = header_displacement(rect, x, y, bezel, refraction, true);
+    const profile = HeaderProfile.init(bezel, refraction);
+    const separate = header_displacement(rect, x, y, &profile, false);
+    const joined = header_displacement(rect, x, y, &profile, true);
 
     try std.testing.expect(separate.y > 0);
     try std.testing.expectEqual(@as(i32, 0), joined.y);

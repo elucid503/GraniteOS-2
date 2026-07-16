@@ -21,6 +21,7 @@ pub const compositor_morph_gain_den: i32 = 5;
 const bezel_width: i32 = 24;
 const control_bezel: i32 = 12;
 const control_refraction: i32 = max_fixed;
+const axis_cache_limit: i32 = bezel_width;
 const element_opacity: u8 = 72;
 const panel_border = draw.rgba(255, 255, 255, 30);
 const control_border = draw.rgba(255, 255, 255, 26);
@@ -205,8 +206,7 @@ fn clear_effect(surface: *const Surface) void {
 
 }
 
-// Convex bezel displacement for the compositor lens redraw.
-// Outward sampling compresses detail at the rim instead of magnifying it into a caustic.
+// Sample outward so strong rim displacement compresses detail instead of magnifying it into a caustic.
 fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, maximum: i32) void {
 
     const effect = surface.effect orelse return;
@@ -222,6 +222,7 @@ fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, max
     if (band == 0) return;
 
     const strength = safe_refraction(@min(maximum, max_fixed), band);
+    const axis = AxisProfile.init(band, strength);
 
     const outer = bounds;
     const inner = Rect{
@@ -240,7 +241,7 @@ fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, max
         const row = @as(usize, @intCast(y)) * surface.effect_stride;
         const local_y = y - rect.y;
         const bottom = rect.h - 1 - local_y;
-        var target_y = -axis_component(@min(local_y, bottom), band, strength);
+        var target_y = -axis.component(@min(local_y, bottom));
         const skip_inner = y >= inner.y and y < inner.y + inner.h and inner.w > 0;
         var x = outer.x;
 
@@ -268,7 +269,7 @@ fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, max
 
             const local_x = x - rect.x;
             const right = rect.w - 1 - local_x;
-            var target_x = -axis_component(@min(local_x, right), band, strength);
+            var target_x = -axis.component(@min(local_x, right));
 
             if (right < local_x) target_x = -target_x;
 
@@ -283,6 +284,50 @@ fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, max
     }
 
 }
+
+const AxisProfile = struct {
+
+    band: i32,
+    strength: i32,
+    cached: bool,
+    components: [axis_cache_limit]u8 = [_]u8{0} ** axis_cache_limit,
+
+    fn init(band: i32, strength: i32) AxisProfile {
+
+        var result = AxisProfile{
+
+            .band = band,
+            .strength = strength,
+            .cached = band <= axis_cache_limit,
+
+        };
+
+        if (result.cached) {
+
+            var distance: i32 = 0;
+
+            while (distance < band) : (distance += 1) {
+
+                result.components[@intCast(distance)] = @intCast(axis_component(distance, band, strength));
+
+            }
+
+        }
+
+        return result;
+
+    }
+
+    inline fn component(self: *const AxisProfile, distance: i32) i32 {
+
+        if (distance < 0 or distance >= self.band) return 0;
+        if (!self.cached) return axis_component(distance, self.band, self.strength);
+
+        return self.components[@intCast(distance)];
+
+    }
+
+};
 
 inline fn axis_component(distance: i32, bezel: i32, strength: i32) i32 {
 
