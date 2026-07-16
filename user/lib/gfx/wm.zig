@@ -151,6 +151,19 @@ pub fn move_window(connection: *window.Connection, id: u64, x: i32, y: i32) Erro
 
 }
 
+/// Place a transient surface at content-local coordinates of another window owned by this client.
+pub fn place_relative(connection: *window.Connection, id: u64, anchor: u64, x: i32, y: i32) Error!void {
+
+    _ = try ipc.request(connection.endpoint, proto.window.place_relative, &.{
+
+        id,
+        anchor,
+        window.pack_pair(@intCast(@max(0, x)), @intCast(@max(0, y))),
+
+    }, &.{});
+
+}
+
 pub fn minimize(connection: *window.Connection, id: u64) Error!void {
 
     _ = try ipc.request(connection.endpoint, proto.window.minimize, &.{id}, &.{});

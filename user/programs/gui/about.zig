@@ -6,6 +6,9 @@ const lib = @import("lib");
 
 const cap = lib.cap;
 const events = lib.events;
+const gfx = lib.gfx;
+const proto = lib.proto;
+const quartz = lib.quartz;
 const sys = lib.sys;
 const sysinfo = lib.sysinfo;
 const ui = lib.ui;
@@ -20,6 +23,7 @@ const pad: i32 = 20;
 const key_w: i32 = 56;
 const cell_w: i32 = 190;
 const uptime_tick_ms = 1000;
+const uptime_id: u32 = 1;
 
 const worker_stack_pages = 8;
 const page_size = 4096;
@@ -68,7 +72,7 @@ fn run() !void {
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
-    window = try connection.create_window(440, 320, 0, "About GraniteOS 2");
+    window = try connection.create_window(440, 320, proto.window.flag_quartz, "About GraniteOS 2");
 
     if (lib.fs.Client.connect(cap.memory)) |opened| {
 
@@ -76,12 +80,12 @@ fn run() !void {
 
     } else |_| {}
 
-    paint();
+    paint(true);
     try start_worker();
 
     while (true) {
 
-        var dirty = false;
+        var repaint_all = false;
 
         while (connection.poll_event()) |event| {
 
@@ -98,14 +102,14 @@ fn run() !void {
                 events.kind_window_resize => {
 
                     window.resize(@intCast(event.x), @intCast(event.y)) catch {};
-                    dirty = true;
+                    repaint_all = true;
 
                 },
 
                 events.kind_prefs_changed => {
 
                     _ = lib.prefs.apply_event(event);
-                    dirty = true;
+                    repaint_all = true;
 
                 },
 
@@ -117,9 +121,9 @@ fn run() !void {
 
         }
 
-        if (@atomicRmw(u32, &tick, .Xchg, 0, .acquire) != 0) dirty = true;
+        const update_uptime = @atomicRmw(u32, &tick, .Xchg, 0, .acquire) != 0;
 
-        if (dirty) paint();
+        if (repaint_all or update_uptime) paint(repaint_all);
 
         if (connection.poll_event() != null or @atomicLoad(u32, &tick, .acquire) != 0) continue;
 
@@ -129,7 +133,7 @@ fn run() !void {
 
 }
 
-fn paint() void {
+fn paint(repaint_all: bool) void {
 
     const surface = &window.surface;
     const width: i32 = @intCast(surface.width);
@@ -158,7 +162,6 @@ fn paint() void {
         .height = .{ .px = height },
         .padding = ui.Edge.all(pad),
         .gap = 14,
-        .background = ui.theme.window_bg,
 
     });
 
@@ -240,27 +243,72 @@ fn paint() void {
 
         });
 
-        info_cell(row, fields[index].key, fields[index].value);
+        info_cell(row, fields[index].key, fields[index].value, if (index == 5) uptime_id else 0);
 
         if (index + 1 < fields.len) {
 
-            info_cell(row, fields[index + 1].key, fields[index + 1].value);
+            info_cell(row, fields[index + 1].key, fields[index + 1].value, if (index + 1 == 5) uptime_id else 0);
 
         }
 
     }
 
     page.end();
-    page.paint(surface);
 
-    window.present_all() catch {};
+    if (repaint_all) {
+
+        page.mark_all_dirty();
+
+    } else if (page.rect_of(uptime_id)) |rect| {
+
+        page.mark_dirty(rect);
+
+    }
+
+    const damage = page.damage.intersect(surface.bounds());
+
+    if (damage.is_empty()) return;
+
+    const clipped = surface.clipped(damage);
+
+    paint_background(&clipped);
+    page.present_dirty(&window) catch {};
 
 }
 
-fn info_cell(parent: i16, key: []const u8, value: []const u8) void {
+fn paint_background(surface: *const gfx.Surface) void {
+
+    quartz.clear(surface);
+
+    if (lib.prefs.quartz_level == .off) {
+
+        surface.fill(ui.theme.window_bg);
+
+        return;
+
+    }
+
+    var appearance = quartz.style(switch (lib.prefs.quartz_level) {
+
+        .off => unreachable,
+        .light => .clear,
+        .medium => .regular,
+        .dark => .prominent,
+
+    }, ui.theme.window_bg, ui.theme.accent);
+
+    appearance.radius = 0;
+    appearance.shadow = lib.draw.transparent;
+
+    quartz.panel_joined_top(surface, surface.bounds(), appearance);
+
+}
+
+fn info_cell(parent: i16, key: []const u8, value: []const u8, id: u32) void {
 
     const cell = page.box(parent, .{
 
+        .id = id,
         .direction = .row,
         .width = .{ .px = cell_w },
         .gap = 8,

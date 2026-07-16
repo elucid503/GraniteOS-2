@@ -477,6 +477,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.window.set_cursor => set_client_cursor(in.data[1]),
         proto.window.activate_title => activate_title(in),
         proto.window.close_title => close_title(in),
+        proto.window.place_relative => place_relative(badge, in),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
 
@@ -786,6 +787,29 @@ fn move_window(badge: u64, in: *const Message) i64 {
     const before = window.frame();
 
     if (manager.move(window.id, x, y) != null) {
+
+        add_movement_damage(window, before, window.frame());
+        publish_list();
+
+    }
+
+    return 0;
+
+}
+
+fn place_relative(badge: u64, in: *const Message) i64 {
+
+    const window = owned_window(badge, in.data[1]) orelse return -7;
+    const anchor = owned_window(badge, in.data[2]) orelse return -7;
+
+    if (window.is_panel() or window.id == anchor.id) return -7;
+
+    const local_x: i32 = @intCast(@as(u32, @truncate(in.data[3] >> 32)));
+    const local_y: i32 = @intCast(@as(u32, @truncate(in.data[3])));
+    const content = anchor.content();
+    const before = window.frame();
+
+    if (manager.move(window.id, content.x + local_x, content.y + local_y) != null) {
 
         add_movement_damage(window, before, window.frame());
         publish_list();
@@ -1566,6 +1590,7 @@ fn quartz_halo_above(rect: Rect, source: ?*const Window) i32 {
     var affected = rect;
     var layers: i32 = 0;
     var halo: i32 = 0;
+    const density: u8 = @intFromEnum(lib.prefs.quartz_level);
 
     index = first;
 
@@ -1577,8 +1602,8 @@ fn quartz_halo_above(rect: Rect, source: ?*const Window) i32 {
 
         var layer_halo: i32 = 0;
 
-        if (window.flags & proto.window.flag_quartz != 0 and !window.content().intersect(affected).is_empty()) layer_halo = quartz_effect.damage_halo;
-        if (window.decorated() and !window.title_bar().intersect(affected).is_empty()) layer_halo = @max(layer_halo, quartz_effect.header_damage_halo);
+        if (window.flags & proto.window.flag_quartz != 0 and !window.content().intersect(affected).is_empty()) layer_halo = quartz_effect.damage_halo(density);
+        if (window.decorated() and !window.title_bar().intersect(affected).is_empty()) layer_halo = @max(layer_halo, quartz_effect.header_damage_halo(density));
 
         if (layer_halo == 0) continue;
 
@@ -1616,6 +1641,7 @@ fn composite() !void {
     const pending = damage;
     damage.clear();
 
+    quartz_renderer.set_density(@intFromEnum(lib.prefs.quartz_level));
     quartz_renderer.set_cursor(pointer_x, pointer_y, lib.prefs.quartz_level != .off);
 
     // Client pixels may have been written in other processes; publish once before reading any surface.
@@ -1727,7 +1753,9 @@ fn draw_window(window: *Window, clip: Rect) void {
 
         };
 
-        if (!quartz_renderer.composite_header(&back, window.title_bar(), clip, window.id, tint, opacity, render.corner_radius)) {
+        const joined = window.flags & proto.window.flag_quartz != 0;
+
+        if (!quartz_renderer.composite_header(&back, window.title_bar(), clip, window.id, tint, opacity, render.corner_radius, joined)) {
 
             render.draw_title_bar(&view, window, focused, colors, face);
 

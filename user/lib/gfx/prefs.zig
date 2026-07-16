@@ -293,6 +293,7 @@ pub fn apply_theme(id: ThemeId) void {
 pub fn refresh_if_changed() bool {
 
     var client = fs.Client.connect(cap.memory) catch return false;
+    defer client.close();
 
     const file = client.open_path(config_path, 0) catch return false;
     defer client.close_file(file) catch {};
@@ -315,6 +316,7 @@ pub fn refresh_if_changed() bool {
 pub fn force_reload() bool {
 
     var client = fs.Client.connect(cap.memory) catch return false;
+    defer client.close();
 
     const file = client.open_path(config_path, 0) catch return false;
     defer client.close_file(file) catch {};
@@ -339,6 +341,7 @@ pub fn refresh() void {
 pub fn save() void {
 
     var client = fs.Client.connect(cap.memory) catch return;
+    defer client.close();
 
     var buffer: [160]u8 = undefined;
     const stamp = loaded_generation +% 1;
@@ -424,6 +427,7 @@ pub fn apply_event(event: events.Event) bool {
 pub fn write_open_path(path: []const u8) void {
 
     var client = fs.Client.connect(cap.memory) catch return;
+    defer client.close();
 
     _ = client.delete(open_path_file) catch {};
     _ = client.create(open_path_file, @import("../ipc/proto.zig").filesystem.kind_file) catch return;
@@ -438,6 +442,7 @@ pub fn write_open_path(path: []const u8) void {
 pub fn take_open_path(out: []u8) ?[]const u8 {
 
     var client = fs.Client.connect(cap.memory) catch return null;
+    defer client.close();
 
     const file = client.open_path(open_path_file, 0) catch return null;
     defer client.close_file(file) catch {};
@@ -469,6 +474,7 @@ pub const DesktopPin = struct {
 pub fn load_desktop_pins(out: []DesktopPin) usize {
 
     var client = fs.Client.connect(cap.memory) catch return 0;
+    defer client.close();
 
     const file = client.open_path(desktop_pins_path, 0) catch return 0;
     defer client.close_file(file) catch {};
@@ -561,6 +567,7 @@ pub fn remove_desktop_pin(path: []const u8) bool {
 fn save_desktop_pins(pins: []const DesktopPin) bool {
 
     var client = fs.Client.connect(cap.memory) catch return false;
+    defer client.close();
 
     var buffer: [max_desktop_pins * (max_pin_path + 1)]u8 = undefined;
     var length: usize = 0;
@@ -605,6 +612,7 @@ pub const TaskbarPin = struct {
 pub fn load_taskbar_pins(out: []TaskbarPin) usize {
 
     var client = fs.Client.connect(cap.memory) catch return 0;
+    defer client.close();
 
     const file = client.open_path(taskbar_pins_path, 0) catch return 0;
     defer client.close_file(file) catch {};
@@ -660,6 +668,7 @@ pub fn is_taskbar_pinned(program: []const u8) bool {
 pub fn save_taskbar_pins(pins: []const TaskbarPin) bool {
 
     var client = fs.Client.connect(cap.memory) catch return false;
+    defer client.close();
 
     var buffer: [max_taskbar_pins * (max_pin_program + 1)]u8 = undefined;
     var length: usize = 0;
@@ -677,10 +686,8 @@ pub fn save_taskbar_pins(pins: []const TaskbarPin) bool {
 
     }
 
-    _ = client.delete(taskbar_pins_path) catch {};
-    client.create(taskbar_pins_path, proto.filesystem.kind_file) catch return false;
-
-    const file = client.open_path(taskbar_pins_path, 0) catch return false;
+    const flags = proto.filesystem.open_create | proto.filesystem.open_truncate;
+    const file = client.open_path(taskbar_pins_path, flags) catch return false;
     defer client.close_file(file) catch {};
 
     return (client.write(file, 0, buffer[0..length]) catch 0) == length;

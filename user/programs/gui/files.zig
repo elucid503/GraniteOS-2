@@ -8,6 +8,7 @@ const cap = lib.cap;
 const events = lib.events;
 const gfx = lib.gfx;
 const proto = lib.proto;
+const quartz = lib.quartz;
 const ui = lib.ui;
 
 const Rect = gfx.Rect;
@@ -39,6 +40,7 @@ var font: lib.draw.text.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
+var menu_window: ?lib.window.Window = null;
 
 var client: ?lib.fs.Client = null;
 
@@ -94,6 +96,7 @@ const menu_separator_h: i32 = 9;
 const menu_w: i32 = 200;
 const menu_inset: i32 = 4;
 const menu_label_pad: i32 = 12;
+const menu_blur_guard_ms: u64 = 100;
 
 const details_w: i32 = 340;
 const details_h: i32 = 240;
@@ -116,6 +119,7 @@ var menu_x: i32 = 0;
 var menu_y: i32 = 0;
 var menu_hover: ?usize = null;
 var menu_target: ?usize = null;
+var menu_opened_ms: u64 = 0;
 
 var details_open = false;
 var details_writable = true;
@@ -205,9 +209,35 @@ fn run() !void {
 fn dispatch_batch(batch: []const events.Event) bool {
 
     var last_move: ?events.Event = null;
+    var last_menu_move: ?events.Event = null;
     var scroll_delta: i64 = 0;
 
     for (batch) |event| {
+
+        if (lib.prefs.apply_event(event)) {
+
+            paint();
+            paint_menu_window();
+
+            continue;
+
+        }
+
+        if (event.window == menu_window_id() and event.window != 0) {
+
+            if (event.kind == events.kind_pointer_move) {
+
+                last_menu_move = event;
+
+            } else {
+
+                handle_menu_event(event);
+
+            }
+
+            continue;
+
+        }
 
         switch (event.kind) {
 
@@ -240,13 +270,6 @@ fn dispatch_batch(batch: []const events.Event) bool {
 
             events.kind_window_blur => cancel_press(),
 
-            events.kind_prefs_changed => {
-
-                _ = lib.prefs.apply_event(event);
-                paint();
-
-            },
-
             events.kind_scroll => {
 
                 if (!menu_open and !details_open and !prompt_open and !drag_active) scroll_delta += event.value;
@@ -264,8 +287,90 @@ fn dispatch_batch(batch: []const events.Event) bool {
     if (scroll_delta != 0) wheel(scroll_delta);
 
     if (last_move) |event| handle_pointer_move(event);
+    if (last_menu_move) |event| handle_menu_pointer_move(event);
 
     return false;
+
+}
+
+fn menu_window_id() u64 {
+
+    return if (menu_window) |popup| popup.id else 0;
+
+}
+
+fn handle_menu_event(event: events.Event) void {
+
+    switch (event.kind) {
+
+        events.kind_button_down => {
+
+            if (event.code != events.button_left) {
+
+                close_menu();
+
+                return;
+
+            }
+
+            const hit = menu_hit(event.x, event.y) orelse {
+
+                close_menu();
+
+                return;
+
+            };
+            const action = menu_action(hit) orelse {
+
+                close_menu();
+
+                return;
+
+            };
+            const target = menu_target;
+
+            close_menu();
+
+            if (target) |index| run_menu_action(action, index);
+
+        },
+
+        events.kind_key_down => {
+
+            if (keyboard.modifier(events.kind_key_down, event.code)) return;
+
+            var buffer: [3]u8 = undefined;
+            const bytes = keyboard.bytes(event.code, &buffer);
+
+            if (bytes.len == 1 and bytes[0] == 0x1b) close_menu();
+
+        },
+
+        events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+        events.kind_window_blur => {
+
+            if (lib.time.now_ms() - menu_opened_ms >= menu_blur_guard_ms) close_menu();
+
+        },
+
+        else => {},
+
+    }
+
+}
+
+fn handle_menu_pointer_move(event: events.Event) void {
+
+    if (!menu_open) return;
+
+    const hit = menu_hit(event.x, event.y);
+
+    lib.cursor.set(&connection, if (hit != null) .clicker else .pointer);
+
+    if (hit == menu_hover) return;
+
+    menu_hover = hit;
+    paint_menu_window();
 
 }
 
@@ -627,23 +732,49 @@ fn entry_index_at(x: i32, y: i32) ?usize {
 fn open_context(x: i32, y: i32) void {
 
     const index = entry_index_at(x, y) orelse return;
+    const menu_h = menu_content_height() + menu_inset * 2;
+    const width: i32 = @intCast(window.surface.width);
+    const height: i32 = @intCast(window.surface.height);
+    var placement_x = x;
+    var placement_y = y;
 
     selected = index;
     menu_target = index;
-    menu_x = x;
-    menu_y = y;
     menu_hover = null;
     menu_open = true;
+    menu_opened_ms = lib.time.now_ms();
 
-    // Keep the menu on-screen.
-    const width: i32 = @intCast(window.surface.width);
-    const height: i32 = @intCast(window.surface.height);
-    const menu_h = menu_content_height() + menu_inset * 2;
+    if (placement_x + menu_w > width) placement_x = @max(0, width - menu_w);
+    if (placement_y + menu_h > height) placement_y = @max(0, height - menu_h);
 
-    if (menu_x + menu_w > width) menu_x = @max(0, width - menu_w);
-    if (menu_y + menu_h > height) menu_y = @max(0, height - menu_h);
+    ensure_menu_window() catch {
 
+        menu_open = false;
+        menu_target = null;
+
+        return;
+
+    };
+
+    const popup = menu_window orelse return;
+
+    lib.wm.place_relative(&connection, popup.id, window.id, placement_x, placement_y) catch {
+
+        menu_open = false;
+        menu_target = null;
+
+        return;
+
+    };
+
+    menu_x = 0;
+    menu_y = 0;
     paint();
+    paint_menu_content();
+
+    gfx.fence();
+    lib.wm.restore(&connection, popup.id) catch {};
+    popup.present_all() catch {};
 
 }
 
@@ -654,7 +785,33 @@ fn close_menu() void {
     menu_open = false;
     menu_hover = null;
     menu_target = null;
+
+    if (menu_window) |popup| lib.wm.minimize(&connection, popup.id) catch {};
+
     paint();
+
+}
+
+fn ensure_menu_window() !void {
+
+    const width: u32 = @intCast(menu_w);
+    const height: u32 = @intCast(menu_content_height() + menu_inset * 2);
+
+    if (menu_window) |*popup| {
+
+        if (popup.surface.width == width and popup.surface.height == height) return;
+
+        try popup.resize(width, height);
+
+        return;
+
+    }
+
+    const popup = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_quartz, "files-menu");
+
+    try lib.wm.minimize(&connection, popup.id);
+
+    menu_window = popup;
 
 }
 
@@ -1494,7 +1651,6 @@ fn paint() void {
 
     if (drag_active) paint_drag_indicator(surface);
 
-    if (menu_open) paint_menu(surface);
     if (details_open) paint_details_modal(surface);
     if (prompt_open) paint_prompt(surface);
 
@@ -1821,6 +1977,25 @@ fn paint_side_panel(surface: *const gfx.Surface, width: i32, height: i32) void {
 
 }
 
+fn paint_menu_window() void {
+
+    if (!menu_open) return;
+
+    const popup = menu_window orelse return;
+
+    paint_menu_content();
+    popup.present_all() catch {};
+
+}
+
+fn paint_menu_content() void {
+
+    const popup = menu_window orelse return;
+
+    paint_menu(&popup.surface);
+
+}
+
 fn paint_menu(surface: *const gfx.Surface) void {
 
     const bounds = Rect{
@@ -1832,8 +2007,29 @@ fn paint_menu(surface: *const gfx.Surface) void {
 
     };
 
-    ui.fill_round_rect(surface, bounds, 6, ui.theme.surface);
-    ui.stroke_round_rect(surface, bounds, 6, 1, ui.theme.border);
+    quartz.clear(surface);
+
+    if (lib.prefs.quartz_level == .off) {
+
+        lib.draw.round.fill_round_rect(surface, bounds, 6, ui.theme.surface);
+        ui.stroke_round_rect(surface, bounds, 6, 1, ui.theme.border);
+
+    } else {
+
+        var appearance = quartz.style(switch (lib.prefs.quartz_level) {
+
+            .off => unreachable,
+            .light => .clear,
+            .medium => .regular,
+            .dark => .prominent,
+
+        }, ui.theme.surface, ui.theme.accent);
+
+        appearance.radius = 6;
+
+        quartz.panel(surface, bounds, appearance);
+
+    }
 
     var cursor_y = menu_y + menu_inset;
 

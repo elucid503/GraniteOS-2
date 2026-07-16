@@ -9,12 +9,18 @@ const Surface = draw.Surface;
 // Displacement is signed i8 in 1/16-pixel units.
 const fixed_one: i32 = 16;
 const max_fixed: i32 = 127;
-const curve_table = make_curve_table();
+const profile_slope_num: i32 = 11;
+const profile_slope_den: i32 = 10;
+const fold_margin_num: i32 = 15;
+const fold_margin_den: i32 = 16;
+
+pub const compositor_morph_gain_num: i32 = 13;
+pub const compositor_morph_gain_den: i32 = 5;
 
 // Wide convex bezel → background edges visibly wrap around the glass rim.
-const bezel_width: i32 = 20;
-const control_bezel: i32 = 14;
-const control_refraction: i32 = 7 * fixed_one;
+const bezel_width: i32 = 24;
+const control_bezel: i32 = 12;
+const control_refraction: i32 = max_fixed;
 const element_opacity: u8 = 72;
 const panel_border = draw.rgba(255, 255, 255, 30);
 const control_border = draw.rgba(255, 255, 255, 26);
@@ -61,7 +67,7 @@ pub fn style(kind: Kind, tint: Color, accent: Color) Style {
 
         .radius = 24,
         .bezel = bezel_width,
-        // Density controls darkness only; every Quartz container bends the backdrop identically.
+        // Density leaves optical strength stable while the compositor varies frost and tint.
         .refraction = max_fixed,
 
         .fill = draw.with_alpha(tint, material_opacity(kind)),
@@ -104,6 +110,19 @@ pub fn panel(surface: *const Surface, rect: Rect, appearance: Style) void {
 
 }
 
+/// Draws a panel whose material continues through its top boundary.
+pub fn panel_joined_top(surface: *const Surface, rect: Rect, appearance: Style) void {
+
+    const overlap = @max(0, appearance.bezel);
+    var joined = rect;
+
+    joined.y -= overlap;
+    joined.h += overlap;
+
+    panel(surface, joined, appearance);
+
+}
+
 pub fn control(surface: *const Surface, rect: Rect, appearance: Style, hovered: bool) void {
 
     const fill = if (hovered) appearance.control_hover else appearance.control;
@@ -143,6 +162,9 @@ pub fn fill_element(surface: *const Surface, rect: Rect, radius: i32, tint: Colo
 fn soft_shadow(surface: *const Surface, rect: Rect, appearance: Style) void {
 
     const strength = draw.pixel_alpha(appearance.shadow);
+
+    if (strength == 0) return;
+
     const falloff = [_]u8{ 3, 7, 14, 24, 36 };
     var spread: i32 = @intCast(falloff.len);
 
@@ -184,7 +206,7 @@ fn clear_effect(surface: *const Surface) void {
 }
 
 // Convex bezel displacement for the compositor lens redraw.
-// Direction is inward along the surface normal (magnifying lens sample).
+// Outward sampling compresses detail at the rim instead of magnifying it into a caustic.
 fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, maximum: i32) void {
 
     const effect = surface.effect orelse return;
@@ -194,8 +216,12 @@ fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, max
 
     const r = draw.round.clamp_radius(rect, radius);
     const masks = draw.round.masks_for(r);
-    const strength = @min(maximum, max_fixed);
-    const band = @min(bezel, @divTrunc(@min(rect.w, rect.h), 2));
+    const half = @divTrunc(@min(rect.w, rect.h), 2);
+    const band = @min(bezel, @max(0, half - 1));
+
+    if (band == 0) return;
+
+    const strength = safe_refraction(@min(maximum, max_fixed), band);
 
     const outer = bounds;
     const inner = Rect{
@@ -212,8 +238,13 @@ fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, max
     while (y < outer.y + outer.h) : (y += 1) {
 
         const row = @as(usize, @intCast(y)) * surface.effect_stride;
+        const local_y = y - rect.y;
+        const bottom = rect.h - 1 - local_y;
+        var target_y = -axis_component(@min(local_y, bottom), band, strength);
         const skip_inner = y >= inner.y and y < inner.y + inner.h and inner.w > 0;
         var x = outer.x;
+
+        if (bottom < local_y) target_y = -target_y;
 
         while (x < outer.x + outer.w) {
 
@@ -235,20 +266,12 @@ fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, max
 
             }
 
-            const sample = edge_sample(rect, r, band, x, y);
+            const local_x = x - rect.x;
+            const right = rect.w - 1 - local_x;
+            var target_x = -axis_component(@min(local_x, right), band, strength);
 
-            if (sample.dist >= band) {
+            if (right < local_x) target_x = -target_x;
 
-                x += 1;
-
-                continue;
-
-            }
-
-            const profile = circular_profile(band - sample.dist, band);
-            const magnitude = @divTrunc(@as(i32, profile) * strength + 127, 255);
-            const target_x = @divTrunc(-sample.nx * magnitude, 256);
-            const target_y = @divTrunc(-sample.ny * magnitude, 256);
             const index = row + @as(usize, @intCast(x)) * 2;
 
             effect[index] = encode_component(blend_component(decode_component(effect[index]), target_x, coverage));
@@ -261,149 +284,46 @@ fn bezel_field(surface: *const Surface, rect: Rect, radius: i32, bezel: i32, max
 
 }
 
-const EdgeSample = struct {
+inline fn axis_component(distance: i32, bezel: i32, strength: i32) i32 {
 
-    dist: i32,
-    nx: i32,
-    ny: i32,
+    if (distance < 0 or distance >= bezel) return 0;
 
-};
+    const bezel_fixed = bezel * fixed_one;
+    const distance_fixed = distance * fixed_one + fixed_one / 2;
+    const profile = lens_profile(bezel_fixed - distance_fixed, bezel_fixed);
 
-fn edge_sample(rect: Rect, radius: i32, bezel: i32, x: i32, y: i32) EdgeSample {
-
-    const local_x = x - rect.x;
-    const local_y = y - rect.y;
-    const r = @max(radius, 1);
-    const max_x = rect.w - 1;
-    const max_y = rect.h - 1;
-
-    if (local_x >= bezel and local_x <= max_x - bezel and local_y >= bezel and local_y <= max_y - bezel) {
-
-        return .{ .dist = bezel, .nx = 0, .ny = 0 };
-
-    }
-
-    const in_left = local_x < r;
-    const in_right = local_x > max_x - r;
-    const in_top = local_y < r;
-    const in_bottom = local_y > max_y - r;
-
-    if ((in_left or in_right) and (in_top or in_bottom)) {
-
-        const cx: i32 = if (in_left) r else max_x - r;
-        const cy: i32 = if (in_top) r else max_y - r;
-        const dx = local_x - cx;
-        const dy = local_y - cy;
-        const approx = approx_length(dx, dy);
-        const dist = r - approx;
-
-        if (approx == 0) {
-
-            const nx: i32 = if (in_left) -256 else 256;
-            const ny: i32 = if (in_top) -256 else 256;
-
-            return .{ .dist = @max(0, dist), .nx = nx, .ny = ny };
-
-        }
-
-        return .{
-
-            .dist = @max(0, dist),
-            .nx = @divTrunc(dx * 256, approx),
-            .ny = @divTrunc(dy * 256, approx),
-
-        };
-
-    }
-
-    const left = local_x;
-    const right = max_x - local_x;
-    const top = local_y;
-    const bottom = max_y - local_y;
-
-    if (left <= right and left <= top and left <= bottom) {
-
-        return .{ .dist = left, .nx = -256, .ny = 0 };
-
-    }
-
-    if (right <= top and right <= bottom) {
-
-        return .{ .dist = right, .nx = 256, .ny = 0 };
-
-    }
-
-    if (top <= bottom) {
-
-        return .{ .dist = top, .nx = 0, .ny = -256 };
-
-    }
-
-    return .{ .dist = bottom, .nx = 0, .ny = 256 };
+    return @divTrunc(@as(i32, profile) * strength + 127, 255);
 
 }
 
-// Convex bezel: circular lens curve with linear lift so mid-band still morphs.
-fn circular_profile(from_edge: i32, bezel: i32) u8 {
+/// Caps ray travel to the span that can carry it without reversing the backdrop mapping.
+pub inline fn safe_refraction(requested: i32, span: i32) i32 {
+
+    if (requested <= 0 or span <= 0) return 0;
+
+    const numerator = @as(i64, span) * fixed_one * compositor_morph_gain_den * profile_slope_den * fold_margin_num;
+    const denominator: i64 = compositor_morph_gain_num * profile_slope_num * fold_margin_den;
+    const safe = @divTrunc(numerator, denominator);
+
+    return @intCast(@min(@as(i64, requested), safe));
+
+}
+
+/// Convex lens profile whose bounded derivative keeps adjacent backdrop rays ordered.
+pub inline fn lens_profile(from_edge: i32, bezel: i32) u8 {
 
     if (from_edge <= 0 or bezel <= 0) return 0;
 
-    const t = @min(255, @divTrunc(from_edge * 255, bezel));
+    const t = @min(255, @divTrunc(@as(i64, from_edge) * 255, bezel));
     const tt = @as(u32, @intCast(t));
     const t2 = (tt * tt + 127) / 255;
-    const under = 255 - t2;
-    const root = curve_table[under];
-    const curved = 255 - @as(u32, root);
-    // Stronger linear share → background wraps deeper into the panel.
-    const mixed = (curved * 2 + tt * 2 + 2) / 4;
+    const mixed = (tt * 9 + t2 + 5) / 10;
 
     return @intCast(@min(255, mixed));
 
 }
 
-fn isqrt_byte(value: u8) u8 {
-
-    var low: u32 = 0;
-    var high: u32 = 255;
-    const target: u32 = value;
-
-    while (low < high) {
-
-        const mid = (low + high + 1) / 2;
-
-        if ((mid * mid + 127) / 255 <= target) {
-
-            low = mid;
-
-        } else {
-
-            high = mid - 1;
-
-        }
-
-    }
-
-    return @intCast(low);
-
-}
-
-fn make_curve_table() [256]u8 {
-
-    @setEvalBranchQuota(10_000);
-
-    var table: [256]u8 = undefined;
-
-    for (0..table.len) |value| {
-
-        table[value] = isqrt_byte(@intCast(value));
-
-    }
-
-    return table;
-
-}
-
-fn rounded_coverage(rect: Rect, radius: i32, masks: ?draw.round.Masks, x: i32, y: i32) u8 {
+inline fn rounded_coverage(rect: Rect, radius: i32, masks: ?draw.round.Masks, x: i32, y: i32) u8 {
 
     if (radius <= 1 or masks == null) return 255;
 
@@ -421,15 +341,6 @@ fn rounded_coverage(rect: Rect, radius: i32, masks: ?draw.round.Masks, x: i32, y
     if (local_y < radius) return if (local_x < radius) view.tl[index] else view.tr[index];
 
     return if (local_x < radius) view.bl[index] else view.br[index];
-
-}
-
-fn approx_length(x: i32, y: i32) i32 {
-
-    const ax = abs_i32(x);
-    const ay = abs_i32(y);
-
-    return @max(ax, ay) + (@min(ax, ay) >> 1);
 
 }
 
@@ -453,13 +364,7 @@ fn encode_component(value: i32) u8 {
 
 }
 
-fn abs_i32(value: i32) i32 {
-
-    return if (value < 0) -value else value;
-
-}
-
-test "Quartz bezel field peaks at the edge and clears the interior" {
+test "Quartz bezel field peaks at the boundary and clears the interior" {
 
     var pixels = [_]Color{draw.transparent} ** (48 * 48);
     var effect = [_]u8{0} ** (48 * 48 * 2);
@@ -475,12 +380,14 @@ test "Quartz bezel field peaks at the edge and clears the interior" {
 
     try std.testing.expectEqual(@as(u8, 0), effect[0]);
 
-    const edge_x = decode_component(effect[24 * 96 + 3 * 2]);
-    const mid_x = decode_component(effect[24 * 96 + 12 * 2]);
+    const boundary_x = decode_component(effect[24 * 96 + 2 * 2]);
+    const edge_x = decode_component(effect[24 * 96 + 6 * 2]);
+    const mid_x = decode_component(effect[24 * 96 + 14 * 2]);
     const center_x = decode_component(effect[24 * 96 + 24 * 2]);
 
-    try std.testing.expect(edge_x > 0);
-    try std.testing.expect(edge_x > mid_x);
+    try std.testing.expect(boundary_x < edge_x);
+    try std.testing.expect(edge_x < 0);
+    try std.testing.expect(edge_x < mid_x);
     try std.testing.expectEqual(@as(i32, 0), center_x);
 
     control(&surface, .{ .x = 16, .y = 16, .w = 16, .h = 12 }, appearance, false);
@@ -489,12 +396,73 @@ test "Quartz bezel field peaks at the edge and clears the interior" {
 
 }
 
-test "Quartz circular profile is monotonic from edge to interior" {
+test "Quartz lens profile is monotonic from edge to interior" {
 
-    try std.testing.expectEqual(@as(u8, 0), circular_profile(0, 16));
-    try std.testing.expect(circular_profile(1, 16) < circular_profile(8, 16));
-    try std.testing.expect(circular_profile(8, 16) < circular_profile(16, 16));
-    try std.testing.expectEqual(@as(u8, 255), circular_profile(16, 16));
+    try std.testing.expectEqual(@as(u8, 0), lens_profile(0, 16));
+    try std.testing.expect(lens_profile(1, 16) < lens_profile(8, 16));
+    try std.testing.expect(lens_profile(8, 16) < lens_profile(16, 16));
+    try std.testing.expectEqual(@as(u8, 255), lens_profile(16, 16));
+
+}
+
+test "Quartz boosted edge field keeps backdrop rays ordered" {
+
+    const bezel: i32 = 24;
+    const strength = safe_refraction(max_fixed, bezel);
+    var previous = axis_component(0, bezel, strength);
+    var distance: i32 = 1;
+
+    try std.testing.expectEqual(max_fixed, strength);
+
+    while (distance < bezel) : (distance += 1) {
+
+        const current = axis_component(distance, bezel, strength);
+        const encoded_drop = previous - current;
+
+        try std.testing.expect(encoded_drop * compositor_morph_gain_num < fixed_one * compositor_morph_gain_den);
+
+        previous = current;
+
+    }
+
+}
+
+test "Quartz corner combines both ordered edge fields" {
+
+    var pixels = [_]Color{draw.transparent} ** (64 * 64);
+    var effect = [_]u8{0} ** (64 * 64 * 2);
+    var surface = Surface.from_pixels_format(&pixels, 64, 64, .alpha);
+
+    surface.effect = &effect;
+    surface.effect_stride = 128;
+
+    panel(&surface, surface.bounds(), style(.regular, draw.rgb(20, 20, 20), draw.rgb(64, 128, 255)));
+
+    const index = 50 * surface.effect_stride + 50 * 2;
+
+    try std.testing.expect(decode_component(effect[index]) > 0);
+    try std.testing.expect(decode_component(effect[index + 1]) > 0);
+
+}
+
+test "Quartz joined panel leaves its top seam optically flat" {
+
+    var pixels = [_]Color{draw.transparent} ** (64 * 64);
+    var effect = [_]u8{0} ** (64 * 64 * 2);
+    var surface = Surface.from_pixels_format(&pixels, 64, 64, .alpha);
+
+    surface.effect = &effect;
+    surface.effect_stride = 128;
+
+    panel_joined_top(&surface, surface.bounds(), style(.regular, draw.rgb(20, 20, 20), draw.rgb(64, 128, 255)));
+
+    const top = 32 * 2 + 1;
+    const bottom = 63 * surface.effect_stride + 32 * 2 + 1;
+    const bottom_inner = 60 * surface.effect_stride + 32 * 2 + 1;
+
+    try std.testing.expectEqual(@as(i32, 0), decode_component(effect[top]));
+    try std.testing.expect(decode_component(effect[bottom]) > 0);
+    try std.testing.expect(decode_component(effect[bottom_inner]) > 0);
 
 }
 

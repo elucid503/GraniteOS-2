@@ -198,6 +198,13 @@ fn paint_quartz_section(parent: i16) void {
 
     });
 
+    _ = page.label(section, "Darker levels add tint and progressively stronger backdrop blur.", .{
+
+        .size = 11,
+        .color = ui.theme.text_dim,
+
+    });
+
     const row = page.box(section, .{
 
         .direction = .row,

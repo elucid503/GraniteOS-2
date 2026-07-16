@@ -15,31 +15,45 @@ const Surface = draw.Surface;
 
 const coordinate_bits: u5 = 4;
 const coordinate_one: i32 = 1 << coordinate_bits;
-const max_refraction: i32 = 15;
+const max_refraction: i32 = 21;
 
 // Extra stretch on encoded D so bezel morph reads clearly.
-const morph_gain_num: i32 = 9;
-const morph_gain_den: i32 = 5;
+const morph_gain_num = lib.quartz.compositor_morph_gain_num;
+const morph_gain_den = lib.quartz.compositor_morph_gain_den;
 
-// Peak RGB split along the surface normal (fixed 1/16 px). ~2px at full rim.
-const chroma_peak: i32 = coordinate_one * 2;
-const chroma_gate: i32 = 28;
-const blur_radius: i32 = 4;
+// Limit RGB separation so high-contrast corners cannot reveal discrete backdrop samples.
+const chroma_peak: i32 = coordinate_one * 5 / 4;
+const chroma_gate: u8 = 64;
+const chroma_strength: u8 = 144;
+const chroma_radius: i32 = @divTrunc(chroma_peak + coordinate_one - 1, coordinate_one);
 const frost_scale: i32 = 2;
-const frost_blur_radius: i32 = 2;
-const frost_blur_count: u32 = frost_blur_radius * 2 + 1;
-const header_bezel: i32 = 6;
-const header_refraction: i32 = coordinate_one * 3;
-const header_shift_pixels: i32 = @divTrunc(header_refraction * morph_gain_num, morph_gain_den * coordinate_one);
+const frost_blur_light: i32 = 3;
+const frost_blur_regular: i32 = 5;
+const frost_blur_prominent: i32 = 8;
+const header_bezel: i32 = 12;
+const header_refraction: i32 = coordinate_one * 4;
+const header_shift_denominator = morph_gain_den * coordinate_one;
+const header_shift_pixels: i32 = @divTrunc(header_refraction * morph_gain_num + header_shift_denominator - 1, header_shift_denominator);
 
 // How hard the sharp rim wins back over frost (0..255).
 const rim_clarity: u8 = 168;
 const mask_floor: u8 = 8;
-const mask_ceiling: u8 = 72;
 const color_mask: Color = 0x00ff_ffff;
+const coverage_clear = make_material_coverage(lib.quartz.material_opacity(.clear));
+const coverage_regular = make_material_coverage(lib.quartz.material_opacity(.regular));
+const coverage_prominent = make_material_coverage(lib.quartz.material_opacity(.prominent));
 
-pub const damage_halo: i32 = max_refraction + (chroma_peak / coordinate_one) + blur_radius + 1;
-pub const header_damage_halo: i32 = header_shift_pixels + (chroma_peak / coordinate_one) + blur_radius + 1;
+pub fn damage_halo(level: u8) i32 {
+
+    return max_refraction + chroma_radius + blur_radius(level) + 1;
+
+}
+
+pub fn header_damage_halo(level: u8) i32 {
+
+    return header_shift_pixels + chroma_radius + blur_radius(level) + 1;
+
+}
 
 // Cursor-proximity rim light: the glass edge nearest the pointer brightens slightly.
 pub const highlight_radius: i32 = 56;
@@ -68,13 +82,16 @@ const PixelSum = struct {
 
     }
 
-    inline fn average_frost(self: PixelSum) Color {
+    inline fn average_frost(self: PixelSum, count: u32) Color {
 
-        return draw.rgb(
-            average_frost_channel(self.red),
-            average_frost_channel(self.green),
-            average_frost_channel(self.blue),
-        );
+        return switch (count) {
+
+            7 => average_frost_color(self, 7),
+            11 => average_frost_color(self, 11),
+            17 => average_frost_color(self, 17),
+            else => unreachable,
+
+        };
 
     }
 
@@ -99,6 +116,7 @@ const OutputCache = struct {
     window: u32 = 0,
     content: Rect = Rect.empty,
     visible: Rect = Rect.empty,
+    backdrop: Rect = Rect.empty,
 
 };
 
@@ -113,6 +131,8 @@ pub const Renderer = struct {
     cursor_x: i32 = 0,
     cursor_y: i32 = 0,
     highlight: bool = false,
+    frost_radius: i32 = frost_blur_regular,
+    coverage_table: *const [256]u8 = &coverage_regular,
 
     scene: [*]Color = undefined,
     lens: [*]Color = undefined,
@@ -191,9 +211,28 @@ pub const Renderer = struct {
 
         for (&self.output_cache) |*entry| {
 
-            if (entry.valid and !entry.visible.intersect(rect).is_empty()) entry.valid = false;
+            if (entry.valid and !entry.backdrop.intersect(rect).is_empty()) entry.valid = false;
 
         }
+
+    }
+
+    pub fn set_density(self: *Renderer, level: u8) void {
+
+        const radius = frost_radius(level);
+        const coverage_table: *const [256]u8 = switch (level) {
+
+            1 => &coverage_clear,
+            3 => &coverage_prominent,
+            else => &coverage_regular,
+
+        };
+
+        if (radius == self.frost_radius and coverage_table == self.coverage_table) return;
+
+        self.frost_radius = radius;
+        self.coverage_table = coverage_table;
+        self.invalidate();
 
     }
 
@@ -245,7 +284,7 @@ pub const Renderer = struct {
 
         if (visible.is_empty()) return true;
 
-        const scene_rect = visible.inset(-damage_halo).intersect(back.bounds());
+        const scene_rect = visible.inset(-damage_halo_from_radius(self.frost_radius)).intersect(back.bounds());
 
         if (self.output_reusable(window, content, visible)) {
 
@@ -262,13 +301,13 @@ pub const Renderer = struct {
 
         self.resolve_compact(back, foreground, content, visible, scene_rect, frost_bounds);
 
-        self.store_output_cache(window, content, visible);
+        self.store_output_cache(window, content, visible, scene_rect);
 
         return true;
 
     }
 
-    pub fn composite_header(self: *Renderer, back: *const Surface, content: Rect, clip: Rect, window: u32, tint: Color, opacity: u8, radius: i32) bool {
+    pub fn composite_header(self: *Renderer, back: *const Surface, content: Rect, clip: Rect, window: u32, tint: Color, opacity: u8, radius: i32, joined: bool) bool {
 
         if (self.base == 0 or opacity == 0) return false;
         if (self.width != back.width or self.height != back.height) return false;
@@ -277,7 +316,7 @@ pub const Renderer = struct {
 
         if (visible.is_empty()) return true;
 
-        const scene_rect = visible.inset(-header_damage_halo).intersect(back.bounds());
+        const scene_rect = visible.inset(-header_halo_from_radius(self.frost_radius)).intersect(back.bounds());
         const cache_key = window ^ 0x8000_0000;
 
         if (self.output_reusable(cache_key, content, visible)) {
@@ -293,9 +332,9 @@ pub const Renderer = struct {
         self.capture_scene(back, scene_rect);
         const frost_bounds = self.build_frost(scene_rect);
 
-        self.resolve_header(back, content, visible, scene_rect, frost_bounds, tint, opacity, radius);
+        self.resolve_header(back, content, visible, scene_rect, frost_bounds, tint, opacity, radius, joined);
 
-        self.store_output_cache(cache_key, content, visible);
+        self.store_output_cache(cache_key, content, visible, scene_rect);
 
         return true;
 
@@ -315,17 +354,36 @@ pub const Renderer = struct {
 
     }
 
-    fn invalidate_output_overlap(self: *Renderer, visible: Rect) void {
+    fn invalidate_output_overlap(self: *Renderer, changed: Rect) void {
 
         for (&self.output_cache) |*entry| {
 
-            if (entry.valid and !entry.visible.intersect(visible).is_empty()) entry.valid = false;
+            // A lens depends on its sampled halo even when its output does not overlap the change.
+            if (entry.valid and !entry.backdrop.intersect(changed).is_empty()) entry.valid = false;
 
         }
 
     }
 
-    fn store_output_cache(self: *Renderer, window: u32, content: Rect, visible: Rect) void {
+    fn store_output_cache(self: *Renderer, window: u32, content: Rect, visible: Rect, backdrop: Rect) void {
+
+        for (&self.output_cache) |*entry| {
+
+            if (!entry.valid or entry.window != window) continue;
+
+            entry.* = .{
+
+                .valid = true,
+                .window = window,
+                .content = content,
+                .visible = visible,
+                .backdrop = backdrop,
+
+            };
+
+            return;
+
+        }
 
         for (&self.output_cache) |*entry| {
 
@@ -337,6 +395,7 @@ pub const Renderer = struct {
                 .window = window,
                 .content = content,
                 .visible = visible,
+                .backdrop = backdrop,
 
             };
 
@@ -352,6 +411,7 @@ pub const Renderer = struct {
             .window = window,
             .content = content,
             .visible = visible,
+            .backdrop = backdrop,
 
         };
 
@@ -378,8 +438,8 @@ pub const Renderer = struct {
         const rect = frost_rect(scene_rect);
 
         self.downsample_scene(scene_rect, rect);
-        self.blur_frost_horizontal(self.temp, self.scratch, rect);
-        self.blur_frost_vertical(self.scratch, self.temp, rect);
+        self.blur_frost_horizontal(self.temp, self.scratch, rect, self.frost_radius);
+        self.blur_frost_vertical(self.scratch, self.temp, rect, self.frost_radius);
 
         return rect;
 
@@ -415,7 +475,7 @@ pub const Renderer = struct {
 
     }
 
-    fn blur_frost_horizontal(self: *Renderer, source: [*]const Color, destination: [*]Color, rect: Rect) void {
+    fn blur_frost_horizontal(self: *Renderer, source: [*]const Color, destination: [*]Color, rect: Rect, radius: i32) void {
 
         const min_x = rect.x;
         const max_x = rect.x + rect.w - 1;
@@ -425,9 +485,10 @@ pub const Renderer = struct {
         while (y <= max_y) : (y += 1) {
 
             var sum = PixelSum{};
-            var offset = -frost_blur_radius;
+            const count: u32 = @intCast(radius * 2 + 1);
+            var offset = -radius;
 
-            while (offset <= frost_blur_radius) : (offset += 1) {
+            while (offset <= radius) : (offset += 1) {
 
                 sum.add(source[self.frost_index(clamp_axis(min_x + offset, min_x, max_x), y)]);
 
@@ -437,10 +498,10 @@ pub const Renderer = struct {
 
             while (x <= max_x) : (x += 1) {
 
-                destination[self.frost_index(x, y)] = sum.average_frost();
+                destination[self.frost_index(x, y)] = sum.average_frost(count);
 
-                const leaving_x = clamp_axis(x - frost_blur_radius, min_x, max_x);
-                const entering_x = clamp_axis(x + frost_blur_radius + 1, min_x, max_x);
+                const leaving_x = clamp_axis(x - radius, min_x, max_x);
+                const entering_x = clamp_axis(x + radius + 1, min_x, max_x);
 
                 sum.remove(source[self.frost_index(leaving_x, y)]);
                 sum.add(source[self.frost_index(entering_x, y)]);
@@ -451,7 +512,7 @@ pub const Renderer = struct {
 
     }
 
-    fn blur_frost_vertical(self: *Renderer, source: [*]const Color, destination: [*]Color, rect: Rect) void {
+    fn blur_frost_vertical(self: *Renderer, source: [*]const Color, destination: [*]Color, rect: Rect, radius: i32) void {
 
         const min_y = rect.y;
         const max_x = rect.x + rect.w - 1;
@@ -461,9 +522,10 @@ pub const Renderer = struct {
         while (x <= max_x) : (x += 1) {
 
             var sum = PixelSum{};
-            var offset = -frost_blur_radius;
+            const count: u32 = @intCast(radius * 2 + 1);
+            var offset = -radius;
 
-            while (offset <= frost_blur_radius) : (offset += 1) {
+            while (offset <= radius) : (offset += 1) {
 
                 sum.add(source[self.frost_index(x, clamp_axis(min_y + offset, min_y, max_y))]);
 
@@ -473,10 +535,10 @@ pub const Renderer = struct {
 
             while (y <= max_y) : (y += 1) {
 
-                destination[self.frost_index(x, y)] = sum.average_frost();
+                destination[self.frost_index(x, y)] = sum.average_frost(count);
 
-                const leaving_y = clamp_axis(y - frost_blur_radius, min_y, max_y);
-                const entering_y = clamp_axis(y + frost_blur_radius + 1, min_y, max_y);
+                const leaving_y = clamp_axis(y - radius, min_y, max_y);
+                const entering_y = clamp_axis(y + radius + 1, min_y, max_y);
 
                 sum.remove(source[self.frost_index(x, leaving_y)]);
                 sum.add(source[self.frost_index(x, entering_y)]);
@@ -487,17 +549,14 @@ pub const Renderer = struct {
 
     }
 
-    // One glass ray: magnified offset from D, optional RGB dispersion near the rim.
+    // One glass ray: refracted offset from D, optional RGB dispersion near the rim.
     inline fn trace_glass(self: *const Renderer, ray: SampleRay, scene_rect: Rect) Color {
 
         const center = self.sample_scene(ray.x, ray.y, scene_rect);
 
-        if (ray.rim < chroma_gate) return center;
+        const chroma_weight = chroma_amount(ray.rim);
 
-        // Dispersion grows with surface curvature; blue bends farther than red.
-        const chroma_weight = square_byte(ray.rim);
-
-        if (chroma_weight < 8) return center;
+        if (chroma_weight == 0) return center;
 
         const chroma_mag = @divTrunc(@as(i32, chroma_weight) * chroma_peak, 255);
         const chroma_x = @divTrunc(ray.nx * chroma_mag, 256);
@@ -507,7 +566,9 @@ pub const Renderer = struct {
         const blue_s = self.sample_scene(ray.x + chroma_x, ray.y + chroma_y, scene_rect);
 
         // Bake dispersion into a single lens color — not a post on the live buffer.
-        return draw.rgb(draw.red(red_s), draw.green(center), draw.blue(blue_s));
+        const dispersed = draw.rgb(draw.red(red_s), draw.green(center), draw.blue(blue_s));
+
+        return draw.mix(center, dispersed, scale_byte(chroma_weight, chroma_strength));
 
     }
 
@@ -578,11 +639,12 @@ pub const Renderer = struct {
 
                 } else if (opacity != 0) {
 
+                    const coverage = self.coverage_table[opacity];
                     const displacement = optical_displacement(foreground, @intCast(source_x), @intCast(source_y));
                     const ray = self.ray_from_displacement(x, y, displacement);
                     var optical = self.sample_frost(ray.x, ray.y, frost_bounds);
 
-                    if (ray.rim >= chroma_gate) {
+                    if (ray.rim > chroma_gate) {
 
                         const sharp = self.trace_glass(ray, scene_rect);
                         const clarity = scale_byte(square_byte(ray.rim), rim_clarity);
@@ -591,11 +653,13 @@ pub const Renderer = struct {
 
                     }
 
-                    resolved = draw.composite_premultiplied(optical, source);
+                    const glass = draw.composite_premultiplied(optical, source);
+
+                    resolved = draw.mix(original, glass, coverage);
 
                     const glow = self.highlight_amount(x, y, ray.rim);
 
-                    if (glow > 0) resolved = draw.mix(resolved, highlight_color, glow);
+                    if (glow > 0) resolved = draw.mix(resolved, highlight_color, scale_byte(glow, coverage));
 
                 }
 
@@ -608,11 +672,13 @@ pub const Renderer = struct {
 
     }
 
-    fn resolve_header(self: *Renderer, back: *const Surface, content: Rect, visible: Rect, scene_rect: Rect, frost_bounds: Rect, tint: Color, opacity: u8, radius: i32) void {
+    fn resolve_header(self: *Renderer, back: *const Surface, content: Rect, visible: Rect, scene_rect: Rect, frost_bounds: Rect, tint: Color, opacity: u8, radius: i32, joined: bool) void {
 
         const material = draw.with_alpha(tint, opacity);
         const r = draw.round.clamp_radius(content, radius);
         const masks = draw.round.masks_for(r);
+        const bezel = header_bezel;
+        const refraction = lib.quartz.safe_refraction(header_refraction, bezel);
         var y = visible.y;
 
         while (y < visible.y + visible.h) : (y += 1) {
@@ -625,11 +691,20 @@ pub const Renderer = struct {
                 const cache_index = self.pixel_index(x, y);
                 const coverage = header_coverage(content, x, y, r, masks);
                 const original = back.pixels[destination_index];
-                const displacement = header_displacement(content, x, y);
+
+                if (coverage == 0) {
+
+                    self.lens[cache_index] = original;
+
+                    continue;
+
+                }
+
+                const displacement = attenuate_displacement(header_displacement(content, x, y, bezel, refraction, joined), coverage);
                 const ray = self.ray_from_displacement(x, y, displacement);
                 var optical = self.sample_frost(ray.x, ray.y, frost_bounds);
 
-                if (ray.rim >= chroma_gate) {
+                if (ray.rim > chroma_gate) {
 
                     const sharp = self.trace_glass(ray, scene_rect);
                     const clarity = scale_byte(square_byte(ray.rim), rim_clarity);
@@ -796,7 +871,20 @@ const Displacement = struct {
 
 };
 
-inline fn header_displacement(rect: Rect, x: i32, y: i32) Displacement {
+inline fn attenuate_displacement(displacement: Displacement, coverage: u8) Displacement {
+
+    if (coverage == 255) return displacement;
+
+    return .{
+
+        .x = @divTrunc(displacement.x * @as(i32, coverage), 255),
+        .y = @divTrunc(displacement.y * @as(i32, coverage), 255),
+
+    };
+
+}
+
+inline fn header_displacement(rect: Rect, x: i32, y: i32, bezel: i32, refraction: i32, joined: bool) Displacement {
 
     const local_x = x - rect.x;
     const local_y = y - rect.y;
@@ -804,20 +892,21 @@ inline fn header_displacement(rect: Rect, x: i32, y: i32) Displacement {
     const bottom = rect.h - 1 - local_y;
     var displacement = Displacement{};
 
-    if (local_x < header_bezel) displacement.x += header_profile(local_x);
-    if (right < header_bezel) displacement.x -= header_profile(right);
-    if (local_y < header_bezel) displacement.y += header_profile(local_y);
-    if (bottom < header_bezel) displacement.y -= header_profile(bottom);
+    if (local_x < bezel) displacement.x -= header_profile(local_x, bezel, refraction);
+    if (right < bezel) displacement.x += header_profile(right, bezel, refraction);
+    if (local_y < bezel) displacement.y -= header_profile(local_y, bezel, refraction);
+    if (!joined and bottom < bezel) displacement.y += header_profile(bottom, bezel, refraction);
 
     return displacement;
 
 }
 
-inline fn header_profile(distance: i32) i32 {
+inline fn header_profile(distance: i32, bezel: i32, refraction: i32) i32 {
 
-    const remaining = header_bezel - @max(0, distance);
+    const remaining = bezel - @max(0, distance);
+    const profile = lib.quartz.lens_profile(remaining, bezel);
 
-    return @divTrunc(remaining * remaining * header_refraction, header_bezel * header_bezel);
+    return @divTrunc(@as(i32, profile) * refraction + 127, 255);
 
 }
 
@@ -847,19 +936,37 @@ inline fn is_material(color: Color) bool {
 
     if ((color & color_mask) == 0) return false;
 
-    return mask_value(draw.pixel_alpha(color)) > 0;
+    return draw.pixel_alpha(color) > mask_floor;
 
 }
 
-inline fn mask_value(opacity: u8) u8 {
+fn make_material_coverage(comptime material_alpha: u8) [256]u8 {
 
-    if (opacity <= mask_floor) return 0;
-    if (opacity >= mask_ceiling) return 255;
+    var table: [256]u8 = undefined;
+    const floor: u32 = mask_floor;
+    const expected: u32 = material_alpha;
 
-    const range = @as(u32, mask_ceiling - mask_floor);
-    const value = @as(u32, opacity - mask_floor);
+    for (&table, 0..) |*coverage, opacity| {
 
-    return @intCast((value * 255 + range / 2) / range);
+        const value: u32 = @intCast(opacity);
+
+        if (value <= floor) {
+
+            coverage.* = 0;
+
+        } else if (value >= expected) {
+
+            coverage.* = 255;
+
+        } else {
+
+            coverage.* = @intCast((value * 255 + expected / 2) / expected);
+
+        }
+
+    }
+
+    return table;
 
 }
 
@@ -872,7 +979,7 @@ inline fn normal_denominator(x: i32, y: i32) i32 {
 
 }
 
-// |D| in fixed units → 0..255. Peak morph (~15px * 16) saturates the outer bezel.
+// Saturate the rim response before amplified client displacement can wrap.
 inline fn rim_amount(slope: i32) u8 {
 
     return @intCast(clamp_axis(@divTrunc(slope * 255, max_refraction * coordinate_one), 0, 255));
@@ -885,17 +992,80 @@ inline fn scale_byte(value: u8, amount: u8) u8 {
 
 }
 
-inline fn average_frost_channel(sum: u32) u8 {
+inline fn average_frost_channel(sum: u32, count: u32) u8 {
 
-    comptime if (frost_blur_count != 5) @compileError("update the Quartz frost reciprocal for the new radius");
+    return switch (count) {
 
-    return @intCast(((sum + frost_blur_count / 2) * 52429) >> 18);
+        7 => average_frost_channel_exact(sum, 7),
+        11 => average_frost_channel_exact(sum, 11),
+        17 => average_frost_channel_exact(sum, 17),
+        else => unreachable,
+
+    };
+
+}
+
+inline fn average_frost_color(sum: PixelSum, comptime count: u32) Color {
+
+    return draw.rgb(
+        average_frost_channel_exact(sum.red, count),
+        average_frost_channel_exact(sum.green, count),
+        average_frost_channel_exact(sum.blue, count),
+    );
+
+}
+
+inline fn average_frost_channel_exact(sum: u32, comptime count: u32) u8 {
+
+    return @intCast((sum + count / 2) / count);
+
+}
+
+inline fn frost_radius(level: u8) i32 {
+
+    return switch (level) {
+
+        1 => frost_blur_light,
+        3 => frost_blur_prominent,
+        else => frost_blur_regular,
+
+    };
+
+}
+
+inline fn blur_radius(level: u8) i32 {
+
+    return frost_scale * frost_radius(level);
+
+}
+
+inline fn damage_halo_from_radius(radius: i32) i32 {
+
+    return max_refraction + chroma_radius + frost_scale * radius + 1;
+
+}
+
+inline fn header_halo_from_radius(radius: i32) i32 {
+
+    return header_shift_pixels + chroma_radius + frost_scale * radius + 1;
 
 }
 
 inline fn square_byte(value: u8) u8 {
 
     return scale_byte(value, value);
+
+}
+
+inline fn chroma_amount(rim: u8) u8 {
+
+    if (rim <= chroma_gate) return 0;
+
+    const range: u32 = 255 - chroma_gate;
+    const value: u32 = rim - chroma_gate;
+    const normalized: u8 = @intCast((value * 255 + range / 2) / range);
+
+    return square_byte(normalized);
 
 }
 
@@ -957,11 +1127,12 @@ inline fn bilinear_channel(top_left: u8, top_right: u8, bottom_left: u8, bottom_
 
 }
 
-test "Quartz mask keeps shadows out of the lens path" {
+test "Quartz coverage follows material density and excludes shadows" {
 
-    try std.testing.expectEqual(@as(u8, 0), mask_value(mask_floor));
-    try std.testing.expectEqual(@as(u8, 255), mask_value(mask_ceiling));
-    try std.testing.expectEqual(@as(u8, 128), mask_value(mask_floor + (mask_ceiling - mask_floor) / 2));
+    try std.testing.expectEqual(@as(u8, 0), coverage_regular[mask_floor]);
+    try std.testing.expectEqual(@as(u8, 255), coverage_regular[lib.quartz.material_opacity(.regular)]);
+    try std.testing.expect(coverage_clear[40] > coverage_regular[40]);
+    try std.testing.expect(coverage_regular[40] > coverage_prominent[40]);
     try std.testing.expect(!is_material(draw.with_alpha(draw.rgb(0, 0, 0), 64)));
     try std.testing.expect(is_material(draw.with_alpha(draw.rgb(32, 32, 32), 32)));
 
@@ -1009,7 +1180,7 @@ test "Quartz displacement treats surface bounds as clear space" {
 
 test "Quartz damage halo covers morph chroma and frost" {
 
-    try std.testing.expect(damage_halo >= max_refraction + blur_radius);
+    try std.testing.expect(damage_halo(3) >= max_refraction + blur_radius(3));
 
 }
 
@@ -1028,20 +1199,43 @@ test "Quartz wavelength dispersion bends blue farther than red" {
     const ray = SampleRay{ .x = 2 * coordinate_one, .y = 0, .rim = 255, .nx = 256 };
     const dispersed = renderer.trace_glass(ray, .{ .x = 0, .y = 0, .w = 5, .h = 1 });
 
-    try std.testing.expectEqual(@as(u8, 0), draw.red(dispersed));
-    try std.testing.expectEqual(@as(u8, 80), draw.blue(dispersed));
+    try std.testing.expect(draw.red(dispersed) > 0);
+    try std.testing.expect(draw.red(dispersed) < 20);
+    try std.testing.expect(draw.blue(dispersed) > 40);
+    try std.testing.expect(draw.blue(dispersed) < 80);
 
 }
 
-test "Quartz frost reciprocal matches rounded division" {
+test "Quartz frost average matches rounded division" {
 
-    var sum: u32 = 0;
+    for ([_]u32{ 7, 11, 17 }) |count| {
 
-    while (sum <= frost_blur_count * 255) : (sum += 1) {
+        var sum: u32 = 0;
 
-        try std.testing.expectEqual(@as(u8, @intCast((sum + frost_blur_count / 2) / frost_blur_count)), average_frost_channel(sum));
+        while (sum <= count * 255) : (sum += 1) {
+
+            try std.testing.expectEqual(@as(u8, @intCast((sum + count / 2) / count)), average_frost_channel(sum, count));
+
+        }
 
     }
+
+}
+
+test "Quartz density progressively increases compact blur" {
+
+    var renderer = Renderer{};
+
+    try std.testing.expect(frost_blur_regular - frost_blur_light < frost_blur_prominent - frost_blur_regular);
+
+    renderer.set_density(1);
+    try std.testing.expectEqual(frost_blur_light, renderer.frost_radius);
+
+    renderer.set_density(2);
+    try std.testing.expectEqual(frost_blur_regular, renderer.frost_radius);
+
+    renderer.set_density(3);
+    try std.testing.expectEqual(frost_blur_prominent, renderer.frost_radius);
 
 }
 
@@ -1057,17 +1251,44 @@ test "Quartz header mask rounds only the top corners" {
 
 }
 
-test "Quartz header lens bends every edge inward" {
+test "Quartz header coverage attenuates corner displacement" {
+
+    const displacement = Displacement{ .x = 64, .y = -64 };
+    const partial = attenuate_displacement(displacement, 96);
+
+    try std.testing.expect(partial.x > 0 and partial.x < displacement.x);
+    try std.testing.expect(partial.y < 0 and partial.y > displacement.y);
+
+}
+
+test "Quartz header lens bends every edge outward" {
 
     const rect = Rect{ .x = 10, .y = 20, .w = 100, .h = 28 };
-    const left = header_displacement(rect, rect.x, rect.y + 14);
-    const right = header_displacement(rect, rect.x + rect.w - 1, rect.y + 14);
-    const center = header_displacement(rect, rect.x + 50, rect.y + 14);
+    const bezel = header_bezel;
+    const refraction = lib.quartz.safe_refraction(header_refraction, bezel);
+    const left = header_displacement(rect, rect.x, rect.y + 14, bezel, refraction, false);
+    const right = header_displacement(rect, rect.x + rect.w - 1, rect.y + 14, bezel, refraction, false);
+    const center = header_displacement(rect, rect.x + 50, rect.y + 14, bezel, refraction, false);
 
-    try std.testing.expect(left.x > 0);
-    try std.testing.expect(right.x < 0);
+    try std.testing.expect(left.x < 0);
+    try std.testing.expect(right.x > 0);
     try std.testing.expectEqual(@as(i32, 0), center.x);
     try std.testing.expectEqual(@as(i32, 0), center.y);
+
+}
+
+test "Quartz joined header leaves its content seam optically flat" {
+
+    const rect = Rect{ .x = 10, .y = 20, .w = 100, .h = 28 };
+    const x = rect.x + @divTrunc(rect.w, 2);
+    const y = rect.y + rect.h - 1;
+    const bezel = header_bezel;
+    const refraction = lib.quartz.safe_refraction(header_refraction, bezel);
+    const separate = header_displacement(rect, x, y, bezel, refraction, false);
+    const joined = header_displacement(rect, x, y, bezel, refraction, true);
+
+    try std.testing.expect(separate.y > 0);
+    try std.testing.expectEqual(@as(i32, 0), joined.y);
 
 }
 
@@ -1076,10 +1297,12 @@ test "Quartz regional cache preserves unrelated glass" {
     var renderer = Renderer{};
     const left = Rect{ .x = 10, .y = 10, .w = 40, .h = 30 };
     const right = Rect{ .x = 100, .y = 10, .w = 40, .h = 30 };
+    const left_backdrop = left.inset(-damage_halo(3));
+    const right_backdrop = right.inset(-damage_halo(3));
 
-    renderer.store_output_cache(1, left, left);
-    renderer.store_output_cache(2, right, right);
-    renderer.invalidate_region(left);
+    renderer.store_output_cache(1, left, left, left_backdrop);
+    renderer.store_output_cache(2, right, right, right_backdrop);
+    renderer.invalidate_region(.{ .x = left_backdrop.x, .y = left_backdrop.y, .w = 1, .h = 1 });
 
     try std.testing.expect(!renderer.output_reusable(1, left, left));
     try std.testing.expect(renderer.output_reusable(2, right, right));
@@ -1116,5 +1339,40 @@ test "Quartz resolved output cache restores glass without recompositing" {
 
     try std.testing.expectEqual(draw.composite_premultiplied(frost_pixels[0], foreground_pixels[0]), resolved);
     try std.testing.expectEqual(resolved, back_pixels[0]);
+
+}
+
+test "Quartz material coverage attenuates antialiased refraction" {
+
+    const original = draw.rgb(10, 20, 30);
+    const material = draw.rgba(80, 100, 120, 40);
+    const frost = draw.rgb(100, 120, 140);
+    var back_pixels = [_]Color{original};
+    var foreground_pixels = [_]Color{material};
+    var scene_pixels = [_]Color{frost};
+    var frost_pixels = [_]Color{frost};
+    var output_pixels = [_]Color{draw.transparent};
+
+    const back = Surface.from_pixels(&back_pixels, 1, 1);
+    const foreground = Surface.from_pixels_format(&foreground_pixels, 1, 1, .alpha);
+    var renderer = Renderer{
+
+        .width = 1,
+        .height = 1,
+
+        .scene = &scene_pixels,
+        .lens = &output_pixels,
+        .temp = &frost_pixels,
+
+    };
+
+    renderer.set_density(3);
+    renderer.resolve_compact(&back, &foreground, foreground.bounds(), foreground.bounds(), foreground.bounds(), foreground.bounds());
+
+    const glass = draw.composite_premultiplied(frost, material);
+
+    try std.testing.expect(coverage_prominent[40] < 64);
+    try std.testing.expectEqual(draw.mix(original, glass, coverage_prominent[40]), back_pixels[0]);
+    try std.testing.expect(back_pixels[0] != glass);
 
 }

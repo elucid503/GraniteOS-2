@@ -161,6 +161,7 @@ fn search_height() i32 {
 
 const max_apps = 32;
 const max_categories = 12;
+const max_menu_rows = 10;
 
 var font: lib.draw.text.Face = undefined;
 var bundle: lib.bundle.Bundle = undefined;
@@ -171,6 +172,7 @@ var bar: lib.window.Window = undefined;
 
 var menu: ?lib.window.Window = null;
 var menu_open = false;
+var menu_row_limit: usize = max_menu_rows;
 
 var pin_menu: ?lib.window.Window = null;
 var pin_menu_open = false;
@@ -195,6 +197,7 @@ const WeatherState = struct {
 };
 
 var weather: WeatherState = .{};
+var weather_staging: WeatherState = .{};
 
 const pin_action_row = [_]ui.Menu.Row{.{ .item = "Pin to Taskbar" }};
 const unpin_action_row = [_]ui.Menu.Row{.{ .item = "Unpin from Taskbar" }};
@@ -258,6 +261,7 @@ var clock_tick: u32 = 0;
 var list_tick: u32 = 0;
 var weather_tick: u32 = 0;
 var weather_pending: u32 = 0;
+var prefs_backstop_ticks: u8 = 0;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -301,8 +305,6 @@ fn run() !void {
 
     while (true) {
 
-        _ = sys.wait(ready) catch {};
-
         while (connection.poll_event()) |event| {
 
             handle(event);
@@ -311,7 +313,7 @@ fn run() !void {
 
         const list_due = @atomicRmw(u32, &list_tick, .Xchg, 0, .acquire) != 0;
         const clock_due = @atomicRmw(u32, &clock_tick, .Xchg, 0, .acquire) != 0;
-        const weather_due = @atomicRmw(u32, &weather_tick, .Xchg, 0, .acquire) != 0;
+        const weather_due = @atomicLoad(u32, &weather_tick, .acquire) != 0;
 
         if (list_due) refresh_windows();
 
@@ -321,11 +323,22 @@ fn run() !void {
 
         } else if (clock_due) {
 
-            // Backstop: prefs_changed can be dropped when the event ring is full.
+            prefs_backstop_ticks +|= 1;
 
-            if (lib.prefs.refresh_if_changed()) {
+            if (prefs_backstop_ticks >= 5) {
 
-                repaint_prefs();
+                prefs_backstop_ticks = 0;
+
+                // Backstop prefs events that were dropped from a full input ring.
+                if (lib.prefs.refresh_if_changed()) {
+
+                    repaint_prefs();
+
+                } else {
+
+                    paint_clock_only();
+
+                }
 
             } else {
 
@@ -335,7 +348,18 @@ fn run() !void {
 
         }
 
-        if (weather_due and calendar_open) paint_calendar();
+        if (weather_due) {
+
+            const update = weather_staging;
+
+            @atomicStore(u32, &weather_tick, 0, .release);
+
+            if (update.ready or !weather.ready) weather = update;
+            if (calendar_open) paint_calendar();
+
+        }
+
+        _ = sys.wait(ready) catch {};
 
     }
 
@@ -460,6 +484,7 @@ fn handle(event: events.Event) void {
 
     if (lib.prefs.apply_event(event)) {
 
+        prefs_backstop_ticks = 0;
         repaint_prefs();
         return;
 
@@ -519,6 +544,7 @@ fn update_menu_cursor(x: i32, y: i32) void {
 /// Redraw every taskbar surface for the current preferences.
 fn repaint_prefs() void {
 
+    reload_pins();
     rebuild_items();
     paint_bar();
 
@@ -526,8 +552,7 @@ fn repaint_prefs() void {
 
 }
 
-/// Preference notifications can arrive while a popup is minimized. Repaint its
-/// backing surface either way so the next restore cannot show a stale material.
+/// Refresh minimized popup surfaces so restoring one cannot show stale material.
 fn refresh_quartz_popups() void {
 
     if (menu != null) {
@@ -639,15 +664,23 @@ fn handle_bar(event: events.Event) void {
 
             bar.resize(@intCast(event.x), @intCast(bar_height())) catch {};
 
-            if (menu_open) {
+            if (lib.wm.screen_info(&connection)) |screen| {
 
-                if (lib.wm.screen_info(&connection)) |screen| {
+                menu_row_limit = menu_rows_for_screen(screen.height);
 
-                    if (menu) |menu_window| lib.wm.move_window(&connection, menu_window.id, 0, menu_y(screen.height)) catch {};
+                if (menu_open) {
 
-                } else |_| {}
+                    sync_menu_size(true);
 
-            }
+                    if (menu) |menu_window| {
+
+                        lib.wm.move_window(&connection, menu_window.id, dock_margin(), menu_y(screen.height, menu_window.surface.height)) catch {};
+
+                    }
+
+                }
+
+            } else |_| {}
 
             close_pin_menu();
             close_calendar();
@@ -1055,7 +1088,21 @@ fn browse_rows() usize {
 
 fn view_rows() usize {
 
-    return if (searching()) match_count() else browse_rows();
+    const rows = if (searching()) match_count() else browse_rows();
+
+    return @min(rows, menu_row_limit);
+
+}
+
+fn menu_rows_for_screen(screen_height: u32) usize {
+
+    const reserved: i64 = bar_height() + dock_margin() + search_height() + 28;
+    const row: i64 = row_height();
+    const available = @as(i64, screen_height) - reserved;
+
+    if (available <= row) return 1;
+
+    return @min(max_menu_rows, @as(usize, @intCast(@divTrunc(available, row))));
 
 }
 
@@ -1067,19 +1114,26 @@ fn menu_height() u32 {
 
 }
 
-fn sync_menu_size() void {
+fn menu_y(screen_height: u32, height: u32) i32 {
+
+    return @as(i32, @intCast(screen_height)) - bar_height() - dock_margin() - @as(i32, @intCast(height)) - 10;
+
+}
+
+fn sync_menu_size(allow_shrink: bool) void {
 
     if (menu) |*menu_window| {
 
         const height = menu_height();
 
         if (menu_window.surface.height == height) return;
+        if (!allow_shrink and menu_window.surface.height > height) return;
 
-        menu_window.resize(menu_width(), height) catch {};
+        menu_window.resize(menu_width(), height) catch return;
 
         if (lib.wm.screen_info(&connection)) |screen| {
 
-            lib.wm.move_window(&connection, menu_window.id, 0, menu_y(screen.height)) catch {};
+            lib.wm.move_window(&connection, menu_window.id, dock_margin(), menu_y(screen.height, menu_window.surface.height)) catch {};
 
         } else |_| {}
 
@@ -1087,27 +1141,22 @@ fn sync_menu_size() void {
 
 }
 
-fn menu_y(screen_height: u32) i32 {
-
-    return @as(i32, @intCast(screen_height)) - bar_height() - dock_margin() - @as(i32, @intCast(menu_height())) - 10;
-
-}
-
 fn ensure_menu() !void {
 
     if (menu != null) return;
 
-    const height = menu_height();
+    const screen = try lib.wm.screen_info(&connection);
 
+    menu_row_limit = menu_rows_for_screen(screen.height);
+
+    const height = menu_height();
     var menu_window = try connection.create_window(menu_width(), height, proto.window.flag_undecorated | proto.window.flag_quartz, "menu");
 
     menu_window.surface.fill(ui.theme.window_bg);
 
     try lib.wm.minimize(&connection, menu_window.id);
 
-    const screen = try lib.wm.screen_info(&connection);
-
-    try lib.wm.move_window(&connection, menu_window.id, 0, menu_y(screen.height));
+    try lib.wm.move_window(&connection, menu_window.id, dock_margin(), menu_y(screen.height, menu_window.surface.height));
 
     menu = menu_window;
 
@@ -1128,14 +1177,14 @@ fn open_menu() void {
 
     _ = menu_regions.leave();
 
-    // Reopen at the browse size; a prior session may have left the window expanded for search results.
-    sync_menu_size();
+    // Reopen at the browse size after a prior search expanded the backing surface.
+    sync_menu_size(true);
 
     const menu_window = menu orelse return;
 
     if (lib.wm.screen_info(&connection)) |screen| {
 
-        lib.wm.move_window(&connection, menu_window.id, dock_margin(), menu_y(screen.height)) catch {};
+        lib.wm.move_window(&connection, menu_window.id, dock_margin(), menu_y(screen.height, menu_window.surface.height)) catch {};
 
     } else |_| {}
 
@@ -1322,8 +1371,11 @@ fn pin_menu_click(x: i32, y: i32) void {
     }
 
     const program = pin_menu_program[0..pin_menu_program_len];
+    const previous_count = pinned_count;
+    var previous = [_]lib.prefs.TaskbarPin{.{}} ** lib.prefs.max_taskbar_pins;
 
-    // Important: we update the in-memory pin list first
+    @memcpy(previous[0..previous_count], pinned_programs[0..previous_count]);
+
     if (pin_menu_pinned) {
 
         untrack_pinned_program(program);
@@ -1334,7 +1386,12 @@ fn pin_menu_click(x: i32, y: i32) void {
 
     }
 
-    _ = lib.prefs.save_taskbar_pins(pinned_programs[0..pinned_count]);
+    if (!lib.prefs.save_taskbar_pins(pinned_programs[0..pinned_count])) {
+
+        pinned_programs = previous;
+        pinned_count = previous_count;
+
+    }
 
     close_pin_menu();
 
@@ -1708,13 +1765,8 @@ fn refresh_weather() void {
 
     const location = metrics_location() catch {
 
-        // Keep a previous good reading if a later refresh fails.
-        if (!weather.ready) {
-
-            next.failed = true;
-            weather = next;
-
-        }
+        next.failed = true;
+        weather_staging = next;
 
         return;
 
@@ -1727,18 +1779,14 @@ fn refresh_weather() void {
 
     fetch_weather_into(&next, location.lat, location.lon) catch {
 
-        if (!weather.ready) {
-
-            next.failed = true;
-            weather = next;
-
-        }
+        next.failed = true;
+        weather_staging = next;
 
         return;
 
     };
 
-    weather = next;
+    weather_staging = next;
 
 }
 
@@ -2252,7 +2300,8 @@ fn paint_clock_only() void {
 
 fn paint_menu() void {
 
-    sync_menu_size();
+    // Grow at most once for broad results; filtering must not churn Quartz surfaces.
+    sync_menu_size(false);
     paint_menu_content();
 
     if (menu) |menu_window| menu_window.present_all() catch {};
@@ -2409,10 +2458,12 @@ fn paint_search_results(surface: *const gfx.Surface, width: i32) void {
     var y = search_height();
     var any = false;
     var nth: u32 = 0;
+    const visible_rows = view_rows();
 
     for (apps[0..app_count]) |app| {
 
         if (!matches(app)) continue;
+        if (@as(usize, nth) >= visible_rows) break;
 
         any = true;
 
@@ -2664,6 +2715,7 @@ fn weather_worker() callconv(.c) noreturn {
 
         lib.time.sleep_ms(50);
 
+        if (@atomicLoad(u32, &weather_tick, .acquire) != 0) continue;
         if (@atomicRmw(u32, &weather_pending, .Xchg, 0, .acquire) == 0) continue;
 
         refresh_weather();
