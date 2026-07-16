@@ -557,3 +557,31 @@ test "Quartz UI elements reuse the surface effect plane" {
     try std.testing.expect(!fill_element(&surface, .{ .x = 4, .y = 4, .w = 24, .h = 16 }, 6, draw.rgb(52, 52, 52)));
 
 }
+
+/// Hovered/interactive Quartz sub-element
+pub fn control_fill(surface: *const Surface, rect: Rect, radius: i32, tint: Color) bool {
+
+    if (!fill_element(surface, rect, radius, tint)) return false;
+
+    draw.round.stroke_round_rect_fast(surface, rect, radius, 1, control_border);
+
+    return true;
+
+}
+
+test "Quartz control fill adds a rim only over live material" {
+
+    var pixels = [_]Color{draw.transparent} ** (32 * 24);
+    var effect = [_]u8{0} ** (32 * 24 * 2);
+    var surface = Surface.from_pixels_format(&pixels, 32, 24, .alpha);
+
+    surface.effect = &effect;
+    surface.effect_stride = 64;
+
+    try std.testing.expect(control_fill(&surface, .{ .x = 4, .y = 4, .w = 24, .h = 16 }, 6, draw.rgb(52, 52, 52)));
+
+    surface.fill(draw.rgb(30, 30, 30));
+
+    try std.testing.expect(!control_fill(&surface, .{ .x = 4, .y = 4, .w = 24, .h = 16 }, 6, draw.rgb(52, 52, 52)));
+
+}

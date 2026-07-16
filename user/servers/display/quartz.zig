@@ -45,13 +45,13 @@ const coverage_prominent = make_material_coverage(lib.quartz.material_opacity(.p
 
 pub fn damage_halo(level: u8) i32 {
 
-    return max_refraction + chroma_radius + blur_radius(level) + 1;
+    return damage_halo_from_radius(frost_radius(level));
 
 }
 
 pub fn header_damage_halo(level: u8) i32 {
 
-    return header_shift_pixels + chroma_radius + blur_radius(level) + 1;
+    return header_halo_from_radius(frost_radius(level));
 
 }
 
@@ -611,6 +611,32 @@ pub const Renderer = struct {
 
     }
 
+    // Shared glass core: frost sample, rim clarity, material composite, cursor rim light. Both resolve passes route through this.
+    inline fn resolve_glass(self: *const Renderer, x: i32, y: i32, displacement: Displacement, coverage: u8, material: Color, original: Color, scene_rect: Rect, frost_bounds: Rect) Color {
+
+        const ray = self.ray_from_displacement(x, y, displacement);
+        var optical = self.sample_frost(ray.x, ray.y, frost_bounds);
+
+        if (ray.rim > chroma_gate) {
+
+            const sharp = self.trace_glass(ray, scene_rect);
+            const clarity = scale_byte(square_byte(ray.rim), rim_clarity);
+
+            optical = draw.mix(optical, sharp, clarity);
+
+        }
+
+        const glass = draw.composite_premultiplied(optical, material);
+        var resolved = draw.mix(original, glass, coverage);
+
+        const glow = self.highlight_amount(x, y, ray.rim);
+
+        if (glow > 0) resolved = draw.mix(resolved, highlight_color, scale_byte(glow, coverage));
+
+        return resolved;
+
+    }
+
     fn resolve_compact(self: *Renderer, back: *const Surface, foreground: *const Surface, content: Rect, visible: Rect, scene_rect: Rect, frost_bounds: Rect) void {
 
         var y = visible.y;
@@ -645,25 +671,8 @@ pub const Renderer = struct {
 
                     const coverage = self.coverage_table[opacity];
                     const displacement = optical_displacement(foreground, @intCast(source_x), @intCast(source_y));
-                    const ray = self.ray_from_displacement(x, y, displacement);
-                    var optical = self.sample_frost(ray.x, ray.y, frost_bounds);
 
-                    if (ray.rim > chroma_gate) {
-
-                        const sharp = self.trace_glass(ray, scene_rect);
-                        const clarity = scale_byte(square_byte(ray.rim), rim_clarity);
-
-                        optical = draw.mix(optical, sharp, clarity);
-
-                    }
-
-                    const glass = draw.composite_premultiplied(optical, source);
-
-                    resolved = draw.mix(original, glass, coverage);
-
-                    const glow = self.highlight_amount(x, y, ray.rim);
-
-                    if (glow > 0) resolved = draw.mix(resolved, highlight_color, scale_byte(glow, coverage));
+                    resolved = self.resolve_glass(x, y, displacement, coverage, source, original, scene_rect, frost_bounds);
 
                 }
 
@@ -714,24 +723,7 @@ pub const Renderer = struct {
                     .y = displacement_y,
 
                 }, coverage);
-                const ray = self.ray_from_displacement(x, y, displacement);
-                var optical = self.sample_frost(ray.x, ray.y, frost_bounds);
-
-                if (ray.rim > chroma_gate) {
-
-                    const sharp = self.trace_glass(ray, scene_rect);
-                    const clarity = scale_byte(square_byte(ray.rim), rim_clarity);
-
-                    optical = draw.mix(optical, sharp, clarity);
-
-                }
-
-                const glass = draw.composite_premultiplied(optical, material);
-                var resolved = draw.mix(original, glass, coverage);
-
-                const glow = self.highlight_amount(x, y, ray.rim);
-
-                if (glow > 0) resolved = draw.mix(resolved, highlight_color, scale_byte(glow, coverage));
+                const resolved = self.resolve_glass(x, y, displacement, coverage, material, original, scene_rect, frost_bounds);
 
                 self.lens[cache_index] = resolved;
                 back.pixels[destination_index] = resolved;
@@ -914,7 +906,12 @@ const HeaderProfile = struct {
 
         if (distance < 0 or distance >= self.bezel) return 0;
 
-        return self.components[@intCast(distance)];
+        const index: usize = @intCast(distance);
+
+        // self.bezel is a runtime load, so the guard above isn't comptime-foldable; bound against the array length so a comptime-constant distance can't trip a comptime index check.
+        if (index >= self.components.len) return 0;
+
+        return self.components[index];
 
     }
 
@@ -1058,19 +1055,6 @@ inline fn rim_amount(slope: i32) u8 {
 inline fn scale_byte(value: u8, amount: u8) u8 {
 
     return @intCast((@as(u32, value) * amount + 127) / 255);
-
-}
-
-inline fn average_frost_channel(sum: u32, count: u32) u8 {
-
-    return switch (count) {
-
-        7 => average_frost_channel_exact(sum, 7),
-        11 => average_frost_channel_exact(sum, 11),
-        17 => average_frost_channel_exact(sum, 17),
-        else => unreachable,
-
-    };
 
 }
 
@@ -1277,13 +1261,13 @@ test "Quartz wavelength dispersion bends blue farther than red" {
 
 test "Quartz frost average matches rounded division" {
 
-    for ([_]u32{ 7, 11, 17 }) |count| {
+    inline for ([_]u32{ 7, 11, 17 }) |count| {
 
         var sum: u32 = 0;
 
         while (sum <= count * 255) : (sum += 1) {
 
-            try std.testing.expectEqual(@as(u8, @intCast((sum + count / 2) / count)), average_frost_channel(sum, count));
+            try std.testing.expectEqual(@as(u8, @intCast((sum + count / 2) / count)), average_frost_channel_exact(sum, count));
 
         }
 
@@ -1408,7 +1392,10 @@ test "Quartz resolved output cache restores glass without recompositing" {
     back_pixels[0] = draw.rgb(1, 2, 3);
     renderer.blit_cached(&back, back.bounds());
 
-    try std.testing.expectEqual(draw.composite_premultiplied(frost_pixels[0], foreground_pixels[0]), resolved);
+    const glass = draw.composite_premultiplied(frost_pixels[0], foreground_pixels[0]);
+    const expected = draw.mix(draw.rgb(10, 20, 30), glass, coverage_regular[draw.pixel_alpha(foreground_pixels[0])]);
+
+    try std.testing.expectEqual(expected, resolved);
     try std.testing.expectEqual(resolved, back_pixels[0]);
 
 }
