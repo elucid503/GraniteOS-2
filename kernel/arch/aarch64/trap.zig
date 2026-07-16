@@ -34,7 +34,7 @@ pub const SyscallFrame = extern struct {
 
 // Kernel IRQ flow (06-kernel-ddd.md Section 7.4): claim, quiet the source, end-of-interrupt, then act.
 
-export fn kernel_irq() callconv(.c) void {
+pub fn kernel_irq() callconv(.c) void {
 
     const irq = gic.claim() orelse return;
 
@@ -72,7 +72,7 @@ export fn kernel_irq() callconv(.c) void {
 
 // EL0 system-call entry (06-kernel-ddd.md Section 12): hand the saved frame to the arch-independent dispatch, which unpacks the verb and arguments and writes the result back into the frame.
 
-export fn kernel_syscall(frame: *SyscallFrame) callconv(.c) void {
+pub fn kernel_syscall(frame: *SyscallFrame) callconv(.c) void {
 
     syscall.dispatch(frame);
 
@@ -80,7 +80,7 @@ export fn kernel_syscall(frame: *SyscallFrame) callconv(.c) void {
 
 // First EL0 FP/SIMD use: flag the thread, open CPACR, return its context so `fp_common` can load the vector file and retry.
 
-export fn kernel_fp_trap() callconv(.c) *context.Context {
+pub fn kernel_fp_trap() callconv(.c) *context.Context {
 
     const thread = scheduler.current_core().current.?;
 
@@ -91,7 +91,7 @@ export fn kernel_fp_trap() callconv(.c) *context.Context {
 
 }
 
-export fn kernel_trap(frame: *const TrapFrame) callconv(.c) noreturn {
+pub fn kernel_trap(frame: *const TrapFrame) callconv(.c) noreturn {
 
     // A userspace fault retires only its thread; EL1 faults still expose kernel corruption.
     if (frame.spsr & 0xf == 0) scheduler.exit_current();

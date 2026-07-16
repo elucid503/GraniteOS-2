@@ -3,7 +3,10 @@
 const std = @import("std");
 
 const arch = @import("arch/arch.zig");
+const boot_bridge = @import("arch/aarch64/boot.zig");
+const trap_bridge = @import("arch/aarch64/trap.zig");
 const config = @import("config.zig");
+const types = @import("types.zig");
 const console = @import("debug/console.zig");
 const panic_path = @import("debug/panic.zig");
 
@@ -31,6 +34,42 @@ const bytes_per_mib: u64 = 1024 * 1024;
 
 extern const __kernel_start: u8;
 extern const __kernel_end: u8;
+
+export fn kernel_boot(dtb_address: u64) callconv(.c) noreturn {
+
+    boot_bridge.kernel_boot(dtb_address);
+
+}
+
+export fn kernel_boot_secondary(record: *const types.BootRecord) callconv(.c) noreturn {
+
+    boot_bridge.kernel_boot_secondary(record);
+
+}
+
+export fn kernel_irq() callconv(.c) void {
+
+    trap_bridge.kernel_irq();
+
+}
+
+export fn kernel_syscall(frame: *trap_bridge.SyscallFrame) callconv(.c) void {
+
+    trap_bridge.kernel_syscall(frame);
+
+}
+
+export fn kernel_fp_trap() callconv(.c) *arch.Context {
+
+    return trap_bridge.kernel_fp_trap();
+
+}
+
+export fn kernel_trap(frame: *const trap_bridge.TrapFrame) callconv(.c) noreturn {
+
+    trap_bridge.kernel_trap(frame);
+
+}
 
 pub fn main(dtb_address: arch.PhysAddr) noreturn {
 

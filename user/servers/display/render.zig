@@ -37,6 +37,14 @@ pub fn draw_title_bar(back: *const Surface, window: *const Window, focused: bool
 
     draw.round.fill_round_top_rect(back, bar, corner_radius, color);
 
+    draw_title_bar_overlay(back, window, chrome, font);
+
+}
+
+pub fn draw_title_bar_overlay(back: *const Surface, window: *const Window, chrome: Chrome, font: ?*const Face) void {
+
+    const bar = window.title_bar();
+
     if (font) |face| {
 
         draw_title_text(back, window, bar, chrome, face);
@@ -229,7 +237,7 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
 
         const view = back.clipped(clip);
 
-        draw.round.matte_corner_edges(&view, left.x, left.y, masks.bl, side, matte);
+        if (surface.format == .xrgb) draw.round.matte_corner_edges(&view, left.x, left.y, masks.bl, side, matte);
         view.blit_masked(left.x, left.y, surface, left.translated(-content.x, -content.y), masks.bl, side, masks.bl_opaque);
 
     }
@@ -238,7 +246,7 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
 
         const view = back.clipped(clip);
 
-        draw.round.matte_corner_edges(&view, right.x, right.y, masks.br, side, matte);
+        if (surface.format == .xrgb) draw.round.matte_corner_edges(&view, right.x, right.y, masks.br, side, matte);
         view.blit_masked(right.x, right.y, surface, right.translated(-content.x, -content.y), masks.br, side, masks.br_opaque);
 
     }
@@ -292,7 +300,7 @@ fn blit_content_all_corners(back: *const Surface, surface: *const Surface, clip:
 
         const view = back.clipped(clip);
 
-        draw.round.matte_corner_edges(&view, corner.rect.x, corner.rect.y, corner.mask, side, matte);
+        if (surface.format == .xrgb) draw.round.matte_corner_edges(&view, corner.rect.x, corner.rect.y, corner.mask, side, matte);
         view.blit_masked(corner.rect.x, corner.rect.y, surface, corner.rect.translated(-content.x, -content.y), corner.mask, side, corner.opaque_rows);
 
     }

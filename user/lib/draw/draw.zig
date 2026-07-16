@@ -16,32 +16,70 @@ pub const vector = @import("vector.zig");
 /// 32-bit little-endian XRGB: blue in the low byte, the high byte ignored (proto.display.format_xrgb).
 pub const Color = u32;
 
-pub fn rgb(r: u8, g: u8, b: u8) Color {
+pub const Format = enum {
+
+    xrgb,
+    alpha,
+
+};
+
+pub inline fn rgb(r: u8, g: u8, b: u8) Color {
 
     return (@as(u32, r) << 16) | (@as(u32, g) << 8) | b;
 
 }
 
-pub fn red(color: Color) u8 {
+/// Premultiplied alpha that preserves zero in the high byte as legacy opaque XRGB.
+pub fn rgba(r: u8, g: u8, b: u8, a: u8) Color {
+
+    if (a == 255) return rgb(r, g, b);
+
+    return encode_alpha(
+        divide_255(@as(u32, r) * a),
+        divide_255(@as(u32, g) * a),
+        divide_255(@as(u32, b) * a),
+        a,
+    );
+
+}
+
+/// Applies alpha to an opaque XRGB color.
+pub fn with_alpha(color: Color, a: u8) Color {
+
+    return rgba(red(color), green(color), blue(color), a);
+
+}
+
+pub const transparent = rgba(0, 0, 0, 0);
+
+pub inline fn red(color: Color) u8 {
 
     return @intCast((color >> 16) & 0xff);
 
 }
 
-pub fn green(color: Color) u8 {
+pub inline fn green(color: Color) u8 {
 
     return @intCast((color >> 8) & 0xff);
 
 }
 
-pub fn blue(color: Color) u8 {
+pub inline fn blue(color: Color) u8 {
 
     return @intCast(color & 0xff);
 
 }
 
+pub inline fn pixel_alpha(color: Color) u8 {
+
+    const encoded: u8 = @truncate(color >> 24);
+
+    return if (encoded == 0) 255 else encoded - 1;
+
+}
+
 /// Channel-wise blend of `src` over `dst` at `alpha` (0..255), rounding to nearest.
-pub fn mix(dst: Color, src: Color, alpha: u8) Color {
+pub inline fn mix(dst: Color, src: Color, alpha: u8) Color {
 
     if (alpha == 0) return dst;
     if (alpha == 255) return src;
@@ -57,11 +95,89 @@ pub fn mix(dst: Color, src: Color, alpha: u8) Color {
 
 }
 
-fn divide_255(value: u32) u32 {
+inline fn divide_255(value: u32) u32 {
 
     const rounded = value + 128;
 
     return (rounded + (rounded >> 8)) >> 8;
+
+}
+
+inline fn encode_alpha(r: u32, g: u32, b: u32, a: u8) Color {
+
+    const encoded: u32 = if (a == 255) 0 else @as(u32, a) + 1;
+    const red_value: u32 = @min(r, 255);
+    const green_value: u32 = @min(g, 255);
+    const blue_value: u32 = @min(b, 255);
+
+    return (encoded << 24) | (red_value << 16) | (green_value << 8) | blue_value;
+
+}
+
+inline fn scale(value: u8, amount: u8) u32 {
+
+    return divide_255(@as(u32, value) * amount);
+
+}
+
+inline fn over_alpha(dst: Color, src: Color, coverage: u8) Color {
+
+    const src_alpha: u8 = @intCast(scale(pixel_alpha(src), coverage));
+
+    if (src_alpha == 0) return dst;
+    if (src_alpha == 255) return src;
+
+    const inverse: u8 = 255 - src_alpha;
+    const out_alpha: u8 = @intCast(@as(u32, src_alpha) + scale(pixel_alpha(dst), inverse));
+
+    const src_r = scale(red(src), coverage);
+    const src_g = scale(green(src), coverage);
+    const src_b = scale(blue(src), coverage);
+
+    return encode_alpha(
+        src_r + scale(red(dst), inverse),
+        src_g + scale(green(dst), inverse),
+        src_b + scale(blue(dst), inverse),
+        out_alpha,
+    );
+
+}
+
+/// Composites a premultiplied-alpha color over opaque XRGB with optional coverage.
+pub inline fn composite_over(dst: Color, src: Color, coverage: u8) Color {
+
+    if (coverage == 255) return composite_premultiplied(dst, src);
+
+    const src_alpha: u8 = @intCast(scale(pixel_alpha(src), coverage));
+
+    if (src_alpha == 0) return dst;
+    if (src_alpha == 255) return rgb(red(src), green(src), blue(src));
+
+    const inverse: u8 = 255 - src_alpha;
+
+    return rgb(
+        @intCast(@min(255, scale(red(src), coverage) + scale(red(dst), inverse))),
+        @intCast(@min(255, scale(green(src), coverage) + scale(green(dst), inverse))),
+        @intCast(@min(255, scale(blue(src), coverage) + scale(blue(dst), inverse))),
+    );
+
+}
+
+/// Composites a premultiplied-alpha color over opaque XRGB at full coverage.
+pub inline fn composite_premultiplied(dst: Color, src: Color) Color {
+
+    const opacity = pixel_alpha(src);
+
+    if (opacity == 0) return dst;
+    if (opacity == 255) return rgb(red(src), green(src), blue(src));
+
+    const inverse: u8 = 255 - opacity;
+
+    return rgb(
+        @intCast(@min(255, @as(u32, red(src)) + scale(red(dst), inverse))),
+        @intCast(@min(255, @as(u32, green(src)) + scale(green(dst), inverse))),
+        @intCast(@min(255, @as(u32, blue(src)) + scale(blue(dst), inverse))),
+    );
 
 }
 
@@ -183,26 +299,40 @@ pub const Rect = struct {
 pub const Surface = struct {
 
     pixels: [*]u32,
+    effect: ?[*]u8,
+
+    format: Format,
 
     width: u32,
     height: u32,
 
     // In pixels, not bytes; rows may be padded (the scanout stride).
     stride: u32,
+    effect_stride: u32,
 
     // Every primitive clips to this rect as well as the surface bounds, so callers can scope painting to a pane.
     clip: Rect,
 
     pub fn from_base(base: usize, width: u32, height: u32, stride_bytes: u32) Surface {
 
+        return from_base_format(base, width, height, stride_bytes, .xrgb);
+
+    }
+
+    pub fn from_base_format(base: usize, width: u32, height: u32, stride_bytes: u32, format: Format) Surface {
+
         return .{
 
             .pixels = @ptrFromInt(base),
+            .effect = null,
+
+            .format = format,
 
             .width = width,
             .height = height,
 
             .stride = stride_bytes / @sizeOf(u32),
+            .effect_stride = 0,
 
             .clip = .{ .x = 0, .y = 0, .w = @intCast(width), .h = @intCast(height) },
 
@@ -212,14 +342,35 @@ pub const Surface = struct {
 
     pub fn from_pixels(pixels: [*]u32, width: u32, height: u32) Surface {
 
+        return from_pixels_format(pixels, width, height, .xrgb);
+
+    }
+
+    pub fn from_base_effect(base: usize, width: u32, height: u32, stride_bytes: u32, effect_base: usize, effect_stride: u32) Surface {
+
+        var surface = from_base_format(base, width, height, stride_bytes, .alpha);
+
+        surface.effect = @ptrFromInt(effect_base);
+        surface.effect_stride = effect_stride;
+
+        return surface;
+
+    }
+
+    pub fn from_pixels_format(pixels: [*]u32, width: u32, height: u32, format: Format) Surface {
+
         return .{
 
             .pixels = pixels,
+            .effect = null,
+
+            .format = format,
 
             .width = width,
             .height = height,
 
             .stride = width,
+            .effect_stride = 0,
 
             .clip = .{ .x = 0, .y = 0, .w = @intCast(width), .h = @intCast(height) },
 
@@ -277,6 +428,40 @@ pub const Surface = struct {
 
     }
 
+    /// Composites a premultiplied color over a rectangle instead of replacing its pixels.
+    pub fn composite_rect(self: *const Surface, rect: Rect, color: Color) void {
+
+        const opacity = pixel_alpha(color);
+
+        if (opacity == 0) return;
+        if (opacity == 255) return self.fill_rect(rect, color);
+
+        const clipped_rect = rect.intersect(self.paint_bounds());
+
+        if (clipped_rect.is_empty()) return;
+
+        var y = clipped_rect.y;
+
+        while (y < clipped_rect.y + clipped_rect.h) : (y += 1) {
+
+            const base = @as(u32, @intCast(y)) * self.stride;
+            var x = clipped_rect.x;
+
+            while (x < clipped_rect.x + clipped_rect.w) : (x += 1) {
+
+                const index = base + @as(u32, @intCast(x));
+
+                self.pixels[index] = if (self.format == .alpha)
+                    over_alpha(self.pixels[index], color, 255)
+                else
+                    composite_over(self.pixels[index], color, 255);
+
+            }
+
+        }
+
+    }
+
     pub fn stroke_rect(self: *const Surface, rect: Rect, width: i32, color: Color) void {
 
         if (width <= 0 or rect.w <= 0 or rect.h <= 0) return;
@@ -298,6 +483,29 @@ pub const Surface = struct {
         const clipped_rect = rect.intersect(self.paint_bounds());
 
         if (clipped_rect.is_empty()) return;
+
+        if (self.format == .alpha) {
+
+            var y = clipped_rect.y;
+
+            while (y < clipped_rect.y + clipped_rect.h) : (y += 1) {
+
+                const base = @as(u32, @intCast(y)) * self.stride;
+                var x = clipped_rect.x;
+
+                while (x < clipped_rect.x + clipped_rect.w) : (x += 1) {
+
+                    const index = base + @as(u32, @intCast(x));
+
+                    self.pixels[index] = over_alpha(self.pixels[index], color, alpha);
+
+                }
+
+            }
+
+            return;
+
+        }
 
         var y = clipped_rect.y;
 
@@ -346,7 +554,10 @@ pub const Surface = struct {
 
         const index = @as(u32, @intCast(y)) * self.stride + @as(u32, @intCast(x));
 
-        self.pixels[index] = mix(self.pixels[index], color, alpha);
+        self.pixels[index] = if (self.format == .alpha)
+            over_alpha(self.pixels[index], color, alpha)
+        else
+            mix(self.pixels[index], color, alpha);
 
     }
 
@@ -384,6 +595,22 @@ pub const Surface = struct {
 
         const base = @as(u32, @intCast(y)) * self.stride + @as(u32, @intCast(start_x));
         const row = coverage[first .. first + count];
+
+        if (self.format == .alpha) {
+
+            for (row, 0..) |row_alpha, index| {
+
+                if (row_alpha == 0) continue;
+
+                const at = base + @as(u32, @intCast(index));
+
+                self.pixels[at] = over_alpha(self.pixels[at], color, row_alpha);
+
+            }
+
+            return;
+
+        }
 
         // Long solid runs (shape interiors) use memset; short/AA rows skip the probe.
         if (count >= 32 and row[0] == 255) {
@@ -473,6 +700,30 @@ pub const Surface = struct {
         from.y += clipped_to.y - to.y;
         to = clipped_to;
 
+        if (self.format == .xrgb and src.format == .alpha) {
+
+            var row: u32 = 0;
+
+            while (row < to.h) : (row += 1) {
+
+                const src_start = (@as(u32, @intCast(from.y)) + row) * src.stride + @as(u32, @intCast(from.x));
+                const dst_start = (@as(u32, @intCast(to.y)) + row) * self.stride + @as(u32, @intCast(to.x));
+                var index: u32 = 0;
+
+                while (index < to.w) : (index += 1) {
+
+                    const source = src.pixels[src_start + index];
+
+                    self.pixels[dst_start + index] = composite_over(self.pixels[dst_start + index], source, 255);
+
+                }
+
+            }
+
+            return;
+
+        }
+
         var row: u32 = 0;
 
         while (row < to.h) : (row += 1) {
@@ -534,7 +785,7 @@ pub const Surface = struct {
 
             }
 
-            if (solid_row and active_w == row_w) {
+            if (solid_row and active_w == row_w and !(self.format == .xrgb and src.format == .alpha)) {
 
                 @memcpy(self.pixels[dst_start .. dst_start + row_w], src.pixels[src_start .. src_start + row_w]);
 
@@ -551,14 +802,31 @@ pub const Surface = struct {
                 if (alpha == 0) continue;
 
                 const at = dst_start + index;
+                const source = src.pixels[src_start + index];
+
+                if (self.format == .alpha) {
+
+                    self.pixels[at] = over_alpha(self.pixels[at], source, alpha);
+
+                    continue;
+
+                }
+
+                if (src.format == .alpha) {
+
+                    self.pixels[at] = composite_over(self.pixels[at], source, alpha);
+
+                    continue;
+
+                }
 
                 if (alpha == 255) {
 
-                    self.pixels[at] = src.pixels[src_start + index];
+                    self.pixels[at] = source;
 
                 } else {
 
-                    self.pixels[at] = mix(self.pixels[at], src.pixels[src_start + index], alpha);
+                    self.pixels[at] = mix(self.pixels[at], source, alpha);
 
                 }
 
@@ -685,6 +953,53 @@ test "divide-free mix matches rounded scalar division" {
         }
 
     }
+
+}
+
+test "alpha surface preserves coverage and composites over XRGB" {
+
+    var quartz_pixels = [_]u32{
+
+        transparent,
+
+    };
+
+    var back_pixels = [_]u32{
+
+        rgb(20, 40, 60),
+
+    };
+
+    const quartz = Surface.from_pixels_format(&quartz_pixels, 1, 1, .alpha);
+    const background = Surface.from_pixels(&back_pixels, 1, 1);
+
+    quartz.blend_pixel(0, 0, rgb(220, 120, 40), 128);
+
+    try testing.expectEqual(@as(u8, 128), pixel_alpha(quartz_pixels[0]));
+
+    background.blit(0, 0, &quartz, quartz.bounds());
+
+    try testing.expectEqual(rgb(120, 80, 50), back_pixels[0]);
+
+}
+
+test "premultiplied rectangle composites over existing alpha" {
+
+    var pixels = [_]u32{
+
+        transparent,
+
+    };
+
+    const surface = Surface.from_pixels_format(&pixels, 1, 1, .alpha);
+
+    surface.fill(with_alpha(rgb(255, 0, 0), 128));
+    surface.composite_rect(surface.bounds(), rgba(255, 255, 255, 128));
+
+    try testing.expectEqual(@as(u8, 192), pixel_alpha(pixels[0]));
+    try testing.expectEqual(@as(u8, 192), red(pixels[0]));
+    try testing.expectEqual(@as(u8, 128), green(pixels[0]));
+    try testing.expectEqual(@as(u8, 128), blue(pixels[0]));
 
 }
 

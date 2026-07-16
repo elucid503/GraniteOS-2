@@ -21,6 +21,7 @@ pub const gfx = @import("draw/draw.zig");
 pub const ui = @import("ui/ui.zig");
 pub const file_picker = @import("ui/file_picker.zig");
 pub const prefs = @import("gfx/prefs.zig");
+pub const quartz = @import("gfx/quartz.zig");
 pub const cursor = @import("gfx/cursor.zig");
 pub const icons = @import("gfx/icons.zig");
 pub const desktop = @import("gfx/desktop.zig");

@@ -131,6 +131,80 @@ pub fn fill_round_rect(surface: *const Surface, rect: Rect, radius: i32, color: 
 
 }
 
+pub fn fill_round_rect_alpha(surface: *const Surface, rect: Rect, radius: i32, color: Color, opacity: u8) void {
+
+    if (rect.w <= 0 or rect.h <= 0 or opacity == 0) return;
+    if (opacity == 255) return fill_round_rect(surface, rect, radius, color);
+
+    const r = clamp_radius(rect, radius);
+
+    if (r <= 1) {
+
+        surface.fill_rect_alpha(rect, color, opacity);
+
+        return;
+
+    }
+
+    const masks = masks_for(r) orelse {
+
+        fill_round_rect_slow(surface, rect, radius, draw_mod.with_alpha(color, opacity));
+
+        return;
+
+    };
+
+    surface.fill_rect_alpha(.{
+
+        .x = rect.x + r,
+        .y = rect.y,
+        .w = rect.w - 2 * r,
+        .h = rect.h,
+
+    }, color, opacity);
+
+    surface.fill_rect_alpha(.{
+
+        .x = rect.x,
+        .y = rect.y + r,
+        .w = r,
+        .h = rect.h - 2 * r,
+
+    }, color, opacity);
+
+    surface.fill_rect_alpha(.{
+
+        .x = rect.x + rect.w - r,
+        .y = rect.y + r,
+        .w = r,
+        .h = rect.h - 2 * r,
+
+    }, color, opacity);
+
+    const side: u32 = @intCast(r);
+
+    blend_corner_alpha(surface, rect.x, rect.y, masks.tl, side, color, opacity);
+    blend_corner_alpha(surface, rect.x + rect.w - r, rect.y, masks.tr, side, color, opacity);
+    blend_corner_alpha(surface, rect.x, rect.y + rect.h - r, masks.bl, side, color, opacity);
+    blend_corner_alpha(surface, rect.x + rect.w - r, rect.y + rect.h - r, masks.br, side, color, opacity);
+
+}
+
+fn blend_corner_alpha(surface: *const Surface, x: i32, y: i32, mask: []const u8, side: u32, color: Color, opacity: u8) void {
+
+    var coverage: [max_radius * max_radius]u8 = undefined;
+    const area: usize = @intCast(side * side);
+
+    for (mask[0..area], 0..) |value, index| {
+
+        coverage[index] = @intCast((@as(u16, value) * @as(u16, opacity) + 127) / 255);
+
+    }
+
+    surface.blend_coverage(x, y, coverage[0..area], side, side, color);
+
+}
+
 /// Fill a rectangle with only its top two corners rounded (title bars, tabs docked to an edge).
 pub fn fill_round_top_rect(surface: *const Surface, rect: Rect, radius: i32, color: Color) void {
 
@@ -162,7 +236,7 @@ pub fn stroke_round_rect(surface: *const Surface, rect: Rect, radius: i32, width
 
     if (rect.w <= 0 or rect.h <= 0 or width <= 0) return;
 
-    // Analytic border ring avoids the 1px rim approximation of stroke_round_rect_fast.
+    // The analytic path handles arbitrary widths; the cached path is tuned for one-pixel frames.
     var shape = Path{};
 
     stroke.round_rect_border(&shape, path_mod.from_px(rect.x), path_mod.from_px(rect.y), path_mod.from_px(rect.w), path_mod.from_px(rect.h), path_mod.from_px(radius), path_mod.from_px(width));
@@ -186,10 +260,10 @@ pub fn stroke_round_rect_fast(surface: *const Surface, rect: Rect, radius: i32, 
 
     }
 
-    surface.fill_rect(.{ .x = rect.x + r, .y = rect.y, .w = rect.w - 2 * r, .h = band }, color);
-    surface.fill_rect(.{ .x = rect.x + r, .y = rect.y + rect.h - band, .w = rect.w - 2 * r, .h = band }, color);
-    surface.fill_rect(.{ .x = rect.x, .y = rect.y + r, .w = band, .h = rect.h - 2 * r }, color);
-    surface.fill_rect(.{ .x = rect.x + rect.w - band, .y = rect.y + r, .w = band, .h = rect.h - 2 * r }, color);
+    surface.composite_rect(.{ .x = rect.x + r, .y = rect.y, .w = rect.w - 2 * r, .h = band }, color);
+    surface.composite_rect(.{ .x = rect.x + r, .y = rect.y + rect.h - band, .w = rect.w - 2 * r, .h = band }, color);
+    surface.composite_rect(.{ .x = rect.x, .y = rect.y + r, .w = band, .h = rect.h - 2 * r }, color);
+    surface.composite_rect(.{ .x = rect.x + rect.w - band, .y = rect.y + r, .w = band, .h = rect.h - 2 * r }, color);
 
     if (masks_for(r)) |masks| {
 
@@ -244,14 +318,6 @@ fn has_zero_neighbor(fill: []const u8, side: u32, row: u32, col: u32) bool {
     if (col + 1 < side and fill[row * side + col + 1] == 0) return true;
 
     return false;
-
-}
-
-fn fill_edge(fill: []const u8, side: u32, row: u32, col: u32) bool {
-
-    if (fill[row * side + col] == 0) return false;
-
-    return has_zero_neighbor(fill, side, row, col);
 
 }
 
@@ -355,6 +421,7 @@ fn build_masks(slot: *Slot, r: i32) void {
     const corner_cells = corner * corner;
 
     var coverage: [4 * max_radius * max_radius]u8 = [_]u8{0} ** (4 * max_radius * max_radius);
+    var ring: [4 * max_radius * max_radius]u8 = [_]u8{0} ** (4 * max_radius * max_radius);
 
     var path = Path{};
 
@@ -368,10 +435,26 @@ fn build_masks(slot: *Slot, r: i32) void {
     mark_opaque_rows(slot.bl[0..corner_cells], corner, slot.bl_opaque[0..corner]);
     mark_opaque_rows(slot.br[0..corner_cells], corner, slot.br_opaque[0..corner]);
 
-    extract_rim(slot.tl[0..corner_cells], corner, slot.rim_tl[0..corner_cells]);
-    extract_rim(slot.tr[0..corner_cells], corner, slot.rim_tr[0..corner_cells]);
-    extract_rim(slot.bl[0..corner_cells], corner, slot.rim_bl[0..corner_cells]);
-    extract_rim(slot.br[0..corner_cells], corner, slot.rim_br[0..corner_cells]);
+    if (r > 1) {
+
+        var inner_path = Path{};
+
+        inner_path.add_round_rect(path_mod.from_px(1), path_mod.from_px(1), path_mod.from_px(2 * r - 2), path_mod.from_px(2 * r - 2), path_mod.from_px(r - 1));
+        raster.fill_coverage(&inner_path, ring[0..cells], side, side, 0, 0);
+
+        for (coverage[0..cells], ring[0..cells]) |outer, *inside| {
+
+            inside.* = outer -| inside.*;
+
+        }
+
+    } else {
+
+        @memcpy(ring[0..cells], coverage[0..cells]);
+
+    }
+
+    extract_quadrants(ring[0..cells], side, r, slot.rim_tl[0..], slot.rim_tr[0..], slot.rim_bl[0..], slot.rim_br[0..]);
 
     slot.ready = true;
 
@@ -393,30 +476,6 @@ fn mark_opaque_rows(mask: []const u8, side: u32, rows: []bool) void {
                 break;
 
             }
-
-        }
-
-    }
-
-}
-
-fn extract_rim(fill: []const u8, side: u32, rim: []u8) void {
-
-    const area = side * side;
-
-    @memset(rim[0..area], 0);
-
-    var row: u32 = 0;
-
-    while (row < side) : (row += 1) {
-
-        var col: u32 = 0;
-
-        while (col < side) : (col += 1) {
-
-            if (!fill_edge(fill, side, row, col)) continue;
-
-            rim[row * side + col] = fill[row * side + col];
 
         }
 
@@ -485,6 +544,54 @@ test "fast round-top fill matches the slow path" {
     fill_round_top_rect_slow(&slow_surface, rect, 8, 0x445566);
 
     try testing.expectEqualSlices(u32, &slow_buf, &fast_buf);
+
+}
+
+test "rounded alpha overlay paints its center once" {
+
+    var pixels: [16 * 16]u32 = [_]u32{
+
+        draw_mod.transparent,
+
+    } ** (16 * 16);
+
+    const surface = Surface.from_pixels_format(&pixels, 16, 16, .alpha);
+    const rect = Rect{
+
+        .x = 2,
+        .y = 2,
+        .w = 12,
+        .h = 12,
+
+    };
+
+    fill_round_rect_alpha(&surface, rect, 4, draw_mod.rgb(255, 255, 255), 128);
+
+    try testing.expectEqual(@as(u8, 128), draw_mod.pixel_alpha(pixels[8 * 16 + 8]));
+    try testing.expectEqual(@as(u8, 0), draw_mod.pixel_alpha(pixels[0]));
+
+}
+
+test "cached one-pixel rounded frame matches the analytic border" {
+
+    var cached_pixels: [64 * 64]u32 = [_]u32{0} ** (64 * 64);
+    var analytic_pixels: [64 * 64]u32 = [_]u32{0} ** (64 * 64);
+
+    const cached = Surface.from_pixels(&cached_pixels, 64, 64);
+    const analytic = Surface.from_pixels(&analytic_pixels, 64, 64);
+    const rect = Rect{
+
+        .x = 7,
+        .y = 9,
+        .w = 46,
+        .h = 38,
+
+    };
+
+    stroke_round_rect_fast(&cached, rect, 12, 1, 0xffffff);
+    stroke_round_rect(&analytic, rect, 12, 1, 0xffffff);
+
+    try testing.expectEqualSlices(u32, &analytic_pixels, &cached_pixels);
 
 }
 

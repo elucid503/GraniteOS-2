@@ -58,6 +58,28 @@ pub const Chrome = struct {
 pub var active_theme: ThemeId = .mono;
 pub var tz_offset_minutes: i32 = 0;
 
+pub const QuartzLevel = enum(u8) {
+
+    off = 0,
+    light = 1,
+    medium = 2,
+    dark = 3,
+
+};
+
+pub const quartz_level_count: usize = 4;
+
+pub const quartz_level_names = [_][]const u8{
+
+    "Off",
+    "Light",
+    "Medium",
+    "Dark",
+
+};
+
+pub var quartz_level: QuartzLevel = .medium;
+
 /// Display unit for weather temperatures (stored in Celsius from the API).
 pub const TempUnit = enum(u8) {
 
@@ -319,11 +341,12 @@ pub fn save() void {
 
     var buffer: [160]u8 = undefined;
     const stamp = loaded_generation +% 1;
-    const text = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\ntemp={d}\nstamp={d}\n", .{
+    const text = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\ntemp={d}\nquartz={d}\nstamp={d}\n", .{
 
         @intFromEnum(active_theme),
         tz_offset_minutes,
         @intFromEnum(temp_unit),
+        @intFromEnum(quartz_level),
         stamp,
 
     }) catch return;
@@ -663,6 +686,12 @@ fn parse_config(text: []const u8) void {
             const value = std.fmt.parseInt(u8, line[5..], 10) catch continue;
 
             if (value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(value);
+
+        } else if (std.mem.startsWith(u8, line, "quartz=")) {
+
+            const value = std.fmt.parseInt(u8, line[7..], 10) catch continue;
+
+            if (value < quartz_level_count) quartz_level = @enumFromInt(value);
 
         }
 

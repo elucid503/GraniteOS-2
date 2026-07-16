@@ -10,7 +10,8 @@ const default_disk_mib = 64;
 
 pub fn build(b: *std.Build) void {
 
-    const optimize = b.standardOptimizeOption(.{});
+    const release = b.option(bool, "release", "Build optimized guest binaries") orelse true;
+    const optimize: std.builtin.OptimizeMode = if (release) .ReleaseFast else .Debug;
     const test_build = b.option(bool, "test", "Exit QEMU via semihosting on halt/panic") orelse false;
     const smp = b.option(u64, "smp", "Core count for the QEMU run steps") orelse 4;
     const memory = b.option(u64, "memory", "RAM in MiB for the QEMU run steps") orelse 512;

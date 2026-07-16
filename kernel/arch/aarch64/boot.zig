@@ -4,7 +4,7 @@ const mmu = @import("mmu.zig");
 
 const types = @import("../../types.zig");
 
-export fn kernel_boot(dtb: u64) callconv(.c) noreturn {
+pub fn kernel_boot(dtb: u64) callconv(.c) noreturn {
 
     mmu.enable_boot_mapping(dtb);
 
@@ -12,7 +12,7 @@ export fn kernel_boot(dtb: u64) callconv(.c) noreturn {
 
 }
 
-export fn kernel_boot_secondary(record: *const types.BootRecord) callconv(.c) noreturn {
+pub fn kernel_boot_secondary(record: *const types.BootRecord) callconv(.c) noreturn {
 
     mmu.enable_secondary();
 

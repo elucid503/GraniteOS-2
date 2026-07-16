@@ -153,7 +153,7 @@ pub const Connection = struct {
 
         if (reply.handle_count < 1) return error.Invalid;
 
-        var window = try Window.from_reply(self, reply.data[1], &reply);
+        var window = try Window.from_reply(self, reply.data[1], flags, &reply);
 
         register(&window);
 
@@ -186,12 +186,13 @@ pub const Window = struct {
 
     connection: *Connection,
     id: u64,
+    flags: u64,
 
     surface: gfx.Surface,
     region: Handle,
     base: usize,
 
-    fn from_reply(connection: *Connection, id: u64, reply: *const ipc.Message) Error!Window {
+    fn from_reply(connection: *Connection, id: u64, flags: u64, reply: *const ipc.Message) Error!Window {
 
         const width: u32 = @intCast(reply.data[2] >> 32);
         const height: u32 = @truncate(reply.data[2]);
@@ -199,13 +200,19 @@ pub const Window = struct {
 
         const region = reply.handles[0].handle;
         const base = try sys.map(cap.self_space, region, 0, sys.read | sys.write);
+        const quartz = flags & proto.window.flag_quartz != 0;
+        const surface = if (quartz)
+            gfx.Surface.from_base_effect(base, width, height, stride, base + @as(usize, stride) * height, width * 2)
+        else
+            gfx.Surface.from_base(base, width, height, stride);
 
         return .{
 
             .connection = connection,
             .id = id,
+            .flags = flags,
 
-            .surface = gfx.Surface.from_base(base, width, height, stride),
+            .surface = surface,
             .region = region,
             .base = base,
 
@@ -264,7 +271,7 @@ pub const Window = struct {
         unregister(self.id);
         release_surface(self.region, self.base);
 
-        const replaced = try Window.from_reply(self.connection, self.id, &reply);
+        const replaced = try Window.from_reply(self.connection, self.id, self.flags, &reply);
 
         self.surface = replaced.surface;
         self.region = replaced.region;

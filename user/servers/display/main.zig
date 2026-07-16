@@ -13,6 +13,7 @@ const sys = lib.sys;
 
 const manager_module = @import("manager.zig");
 const damage_module = @import("damage.zig");
+const quartz_effect = @import("quartz.zig");
 const render = @import("render.zig");
 const surfaces_module = @import("surfaces.zig");
 
@@ -77,6 +78,7 @@ var back: draw.Surface = undefined;
 
 var manager = Manager{};
 var surfaces = surfaces_module.Store(manager_module.max_windows){};
+var quartz_renderer = quartz_effect.Renderer{};
 
 // Per-client event rings, keyed by the badge the name service minted for the client.
 
@@ -246,6 +248,8 @@ fn load_compositor_theme() void {
     theme.chrome = chrome.chrome;
     theme.border = chrome.border;
 
+    quartz_renderer.invalidate();
+
 }
 
 fn chrome_colors() render.Chrome {
@@ -367,11 +371,13 @@ fn build_back_buffer() !void {
     if (back_base != 0) sys.unmap(cap.self_space, back_base) catch {};
     if (back_region != 0) sys.close(back_region) catch {};
 
-    const bytes = surfaces_module.surface_bytes(screen_width, screen_height) orelse return error.Invalid;
+    const bytes = surfaces_module.surface_bytes(screen_width, screen_height, .xrgb) orelse return error.Invalid;
 
     back_region = try sys.create(.region, bytes, cap.memory);
     back_base = try sys.map(cap.self_space, back_region, 0, sys.read | sys.write);
     back = draw.Surface.from_base(back_base, screen_width, screen_height, screen_width * 4);
+
+    quartz_renderer.resize(screen_width, screen_height) catch quartz_renderer.release();
 
 }
 
@@ -528,7 +534,7 @@ fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
 
     resize_damage[slot] = Rect.empty;
 
-    _ = surfaces.allocate(slot, window.width, window.height) catch {
+    _ = surfaces.allocate(slot, window.width, window.height, window_format(window)) catch {
 
         _ = manager.destroy(window.id);
 
@@ -537,7 +543,7 @@ fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
     };
 
     notify_focus(previous_focus, window.id);
-    add_damage(window.frame());
+    add_window_damage(window, window.frame());
     publish_list();
 
     out.data[1] = window.id;
@@ -560,7 +566,7 @@ fn present(badge: u64, in: *const Message) i64 {
 
     if (!resize_damage[slot].is_empty()) {
 
-        add_damage(resize_damage[slot]);
+        add_window_damage(window, resize_damage[slot]);
         resize_damage[slot] = Rect.empty;
 
     }
@@ -575,7 +581,7 @@ fn present(badge: u64, in: *const Message) i64 {
 
     };
 
-    add_damage(local.translated(content.x, content.y).intersect(content));
+    add_surface_damage(window, local.translated(content.x, content.y).intersect(content));
 
     return 0;
 
@@ -650,7 +656,7 @@ fn release_grabs(id: u32) void {
 
         resize_id = 0;
 
-        add_damage(resize_outline);
+        add_overlay_damage(resize_outline);
 
         resize_outline = Rect.empty;
 
@@ -702,7 +708,7 @@ fn resize_window(badge: u64, in: *const Message, out: *Message) i64 {
 
     resize_damage[slot] = resize_damage[slot].cover(changed);
 
-    _ = surfaces.allocate(slot, window.width, window.height) catch return -3;
+    _ = surfaces.allocate(slot, window.width, window.height, window_format(window)) catch return -3;
 
     out.data[1] = in.data[1];
     out.data[2] = lib.window.pack_pair(window.width, window.height);
@@ -776,10 +782,11 @@ fn move_window(badge: u64, in: *const Message) i64 {
 
     const x: i32 = @intCast(@as(u32, @truncate(in.data[2] >> 32)));
     const y: i32 = @intCast(@as(u32, @truncate(in.data[2])));
+    const before = window.frame();
 
-    if (manager.move(window.id, x, y)) |moved| {
+    if (manager.move(window.id, x, y) != null) {
 
-        add_damage(moved);
+        add_movement_damage(window, before, window.frame());
         publish_list();
 
     }
@@ -1013,9 +1020,9 @@ fn handle_pointer_move() void {
 
         // Redraw the band spanning the old and new outline; the next composite restrokes it.
 
-        add_damage(resize_outline);
+        add_overlay_damage(resize_outline);
         resize_outline = proposed_frame(window);
-        add_damage(resize_outline);
+        add_overlay_damage(resize_outline);
 
         return;
 
@@ -1023,7 +1030,21 @@ fn handle_pointer_move() void {
 
     if (drag_id != 0) {
 
-        if (manager.move(drag_id, pointer_x - drag_dx, pointer_y - drag_dy)) |moved| add_damage(moved);
+        const window = manager.by_id(drag_id) orelse {
+
+            drag_id = 0;
+
+            return;
+
+        };
+
+        const before = window.frame();
+
+        if (manager.move(drag_id, pointer_x - drag_dx, pointer_y - drag_dy) != null) {
+
+            add_movement_damage(window, before, window.frame());
+
+        }
 
         return;
 
@@ -1103,7 +1124,7 @@ fn handle_button_down(event: events.Event) void {
             resize_dy = frame.y + frame.h - pointer_y;
             resize_outline = frame;
 
-            add_damage(resize_outline);
+            add_overlay_damage(resize_outline);
 
         },
 
@@ -1130,6 +1151,7 @@ fn apply_toggle_maximize(window: *Window) void {
         }
 
         publish_list();
+
     }
 
 }
@@ -1195,7 +1217,7 @@ fn commit_resize() void {
 
     resize_id = 0;
 
-    add_damage(resize_outline);
+    add_overlay_damage(resize_outline);
     resize_outline = Rect.empty;
 
     const window = manager.by_id(id) orelse return;
@@ -1365,7 +1387,142 @@ fn handle_mode_change() void {
 
 fn add_damage(rect: Rect) void {
 
+    const clipped = rect.intersect(screen_bounds());
+
+    if (clipped.is_empty()) return;
+
+    const halo = quartz_halo(clipped);
+    const affected = if (halo > 0) clipped.inset(-halo).intersect(screen_bounds()) else clipped;
+
+    quartz_renderer.invalidate_region(affected);
+    damage.add(affected);
+
+}
+
+fn add_surface_damage(window: *const Window, rect: Rect) void {
+
+    add_window_damage(window, rect);
+
+}
+
+fn add_overlay_damage(rect: Rect) void {
+
     damage.add(rect.intersect(screen_bounds()));
+
+}
+
+fn add_window_damage(window: *const Window, rect: Rect) void {
+
+    const clipped = rect.intersect(screen_bounds());
+
+    if (clipped.is_empty()) return;
+
+    const halo = quartz_halo_above(clipped, window);
+    const affected = if (halo > 0) clipped.inset(-halo).intersect(screen_bounds()) else clipped;
+
+    quartz_renderer.invalidate_region(affected);
+    damage.add(affected);
+
+}
+
+fn add_movement_damage(window: *const Window, before: Rect, after: Rect) void {
+
+    const covered = before.cover(after);
+
+    if (rect_area(covered) <= rect_area(before) + rect_area(after)) {
+
+        add_window_damage(window, covered);
+
+        return;
+
+    }
+
+    add_window_damage(window, before);
+    add_window_damage(window, after);
+
+}
+
+fn quartz_halo(rect: Rect) i32 {
+
+    return quartz_halo_above(rect, null);
+
+}
+
+fn quartz_halo_above(rect: Rect, source: ?*const Window) i32 {
+
+    if (!quartz_renderer.ready() or lib.prefs.quartz_level == .off) return 0;
+
+    const max_layers: i32 = 3;
+    var first: usize = 0;
+
+    if (source) |changed| {
+
+        while (first < manager.count) : (first += 1) {
+
+            if (manager.stacked(first).id == changed.id) {
+
+                first += 1;
+
+                break;
+
+            }
+
+        }
+
+    }
+
+    var index = first;
+
+    while (index < manager.count) : (index += 1) {
+
+        const window = manager.stacked(index);
+
+        if (window.flags & proto.window.flag_minimized != 0) continue;
+        if (window.flags & proto.window.flag_quartz != 0) continue;
+        if (!covers(window.content(), rect)) continue;
+        if (!surfaces.covers(slot_of(window), window.content(), rect)) continue;
+
+        first = index + 1;
+
+    }
+
+    var affected = rect;
+    var layers: i32 = 0;
+    var halo: i32 = 0;
+
+    index = first;
+
+    while (index < manager.count) : (index += 1) {
+
+        const window = manager.stacked(index);
+
+        if (window.flags & proto.window.flag_minimized != 0) continue;
+
+        var layer_halo: i32 = 0;
+
+        if (window.flags & proto.window.flag_quartz != 0 and !window.content().intersect(affected).is_empty()) layer_halo = quartz_effect.damage_halo;
+        if (window.decorated() and !window.title_bar().intersect(affected).is_empty()) layer_halo = @max(layer_halo, quartz_effect.header_damage_halo);
+
+        if (layer_halo == 0) continue;
+
+        layers += 1;
+        halo += layer_halo;
+        affected = affected.inset(-layer_halo).intersect(screen_bounds());
+
+        // Bounds filter propagation through stacked Quartz surfaces without unbounded overdraw.
+        if (layers == max_layers) break;
+
+    }
+
+    return halo;
+
+}
+
+fn rect_area(rect: Rect) u64 {
+
+    if (rect.is_empty()) return 0;
+
+    return @as(u64, @intCast(rect.w)) * @as(u64, @intCast(rect.h));
 
 }
 
@@ -1387,6 +1544,8 @@ fn composite() !void {
 
     for (pending.rects[0..pending.len]) |region| {
 
+        const halo = quartz_halo(region);
+        const paint_region = if (halo > 0) region.inset(-halo).intersect(screen_bounds()) else region;
         var first: usize = 0;
         var covered = false;
 
@@ -1399,9 +1558,9 @@ fn composite() !void {
             const candidate = manager.stacked(search);
 
             if (candidate.flags & proto.window.flag_minimized != 0) continue;
-            if (candidate.flags & proto.window.flag_desktop == 0 and candidate.flags & proto.window.flag_undecorated == 0) continue;
-            if (!covers(candidate.content(), region)) continue;
-            if (!surfaces.covers(slot_of(candidate), candidate.content(), region)) continue;
+            if (candidate.flags & proto.window.flag_quartz != 0) continue;
+            if (!covers(candidate.content(), paint_region)) continue;
+            if (!surfaces.covers(slot_of(candidate), candidate.content(), paint_region)) continue;
 
             first = search;
             covered = true;
@@ -1409,7 +1568,7 @@ fn composite() !void {
 
         }
 
-        if (!covered) back.fill_rect(region, theme.wallpaper);
+        if (!covered) back.fill_rect(paint_region, theme.wallpaper);
 
         var index = first;
 
@@ -1418,9 +1577,9 @@ fn composite() !void {
             const window = manager.stacked(index);
 
             if (window.flags & proto.window.flag_minimized != 0) continue;
-            if (window.frame().intersect(region).is_empty()) continue;
+            if (window.frame().intersect(paint_region).is_empty()) continue;
 
-            draw_window(window, region);
+            draw_window(window, paint_region);
 
         }
 
@@ -1428,13 +1587,13 @@ fn composite() !void {
 
         if (resize_id != 0 and !resize_outline.is_empty()) {
 
-            const view = back.clipped(region);
+            const view = back.clipped(paint_region);
 
             render.draw_outline(&view, resize_outline, theme.chrome);
 
         }
 
-    // One pass into the uncached scanout: only the damaged band's rows move.
+        // One pass into the uncached scanout: only the damaged band's rows move.
 
         fb.blit(region.x, region.y, &back, region);
 
@@ -1463,6 +1622,12 @@ fn covers(outer: Rect, inner: Rect) bool {
 
 }
 
+fn window_format(window: *const Window) draw.Format {
+
+    return if (window.flags & proto.window.flag_quartz != 0) .alpha else .xrgb;
+
+}
+
 fn draw_window(window: *Window, clip: Rect) void {
 
     const slot = slot_of(window);
@@ -1471,8 +1636,27 @@ fn draw_window(window: *Window, clip: Rect) void {
     if (window.decorated()) {
 
         const face: ?*const draw.text.Face = if (title_font) |*f| f else null;
+        const focused = manager.focus == window.id;
+        const colors = chrome_colors();
+        const tint = if (focused) theme.title_focused else theme.title_blurred;
+        const opacity: u8 = switch (lib.prefs.quartz_level) {
 
-        render.draw_title_bar(&view, window, manager.focus == window.id, chrome_colors(), face);
+            .off => 0,
+            .light => lib.quartz.material_opacity(.clear),
+            .medium => lib.quartz.material_opacity(.regular),
+            .dark => lib.quartz.material_opacity(.prominent),
+
+        };
+
+        if (!quartz_renderer.composite_header(&back, window.title_bar(), clip, window.id, tint, opacity, render.corner_radius)) {
+
+            render.draw_title_bar(&view, window, focused, colors, face);
+
+        } else {
+
+            render.draw_title_bar_overlay(&view, window, colors, face);
+
+        }
 
     }
 
@@ -1480,7 +1664,11 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     const surface = surfaces.surface_of(slot) orelse return;
 
-    render.blit_content(&back, window, &surface, clip, theme.border);
+    if (lib.prefs.quartz_level == .off or window.flags & proto.window.flag_quartz == 0 or !quartz_renderer.composite(&back, &surface, window.content(), clip, window.id)) {
+
+        render.blit_content(&back, window, &surface, clip, theme.border);
+
+    }
 
     if (window.decorated()) {
 

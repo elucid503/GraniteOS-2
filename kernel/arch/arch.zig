@@ -114,16 +114,3 @@ pub fn halt_others() void {
     gic.send_sgi_others(gic.sgi_halt);
 
 }
-
-// Loads in the boot bridge and trap entry so their exported symbols (`kernel_boot`, `kernel_trap`) link against the assembly.
-
-comptime {
-
-    if (is_target) {
-
-        _ = @import("aarch64/boot.zig");
-        _ = @import("aarch64/trap.zig");
-
-    }
-
-}

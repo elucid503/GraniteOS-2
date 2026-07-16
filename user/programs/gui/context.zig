@@ -8,6 +8,7 @@ const cap = lib.cap;
 const events = lib.events;
 const gfx = lib.gfx;
 const proto = lib.proto;
+const quartz = lib.quartz;
 const sys = lib.sys;
 const ui = lib.ui;
 
@@ -74,6 +75,7 @@ var bundle: lib.bundle.Bundle = undefined;
 
 var connection: lib.window.Connection = undefined;
 var desktop: lib.window.Window = undefined;
+var context_menu_window: ?lib.window.Window = null;
 
 var wallpaper_image: ?lib.draw.png.Image = null;
 var wallpaper_theme: ?lib.prefs.ThemeId = null;
@@ -171,7 +173,11 @@ fn run() !void {
 
 fn owns_event(event: events.Event) bool {
 
-    return event.window == desktop.id or event.window == 0;
+    if (event.window == desktop.id or event.window == 0) return true;
+
+    if (context_menu_window) |window| return event.window == window.id;
+
+    return false;
 
 }
 
@@ -182,7 +188,7 @@ fn dispatch_batch(batch: []const events.Event) void {
         if (!owns_event(event)) continue;
         if (event.kind != events.kind_button_down) continue;
 
-        handle_desktop(event);
+        handle_event(event);
 
     }
 
@@ -193,18 +199,38 @@ fn dispatch_batch(batch: []const events.Event) void {
         if (!owns_event(event)) continue;
         if (event.kind == events.kind_button_down) continue;
 
-        if (event.kind == events.kind_pointer_move) {
+        if (event.kind == events.kind_pointer_move and event.window != context_menu_id()) {
 
             last_move = event;
             continue;
 
         }
 
-        handle_desktop(event);
+        handle_event(event);
 
     }
 
-    if (last_move) |event| handle_desktop(event);
+    if (last_move) |event| handle_event(event);
+
+}
+
+fn context_menu_id() u64 {
+
+    return if (context_menu_window) |window| window.id else 0;
+
+}
+
+fn handle_event(event: events.Event) void {
+
+    if (event.window == context_menu_id() and event.window != 0) {
+
+        handle_context_menu(event);
+
+        return;
+
+    }
+
+    handle_desktop(event);
 
 }
 
@@ -217,14 +243,6 @@ fn handle_desktop(event: events.Event) void {
         events.kind_pointer_move => {
 
             update_cursor(event.x, event.y);
-
-            if (menu.open) {
-
-                if (menu.pointer_move(event.x, event.y)) paint_menu_region();
-
-                return;
-
-            }
 
             const pin = pin_at(event.x, event.y);
 
@@ -268,10 +286,11 @@ fn handle_desktop(event: events.Event) void {
 
         events.kind_prefs_changed => {
 
-            lib.prefs.refresh();
+            _ = lib.prefs.force_reload();
             reload_wallpaper();
             reload_pins();
             paint_desktop();
+            refresh_context_menu();
 
         },
 
@@ -362,40 +381,7 @@ fn button_down(event: events.Event) void {
 
     }
 
-    if (menu.open and event.code == events.button_left) {
-
-        if (menu.hit(event.x, event.y)) |hit| {
-
-            const action = active_menu_actions()[hit];
-            const pin_index = menu_on_pin;
-
-            close_menu();
-
-            const chosen = action orelse return;
-
-            switch (chosen) {
-
-                .create_file => open_prompt(.file),
-                .create_folder => open_prompt(.folder),
-                .open_marble => open_marble_here(),
-                .open_about => open_about(),
-                .remove_pin => {
-
-                    if (pin_index) |index| remove_pin_at(index);
-
-                },
-
-            }
-
-            return;
-
-        }
-
-        close_menu();
-
-        return;
-
-    }
+    if (menu.open) close_menu();
 
     if (event.code == events.button_right) {
 
@@ -409,13 +395,6 @@ fn button_down(event: events.Event) void {
 
         }
 
-        return;
-
-    }
-
-    if (menu.open) {
-
-        close_menu();
         return;
 
     }
@@ -434,6 +413,26 @@ fn open_menu(x: i32, y: i32, pin_index: ?usize) void {
     const rows: []const ui.Menu.Row = if (pin_index != null) pin_menu_rows[0..] else desktop_menu_rows[0..];
 
     menu.open_at(rows, x, y, @intCast(desktop.surface.width), @intCast(desktop.surface.height));
+    const placement = menu.bounds();
+    menu.open_at(rows, 0, 0, menu.width, placement.h);
+
+    ensure_context_menu_window() catch {
+
+        menu.close();
+
+        return;
+
+    };
+
+    const window = context_menu_window orelse return;
+
+    lib.wm.move_window(&connection, window.id, placement.x, placement.y) catch {};
+
+    paint_context_menu_content();
+
+    gfx.fence();
+    lib.wm.restore(&connection, window.id) catch {};
+    window.present_all() catch {};
 
     paint_desktop();
 
@@ -446,7 +445,109 @@ fn close_menu() void {
     menu.close();
     menu_on_pin = null;
 
+    if (context_menu_window) |window| lib.wm.minimize(&connection, window.id) catch {};
+
     paint_desktop();
+
+}
+
+fn ensure_context_menu_window() !void {
+
+    const width: u32 = @intCast(menu.width);
+    const height: u32 = @intCast(menu.content_height() + menu.inset * 2);
+
+    if (context_menu_window) |*window| {
+
+        try window.resize(width, height);
+
+        return;
+
+    }
+
+    const window = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_quartz, "context-menu");
+
+    try lib.wm.minimize(&connection, window.id);
+
+    context_menu_window = window;
+
+}
+
+fn handle_context_menu(event: events.Event) void {
+
+    switch (event.kind) {
+
+        events.kind_button_down => {
+
+            if (event.code == events.button_left) context_menu_click(event.x, event.y) else close_menu();
+
+        },
+
+        events.kind_pointer_move => {
+
+            lib.cursor.set(&connection, if (menu.hit(event.x, event.y) != null) .clicker else .pointer);
+
+            if (menu.pointer_move(event.x, event.y)) refresh_context_menu();
+
+        },
+
+        events.kind_key_down => {
+
+            if (keyboard.modifier(events.kind_key_down, event.code)) return;
+
+            var buffer: [3]u8 = undefined;
+            const bytes = keyboard.bytes(event.code, &buffer);
+
+            if (bytes.len == 1 and bytes[0] == 0x1b) close_menu();
+
+        },
+
+        events.kind_key_up => _ = keyboard.modifier(events.kind_key_up, event.code),
+
+        events.kind_window_blur => {
+
+            if (lib.time.now_ms() - menu_opened_ms >= blur_guard_ms) close_menu();
+
+        },
+
+        events.kind_prefs_changed => {
+
+            _ = lib.prefs.force_reload();
+            reload_wallpaper();
+            reload_pins();
+            paint_desktop();
+            refresh_context_menu();
+
+        },
+
+        else => {},
+
+    }
+
+}
+
+fn context_menu_click(x: i32, y: i32) void {
+
+    const hit = menu.hit(x, y) orelse {
+
+        close_menu();
+
+        return;
+
+    };
+    const action = active_menu_actions()[hit];
+    const pin_index = menu_on_pin;
+
+    close_menu();
+
+    switch (action orelse return) {
+
+        .create_file => open_prompt(.file),
+        .create_folder => open_prompt(.folder),
+        .open_marble => open_marble_here(),
+        .open_about => open_about(),
+        .remove_pin => if (pin_index) |index| remove_pin_at(index),
+
+    }
 
 }
 
@@ -669,10 +770,46 @@ fn prompt_rect() Rect {
 
 }
 
-fn paint_menu_region() void {
+fn refresh_context_menu() void {
 
-    // Menu hover redraws the whole desktop so pin icons under the menu stay correct.
-    paint_desktop();
+    if (!menu.open) return;
+
+    paint_context_menu_content();
+
+    if (context_menu_window) |window| window.present_all() catch {};
+
+}
+
+fn paint_context_menu_content() void {
+
+    const window = context_menu_window orelse return;
+    const surface = &window.surface;
+
+    if (lib.prefs.quartz_level == .off) {
+
+        surface.fill(lib.draw.transparent);
+        lib.draw.round.fill_round_rect(surface, surface.bounds(), 6, ui.theme.surface);
+        ui.stroke_round_rect(surface, surface.bounds(), 6, 1, ui.theme.border);
+        menu.paint_content(surface, &font);
+
+        return;
+
+    }
+
+    var appearance = quartz.style(switch (lib.prefs.quartz_level) {
+
+        .off => unreachable,
+        .light => .clear,
+        .medium => .regular,
+        .dark => .prominent,
+
+    }, ui.theme.surface, ui.theme.accent);
+
+    appearance.radius = 6;
+
+    quartz.clear(surface);
+    quartz.panel(surface, surface.bounds(), appearance);
+    menu.paint_content(surface, &font);
 
 }
 
@@ -682,8 +819,6 @@ fn paint_desktop() void {
 
     paint_wallpaper(surface, null);
     paint_pins(surface);
-
-    menu.paint(surface, &font);
 
     if (prompt_open) paint_prompt(surface);
 

@@ -9,6 +9,7 @@ const events = lib.events;
 const gfx = lib.gfx;
 const ipc = lib.ipc;
 const proto = lib.proto;
+const quartz = lib.quartz;
 const sys = lib.sys;
 const ui = lib.ui;
 
@@ -279,7 +280,7 @@ fn run() !void {
     window_list = try lib.wm.List.init(&connection, cap.memory);
     try window_list.subscribe();
 
-    bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel, "taskbar");
+    bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel | proto.window.flag_quartz, "taskbar");
 
     app_count = lib.wm.load_apps(&bundle, apps[0..]);
     build_categories();
@@ -320,10 +321,17 @@ fn run() !void {
 
         } else if (clock_due) {
 
-            paint_clock_only();
-
             // Backstop: prefs_changed can be dropped when the event ring is full.
-            if (calendar_open and lib.prefs.refresh_if_changed()) paint_calendar();
+
+            if (lib.prefs.refresh_if_changed()) {
+
+                apply_prefs_changed();
+
+            } else {
+
+                paint_clock_only();
+
+            }
 
         }
 
@@ -530,9 +538,41 @@ fn apply_prefs_changed() void {
 
     paint_bar();
 
-    if (menu_open) paint_menu();
-    // Always repaint both cards so C/F (and theme) apply while the popup is open.
-    if (calendar_open) paint_calendar();
+    refresh_quartz_popups();
+
+}
+
+/// Preference notifications can arrive while a popup is minimized. Repaint its
+/// backing surface either way so the next restore cannot show a stale material.
+fn refresh_quartz_popups() void {
+
+    if (menu != null) {
+
+        paint_menu_content();
+        if (menu_open) if (menu) |window| window.present_all() catch {};
+
+    }
+
+    if (pin_menu != null) {
+
+        paint_pin_menu_content();
+        if (pin_menu_open) if (pin_menu) |window| window.present_all() catch {};
+
+    }
+
+    if (weather_popup != null) {
+
+        paint_weather_content();
+        if (calendar_open) if (weather_popup) |window| window.present_all() catch {};
+
+    }
+
+    if (calendar != null) {
+
+        paint_calendar_content();
+        if (calendar_open) if (calendar) |window| window.present_all() catch {};
+
+    }
 
 }
 
@@ -596,7 +636,16 @@ fn handle_bar(event: events.Event) void {
 
         events.kind_pointer_move => {
 
-            if (bar_regions.pointer_move(event.x, event.y)) paint_bar();
+            const previous = bar_regions.hovered_id();
+
+            if (bar_regions.pointer_move(event.x, event.y)) {
+
+                const current = bar_regions.hovered_id();
+                const changed = hover_damage(&bar_regions, previous, current);
+
+                if (!changed.is_empty()) paint_bar_damage(changed) else paint_bar();
+
+            }
 
             update_bar_cursor(event.x, event.y);
 
@@ -649,6 +698,8 @@ fn handle_menu(event: events.Event) void {
         events.kind_pointer_move => {
 
             var need = false;
+            var category_changed = false;
+            const previous = menu_regions.hovered_id();
 
             // Hovering a category flies its apps out to the side, so the active group tracks the pointer.
             if (!searching() and event.x < category_col_width()) {
@@ -659,6 +710,7 @@ fn handle_menu(event: events.Event) void {
 
                         active_category = index;
                         need = true;
+                        category_changed = true;
 
                     }
 
@@ -668,7 +720,14 @@ fn handle_menu(event: events.Event) void {
 
             if (menu_regions.pointer_move(event.x, event.y)) need = true;
 
-            if (need) paint_menu();
+            if (need) {
+
+                const current = menu_regions.hovered_id();
+                const changed = hover_damage(&menu_regions, previous, current);
+
+                if (!category_changed and !changed.is_empty()) paint_menu_damage(changed) else paint_menu();
+
+            }
 
             update_menu_cursor(event.x, event.y);
 
@@ -1056,7 +1115,7 @@ fn ensure_menu() !void {
 
     const height = menu_height();
 
-    var menu_window = try connection.create_window(menu_width(), height, proto.window.flag_undecorated, "menu");
+    var menu_window = try connection.create_window(menu_width(), height, proto.window.flag_undecorated | proto.window.flag_quartz, "menu");
 
     menu_window.surface.fill(ui.theme.window_bg);
 
@@ -1134,7 +1193,7 @@ fn ensure_pin_menu() !void {
 
     if (pin_menu != null) return;
 
-    var window = try connection.create_window(pin_menu_width(), pin_menu_height(), proto.window.flag_undecorated, "pin-menu");
+    var window = try connection.create_window(pin_menu_width(), pin_menu_height(), proto.window.flag_undecorated | proto.window.flag_quartz, "pin-menu");
 
     window.surface.fill(ui.theme.surface);
 
@@ -1203,10 +1262,17 @@ fn paint_pin_menu_content() void {
     const window = pin_menu orelse return;
     const surface = &window.surface;
 
-    // Prime corner pixels before rounded fill; same trick as the launcher popup.
-    surface.fill(ui.theme.surface);
+    if (lib.prefs.quartz_level == .off) {
 
-    pin_menu_widget.paint(surface, &font);
+        surface.fill(ui.theme.surface);
+        pin_menu_widget.paint(surface, &font);
+
+        return;
+
+    }
+
+    panel(surface, surface.bounds(), ui.theme.surface);
+    pin_menu_widget.paint_content(surface, &font);
 
 }
 
@@ -1311,7 +1377,7 @@ fn ensure_weather_popup() !void {
 
     }
 
-    var window = try connection.create_window(calendar_width(), weather_height(), proto.window.flag_undecorated, "weather");
+    var window = try connection.create_window(calendar_width(), weather_height(), proto.window.flag_undecorated | proto.window.flag_quartz, "weather");
 
     window.surface.fill(ui.theme.surface);
 
@@ -1330,7 +1396,7 @@ fn ensure_calendar() !void {
 
     }
 
-    var window = try connection.create_window(calendar_width(), calendar_height(), proto.window.flag_undecorated, "calendar");
+    var window = try connection.create_window(calendar_width(), calendar_height(), proto.window.flag_undecorated | proto.window.flag_quartz, "calendar");
 
     window.surface.fill(ui.theme.surface);
 
@@ -1990,6 +2056,28 @@ fn button_layout() ButtonLayout {
 fn paint_bar() void {
 
     const surface = &bar.surface;
+
+    paint_bar_content(surface);
+
+    bar.present_all() catch {};
+
+}
+
+fn paint_bar_damage(damage: Rect) void {
+
+    const target = damage.intersect(bar.surface.bounds());
+
+    if (target.is_empty()) return;
+
+    const clipped = bar.surface.clipped(target);
+
+    paint_bar_content(&clipped);
+    bar.present(target) catch {};
+
+}
+
+fn paint_bar_content(surface: *const gfx.Surface) void {
+
     const width: i32 = @intCast(surface.width);
 
     panel(surface, surface.bounds(), ui.theme.surface_alt);
@@ -2106,8 +2194,6 @@ fn paint_bar() void {
     bar_regions.add(clock_id, clock_hover_rect(clock_rect));
     paint_clock(surface, width);
 
-    bar.present_all() catch {};
-
 }
 
 fn paint_clock(surface: *const gfx.Surface, width: i32) void {
@@ -2155,7 +2241,18 @@ fn paint_clock_only() void {
     const width: i32 = @intCast(surface.width);
     const rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
 
-    surface.fill_rect(rect, ui.theme.surface_alt);
+    if (lib.prefs.quartz_level == .off) {
+
+        surface.fill_rect(rect, ui.theme.surface_alt);
+
+    } else {
+
+        const clipped = surface.clipped(rect);
+
+        panel(&clipped, surface.bounds(), ui.theme.surface_alt);
+
+    }
+
     paint_clock(surface, width);
 
     bar.present(rect) catch {};
@@ -2174,7 +2271,26 @@ fn paint_menu() void {
 fn paint_menu_content() void {
 
     const menu_window = menu orelse return;
-    const surface = &menu_window.surface;
+    paint_menu_surface(&menu_window.surface);
+
+}
+
+fn paint_menu_damage(damage: Rect) void {
+
+    const menu_window = menu orelse return;
+    const target = damage.intersect(menu_window.surface.bounds());
+
+    if (target.is_empty()) return;
+
+    const clipped = menu_window.surface.clipped(target);
+
+    paint_menu_surface(&clipped);
+    menu_window.present(target) catch {};
+
+}
+
+fn paint_menu_surface(surface: *const gfx.Surface) void {
+
     const width: i32 = @intCast(surface.width);
 
     panel(surface, surface.bounds(), ui.theme.window_bg);
@@ -2436,8 +2552,40 @@ fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, content: []co
 
 fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
 
-    ui.fill_round_rect(surface, rect, dock_radius(), color);
-    ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
+    if (lib.prefs.quartz_level == .off) {
+
+        ui.fill_round_rect(surface, rect, dock_radius(), color);
+        ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
+
+        return;
+
+    }
+
+    var appearance = quartz.style(switch (lib.prefs.quartz_level) {
+
+        .off => unreachable,
+        .light => .clear,
+        .medium => .regular,
+        .dark => .prominent,
+
+    }, color, ui.theme.accent);
+
+    appearance.radius = dock_radius();
+
+    quartz.clear(surface);
+    quartz.panel(surface, rect, appearance);
+
+}
+
+fn hover_damage(regions: *const ui.HitRegions, previous: u32, current: u32) Rect {
+
+    const before = if (previous != 0) regions.rect_of(previous) orelse Rect.empty else Rect.empty;
+    const after = if (current != 0) regions.rect_of(current) orelse Rect.empty else Rect.empty;
+
+    if (before.is_empty()) return after;
+    if (after.is_empty()) return before;
+
+    return before.cover(after);
 
 }
 

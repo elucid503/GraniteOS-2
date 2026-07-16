@@ -28,6 +28,7 @@ const unit_btn_h: i32 = 36;
 const swatch_id_base: u32 = 100;
 const unit_celsius_id: u32 = 200;
 const unit_fahrenheit_id: u32 = 201;
+const quartz_id_base: u32 = 300;
 
 var font: lib.draw.text.Face = undefined;
 var page: ui.Page = .{ .font = &font };
@@ -51,7 +52,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(520, 320, 0, "Settings");
+    window = try connection.create_window(520, 430, 0, "Settings");
 
     paint();
 
@@ -119,6 +120,22 @@ fn click(x: i32, y: i32) void {
         lib.prefs.broadcast_change(&connection);
         paint();
 
+        return;
+
+    }
+
+    if (hit >= quartz_id_base and hit < quartz_id_base + lib.prefs.quartz_level_count) {
+
+        const index = hit - quartz_id_base;
+        const next: lib.prefs.QuartzLevel = @enumFromInt(@as(u8, @intCast(index)));
+
+        if (lib.prefs.quartz_level == next) return;
+
+        lib.prefs.quartz_level = next;
+        lib.prefs.save();
+        lib.prefs.broadcast_change(&connection);
+        paint();
+
     }
 
 }
@@ -155,12 +172,47 @@ fn paint() void {
     });
 
     paint_theme_section(content);
+    paint_quartz_section(content);
     paint_temp_section(content);
 
     page.end();
     page.paint(surface);
 
     window.present_all() catch {};
+
+}
+
+fn paint_quartz_section(parent: i16) void {
+
+    const section = page.box(parent, .{
+
+        .direction = .column,
+        .gap = 14,
+
+    });
+
+    _ = page.label(section, "Quartz", .{
+
+        .size = 14,
+        .color = ui.theme.text,
+
+    });
+
+    const row = page.box(section, .{
+
+        .direction = .row,
+        .gap = 8,
+
+    });
+
+    for (lib.prefs.quartz_level_names, 0..) |name, index| {
+
+        const selected = @intFromEnum(lib.prefs.quartz_level) == index;
+        const id = quartz_id_base + @as(u32, @intCast(index));
+
+        paint_choice_button(row, id, name, selected);
+
+    }
 
 }
 
@@ -262,6 +314,12 @@ fn paint_temp_section(parent: i16) void {
 
 fn paint_unit_button(parent: i16, id: u32, label: []const u8, selected: bool) void {
 
+    paint_choice_button(parent, id, label, selected);
+
+}
+
+fn paint_choice_button(parent: i16, id: u32, label: []const u8, selected: bool) void {
+
     const item = page.box(parent, .{
 
         .id = id,
@@ -303,6 +361,13 @@ fn update_cursor(x: i32, y: i32) void {
     }
 
     if (hit == unit_celsius_id or hit == unit_fahrenheit_id) {
+
+        lib.cursor.set(&connection, .clicker);
+        return;
+
+    }
+
+    if (hit >= quartz_id_base and hit < quartz_id_base + lib.prefs.quartz_level_count) {
 
         lib.cursor.set(&connection, .clicker);
         return;

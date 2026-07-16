@@ -88,6 +88,12 @@ pub const HitRegions = struct {
 
     }
 
+    pub fn hovered_id(self: *const HitRegions) u32 {
+
+        return self.hover;
+
+    }
+
     pub fn rect_of(self: *const HitRegions, id: u32) ?Rect {
 
         for (self.ids[0..self.count], 0..) |candidate, index| {
@@ -418,6 +424,16 @@ pub const Menu = struct {
 
         ui.fill_round_rect(surface, panel, 6, ui.theme.surface);
         ui.stroke_round_rect(surface, panel, 6, 1, ui.theme.border);
+
+        self.paint_content(surface, font);
+
+    }
+
+    /// Paint rows over a caller-owned panel. Quartz popup windows use this to
+    /// keep the menu's text and hit layout while supplying one shared lens.
+    pub fn paint_content(self: *const Menu, surface: *const Surface, font: *const Face) void {
+
+        if (!self.open) return;
 
         var cursor_y = self.y + self.inset;
 
