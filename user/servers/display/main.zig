@@ -238,7 +238,8 @@ fn process_message(badge: u64, in: *const Message) void {
 
 fn load_compositor_theme() void {
 
-    lib.prefs.refresh();
+    // Force a re-read so the values packed into the broadcast are the ones just saved, not a cached generation.
+    _ = lib.prefs.force_reload();
 
     const chrome = lib.prefs.chrome();
 
@@ -887,7 +888,7 @@ fn broadcast_prefs_changed() void {
 
         const ring = events.Ring.open(slot.base);
 
-        if (ring.push(window_event(events.kind_prefs_changed, 0, 0, 0))) {
+        if (ring.push(lib.prefs.changed_event())) {
 
             sys.notify(slot.extra.notification, proto.window.ring_bit) catch {};
 
@@ -1002,7 +1003,83 @@ fn drain_input() void {
 
     // One cursor-plane move per batch, after the last motion event.
 
-    if (moved) move_cursor();
+    if (moved) {
+
+        move_cursor();
+        track_cursor_highlight();
+
+    }
+
+}
+
+// Follows the pointer with the glass rim-light.
+
+var highlight_x: i32 = 0;
+var highlight_y: i32 = 0;
+var highlight_tracked = false;
+
+fn track_cursor_highlight() void {
+
+    // A drag/resize already recomposes the moving surface, so its rim tracks the pointer without extra damage.
+    const disabled = lib.prefs.quartz_level == .off or !quartz_renderer.ready() or drag_id != 0 or resize_id != 0;
+
+    // Always clear the band the pointer left so a rim light never stays stuck behind it.
+    if (highlight_tracked) damage_cursor_halo(highlight_x, highlight_y);
+
+    if (disabled) {
+
+        highlight_tracked = false;
+
+        return;
+
+    }
+
+    damage_cursor_halo(pointer_x, pointer_y);
+
+    highlight_x = pointer_x;
+    highlight_y = pointer_y;
+    highlight_tracked = true;
+
+}
+
+fn damage_cursor_halo(cx: i32, cy: i32) void {
+
+    const r = quartz_effect.highlight_radius;
+    const halo = (Rect{ .x = cx - r, .y = cy - r, .w = 2 * r, .h = 2 * r }).intersect(screen_bounds());
+
+    if (halo.is_empty() or !glass_edge_near(cx, cy, halo)) return;
+
+    add_damage(halo);
+
+}
+
+// The rim light only lives along a glass surface's edge, so skip windows the pointer is not near an edge of.
+fn glass_edge_near(cx: i32, cy: i32, halo: Rect) bool {
+
+    const r = quartz_effect.highlight_radius;
+    var index: usize = 0;
+
+    while (index < manager.count) : (index += 1) {
+
+        const window = manager.stacked(index);
+
+        if (window.flags & proto.window.flag_minimized != 0) continue;
+
+        const glass = if (window.flags & proto.window.flag_quartz != 0)
+            window.frame()
+        else if (window.decorated())
+            window.title_bar()
+        else
+            continue;
+
+        if (glass.intersect(halo).is_empty()) continue;
+        if (glass.inset(r).contains(cx, cy)) continue;
+
+        return true;
+
+    }
+
+    return false;
 
 }
 
@@ -1538,6 +1615,8 @@ fn composite() !void {
 
     const pending = damage;
     damage.clear();
+
+    quartz_renderer.set_cursor(pointer_x, pointer_y, lib.prefs.quartz_level != .off);
 
     // Client pixels may have been written in other processes; publish once before reading any surface.
     draw.fence();

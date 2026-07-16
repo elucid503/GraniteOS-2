@@ -325,7 +325,7 @@ fn run() !void {
 
             if (lib.prefs.refresh_if_changed()) {
 
-                apply_prefs_changed();
+                repaint_prefs();
 
             } else {
 
@@ -458,9 +458,9 @@ fn rebuild_items() void {
 
 fn handle(event: events.Event) void {
 
-    if (event.kind == events.kind_prefs_changed) {
+    if (lib.prefs.apply_event(event)) {
 
-        apply_prefs_changed();
+        repaint_prefs();
         return;
 
     }
@@ -516,26 +516,10 @@ fn update_menu_cursor(x: i32, y: i32) void {
 
 }
 
-fn apply_prefs_changed() void {
+/// Redraw every taskbar surface for the current preferences.
+fn repaint_prefs() void {
 
-    // Forces a full re-read. Should not reload pins from disk here
-    _ = lib.prefs.force_reload();
     rebuild_items();
-
-    bar.resize(bar.surface.width, @intCast(bar_height())) catch {};
-
-    if (menu) |*menu_window| {
-
-        menu_window.resize(menu_width(), menu_height()) catch {};
-
-        if (lib.wm.screen_info(&connection)) |screen| {
-
-            lib.wm.move_window(&connection, menu_window.id, 0, menu_y(screen.height)) catch {};
-
-        } else |_| {}
-
-    }
-
     paint_bar();
 
     refresh_quartz_popups();
@@ -1134,6 +1118,9 @@ fn open_menu() void {
     close_pin_menu();
     close_calendar();
 
+    // Covers a prefs_changed dropped while closed, so the menu opens with the current material.
+    _ = lib.prefs.refresh_if_changed();
+
     ensure_menu() catch return;
 
     search.clear();
@@ -1214,6 +1201,10 @@ fn open_pin_menu(index: usize, local_x: i32) void {
 
     close_menu();
     close_calendar();
+
+    // Covers a prefs_changed dropped while closed, so the popup opens with the current material.
+    _ = lib.prefs.refresh_if_changed();
+
     ensure_pin_menu() catch return;
 
     const program = apps[item.app_index].program;
@@ -2554,7 +2545,8 @@ fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
 
     if (lib.prefs.quartz_level == .off) {
 
-        ui.fill_round_rect(surface, rect, dock_radius(), color);
+        // Fill directly
+        lib.draw.round.fill_round_rect(surface, rect, dock_radius(), color);
         ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
 
         return;

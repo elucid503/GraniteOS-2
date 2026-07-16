@@ -41,6 +41,11 @@ const color_mask: Color = 0x00ff_ffff;
 pub const damage_halo: i32 = max_refraction + (chroma_peak / coordinate_one) + blur_radius + 1;
 pub const header_damage_halo: i32 = header_shift_pixels + (chroma_peak / coordinate_one) + blur_radius + 1;
 
+// Cursor-proximity rim light: the glass edge nearest the pointer brightens slightly.
+pub const highlight_radius: i32 = 56;
+const highlight_strength: u8 = 40;
+const highlight_color: Color = 0x00ff_ffff;
+
 const PixelSum = struct {
 
     red: u32 = 0,
@@ -104,6 +109,10 @@ pub const Renderer = struct {
 
     width: u32 = 0,
     height: u32 = 0,
+
+    cursor_x: i32 = 0,
+    cursor_y: i32 = 0,
+    highlight: bool = false,
 
     scene: [*]Color = undefined,
     lens: [*]Color = undefined,
@@ -185,6 +194,36 @@ pub const Renderer = struct {
             if (entry.valid and !entry.visible.intersect(rect).is_empty()) entry.valid = false;
 
         }
+
+    }
+
+    /// Record the pointer so the resolve passes can light the rim nearest it. `enabled` off => no highlight.
+    pub fn set_cursor(self: *Renderer, x: i32, y: i32, enabled: bool) void {
+
+        self.cursor_x = x;
+        self.cursor_y = y;
+        self.highlight = enabled;
+
+    }
+
+    // 0..highlight_strength: how much the rim at (x, y) leans toward white, by pointer distance and edge sharpness.
+    inline fn highlight_amount(self: *const Renderer, x: i32, y: i32, rim: u8) u8 {
+
+        if (!self.highlight or rim == 0) return 0;
+
+        const dx = abs_axis(x - self.cursor_x);
+        const dy = abs_axis(y - self.cursor_y);
+
+        if (dx >= highlight_radius or dy >= highlight_radius) return 0;
+
+        const dist = normal_denominator(dx, dy);
+
+        if (dist >= highlight_radius) return 0;
+
+        const proximity: u32 = @intCast(@divTrunc((highlight_radius - dist) * 255, highlight_radius));
+        const gated = proximity * square_byte(rim) / 255;
+
+        return @intCast(gated * highlight_strength / 255);
 
     }
 
@@ -554,6 +593,10 @@ pub const Renderer = struct {
 
                     resolved = draw.composite_premultiplied(optical, source);
 
+                    const glow = self.highlight_amount(x, y, ray.rim);
+
+                    if (glow > 0) resolved = draw.mix(resolved, highlight_color, glow);
+
                 }
 
                 self.lens[cache_index] = resolved;
@@ -596,7 +639,11 @@ pub const Renderer = struct {
                 }
 
                 const glass = draw.composite_premultiplied(optical, material);
-                const resolved = draw.mix(original, glass, coverage);
+                var resolved = draw.mix(original, glass, coverage);
+
+                const glow = self.highlight_amount(x, y, ray.rim);
+
+                if (glow > 0) resolved = draw.mix(resolved, highlight_color, scale_byte(glow, coverage));
 
                 self.lens[cache_index] = resolved;
                 back.pixels[destination_index] = resolved;

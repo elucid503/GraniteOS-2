@@ -222,6 +222,17 @@ fn context_menu_id() u64 {
 
 fn handle_event(event: events.Event) void {
 
+    if (lib.prefs.apply_event(event)) {
+
+        reload_wallpaper();
+        reload_pins();
+        paint_desktop();
+        refresh_context_menu();
+
+        return;
+
+    }
+
     if (event.window == context_menu_id() and event.window != 0) {
 
         handle_context_menu(event);
@@ -281,16 +292,6 @@ fn handle_desktop(event: events.Event) void {
                 close_prompt();
 
             }
-
-        },
-
-        events.kind_prefs_changed => {
-
-            _ = lib.prefs.force_reload();
-            reload_wallpaper();
-            reload_pins();
-            paint_desktop();
-            refresh_context_menu();
 
         },
 
@@ -506,16 +507,6 @@ fn handle_context_menu(event: events.Event) void {
         events.kind_window_blur => {
 
             if (lib.time.now_ms() - menu_opened_ms >= blur_guard_ms) close_menu();
-
-        },
-
-        events.kind_prefs_changed => {
-
-            _ = lib.prefs.force_reload();
-            reload_wallpaper();
-            reload_pins();
-            paint_desktop();
-            refresh_context_menu();
 
         },
 

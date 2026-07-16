@@ -131,7 +131,7 @@ fn run() !void {
 
             events.kind_prefs_changed => {
 
-                lib.prefs.refresh();
+                _ = lib.prefs.apply_event(event);
                 paint();
 
             },

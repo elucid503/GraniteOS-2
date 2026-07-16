@@ -8,6 +8,7 @@ const fs = @import("../fs/fs.zig");
 const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
 const ui = @import("../ui/ui.zig");
+const events = @import("events.zig");
 const window = @import("window.zig");
 
 const Color = gfx.Color;
@@ -374,6 +375,49 @@ pub fn save() void {
 pub fn broadcast_change(connection: *window.Connection) void {
 
     _ = ipc.request(connection.endpoint, proto.window.notify_prefs, &.{}, &.{}) catch {};
+
+}
+
+/// Pack the live preferences into the prefs_changed record the compositor broadcasts
+pub fn changed_event() events.Event {
+
+    const bits: u64 =
+        @as(u64, @intFromEnum(active_theme)) |
+        (@as(u64, @intFromEnum(quartz_level)) << 8) |
+        (@as(u64, @intFromEnum(temp_unit)) << 16);
+
+    return .{
+
+        .kind = events.kind_prefs_changed,
+        .code = 0,
+        .window = 0,
+
+        .x = tz_offset_minutes,
+        .y = 0,
+
+        .value = @bitCast(bits),
+
+    };
+
+}
+
+/// The single client-side entry point for a prefs update
+pub fn apply_event(event: events.Event) bool {
+
+    if (event.kind != events.kind_prefs_changed) return false;
+
+    const bits: u64 = @bitCast(event.value);
+    const theme_value: u8 = @truncate(bits & 0xff);
+    const quartz_value: u8 = @truncate((bits >> 8) & 0xff);
+    const temp_value: u8 = @truncate((bits >> 16) & 0xff);
+
+    if (theme_value < theme_count) apply_theme(@enumFromInt(theme_value));
+    if (quartz_value < quartz_level_count) quartz_level = @enumFromInt(quartz_value);
+    if (temp_value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(temp_value);
+
+    tz_offset_minutes = event.x;
+
+    return true;
 
 }
 
