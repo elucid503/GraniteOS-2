@@ -21,10 +21,10 @@ const max_refraction: i32 = 21;
 const morph_gain_num = lib.quartz.compositor_morph_gain_num;
 const morph_gain_den = lib.quartz.compositor_morph_gain_den;
 
-// Limit RGB separation so high-contrast corners cannot reveal discrete backdrop samples.
-const chroma_peak: i32 = coordinate_one * 5 / 4;
-const chroma_gate: u8 = 64;
-const chroma_strength: u8 = 144;
+// Keep RGB separation continuous while letting it read along high-contrast rims.
+const chroma_peak: i32 = coordinate_one * 3 / 2;
+const chroma_gate: u8 = 56;
+const chroma_strength: u8 = 168;
 const chroma_radius: i32 = @divTrunc(chroma_peak + coordinate_one - 1, coordinate_one);
 const frost_scale: i32 = 2;
 const frost_blur_light: i32 = 3;
@@ -54,11 +54,6 @@ pub fn header_damage_halo(level: u8) i32 {
     return header_halo_from_radius(frost_radius(level));
 
 }
-
-// Cursor-proximity rim light: the glass edge nearest the pointer brightens slightly.
-pub const highlight_radius: i32 = 56;
-const highlight_strength: u8 = 40;
-const highlight_color: Color = 0x00ff_ffff;
 
 const PixelSum = struct {
 
@@ -109,6 +104,8 @@ const SampleRay = struct {
 };
 
 const output_cache_capacity = 128;
+// Above 1080p, preserve compositor budget for screen-sized client surfaces instead.
+const output_cache_max_bytes = 8 * 1024 * 1024;
 
 const OutputCache = struct {
 
@@ -120,17 +117,52 @@ const OutputCache = struct {
 
 };
 
-pub const Renderer = struct {
+// Separate regions keep every plane below the buddy allocator's contiguous-run ceiling.
+const Buffer = struct {
 
     region: Handle = 0,
     base: usize = 0,
 
+    fn allocate(bytes: usize) !Buffer {
+
+        const region = try sys.create(.region, bytes, cap.memory);
+        const base = sys.map(cap.self_space, region, 0, sys.read | sys.write) catch |failure| {
+
+            sys.close(region) catch {};
+
+            return failure;
+
+        };
+
+        return .{
+
+            .region = region,
+            .base = base,
+
+        };
+
+    }
+
+    fn release(self: *Buffer) void {
+
+        if (self.base != 0) sys.unmap(cap.self_space, self.base) catch {};
+        if (self.region != 0) sys.close(self.region) catch {};
+
+        self.* = .{};
+
+    }
+
+};
+
+pub const Renderer = struct {
+
+    scene_buffer: Buffer = .{},
+    lens_buffer: Buffer = .{},
+    frost_buffer: Buffer = .{},
+
     width: u32 = 0,
     height: u32 = 0,
 
-    cursor_x: i32 = 0,
-    cursor_y: i32 = 0,
-    highlight: bool = false,
     frost_radius: i32 = frost_blur_regular,
     coverage_table: *const [256]u8 = &coverage_regular,
 
@@ -155,30 +187,34 @@ pub const Renderer = struct {
         const frost_pixels = std.math.mul(usize, frost_width, frost_height) catch return error.TooLarge;
         const frost_bytes = std.math.mul(usize, frost_pixels, @sizeOf(Color)) catch return error.TooLarge;
         const compact_bytes = std.math.mul(usize, frost_bytes, 2) catch return error.TooLarge;
-        const bytes = std.math.add(usize, std.math.mul(usize, plane_bytes, 2) catch return error.TooLarge, compact_bytes) catch return error.TooLarge;
 
-        const region = try sys.create(.region, bytes, cap.memory);
-        const base = sys.map(cap.self_space, region, 0, sys.read | sys.write) catch |failure| {
+        var scene_buffer = try Buffer.allocate(plane_bytes);
+        errdefer scene_buffer.release();
 
-            sys.close(region) catch {};
+        var frost_buffer = try Buffer.allocate(compact_bytes);
+        errdefer frost_buffer.release();
 
-            return failure;
+        var lens_buffer = if (plane_bytes <= output_cache_max_bytes)
+            Buffer.allocate(plane_bytes) catch Buffer{}
+        else
+            Buffer{};
+        errdefer lens_buffer.release();
 
-        };
-
-        const scene: [*]Color = @ptrFromInt(base);
+        const scene: [*]Color = @ptrFromInt(scene_buffer.base);
+        const frost: [*]Color = @ptrFromInt(frost_buffer.base);
         self.* = .{
 
-            .region = region,
-            .base = base,
+            .scene_buffer = scene_buffer,
+            .lens_buffer = lens_buffer,
+            .frost_buffer = frost_buffer,
 
             .width = width,
             .height = height,
 
             .scene = scene,
-            .lens = scene + pixel_count,
-            .temp = scene + pixel_count * 2,
-            .scratch = scene + pixel_count * 2 + frost_pixels,
+            .lens = if (lens_buffer.base != 0) @ptrFromInt(lens_buffer.base) else undefined,
+            .temp = frost,
+            .scratch = frost + frost_pixels,
 
         };
 
@@ -186,8 +222,9 @@ pub const Renderer = struct {
 
     pub fn release(self: *Renderer) void {
 
-        if (self.base != 0) sys.unmap(cap.self_space, self.base) catch {};
-        if (self.region != 0) sys.close(self.region) catch {};
+        self.scene_buffer.release();
+        self.lens_buffer.release();
+        self.frost_buffer.release();
 
         self.* = .{};
 
@@ -195,7 +232,7 @@ pub const Renderer = struct {
 
     pub fn ready(self: *const Renderer) bool {
 
-        return self.base != 0;
+        return self.scene_buffer.base != 0 and self.frost_buffer.base != 0;
 
     }
 
@@ -236,40 +273,12 @@ pub const Renderer = struct {
 
     }
 
-    /// Record the pointer so the resolve passes can light the rim nearest it. `enabled` off => no highlight.
-    pub fn set_cursor(self: *Renderer, x: i32, y: i32, enabled: bool) void {
-
-        self.cursor_x = x;
-        self.cursor_y = y;
-        self.highlight = enabled;
-
-    }
-
-    // 0..highlight_strength: how much the rim at (x, y) leans toward white, by pointer distance and edge sharpness.
-    inline fn highlight_amount(self: *const Renderer, x: i32, y: i32, rim: u8) u8 {
-
-        if (!self.highlight or rim == 0) return 0;
-
-        const dx = abs_axis(x - self.cursor_x);
-        const dy = abs_axis(y - self.cursor_y);
-
-        if (dx >= highlight_radius or dy >= highlight_radius) return 0;
-
-        const dist = normal_denominator(dx, dy);
-
-        if (dist >= highlight_radius) return 0;
-
-        const proximity: u32 = @intCast(@divTrunc((highlight_radius - dist) * 255, highlight_radius));
-        const gated = proximity * square_byte(rim) / 255;
-
-        return @intCast(gated * highlight_strength / 255);
-
-    }
-
     pub fn composite(self: *Renderer, back: *const Surface, foreground: *const Surface, content: Rect, clip: Rect, window: u32) bool {
 
-        if (self.base == 0 or foreground.format != .alpha) return false;
+        if (!self.ready() or foreground.format != .alpha) return false;
         if (self.width != back.width or self.height != back.height) return false;
+
+        if (self.lens_buffer.base == 0) self.lens = back.pixels;
 
         const available = Rect{
 
@@ -309,8 +318,10 @@ pub const Renderer = struct {
 
     pub fn composite_header(self: *Renderer, back: *const Surface, content: Rect, clip: Rect, window: u32, tint: Color, opacity: u8, radius: i32, joined: bool) bool {
 
-        if (self.base == 0 or opacity == 0) return false;
+        if (!self.ready() or opacity == 0) return false;
         if (self.width != back.width or self.height != back.height) return false;
+
+        if (self.lens_buffer.base == 0) self.lens = back.pixels;
 
         const visible = content.intersect(clip).intersect(back.bounds());
 
@@ -342,6 +353,8 @@ pub const Renderer = struct {
 
     fn output_reusable(self: *const Renderer, window: u32, content: Rect, visible: Rect) bool {
 
+        if (self.lens_buffer.base == 0) return false;
+
         for (&self.output_cache) |*entry| {
 
             if (!entry.valid or entry.window != window) continue;
@@ -366,6 +379,8 @@ pub const Renderer = struct {
     }
 
     fn store_output_cache(self: *Renderer, window: u32, content: Rect, visible: Rect, backdrop: Rect) void {
+
+        if (self.lens_buffer.base == 0) return;
 
         var available: ?*OutputCache = null;
 
@@ -611,7 +626,7 @@ pub const Renderer = struct {
 
     }
 
-    // Shared glass core: frost sample, rim clarity, material composite, cursor rim light. Both resolve passes route through this.
+    // Shared glass core: frost sample, rim clarity, and material composite. Both resolve passes route through this.
     inline fn resolve_glass(self: *const Renderer, x: i32, y: i32, displacement: Displacement, coverage: u8, material: Color, original: Color, scene_rect: Rect, frost_bounds: Rect) Color {
 
         const ray = self.ray_from_displacement(x, y, displacement);
@@ -627,13 +642,8 @@ pub const Renderer = struct {
         }
 
         const glass = draw.composite_premultiplied(optical, material);
-        var resolved = draw.mix(original, glass, coverage);
 
-        const glow = self.highlight_amount(x, y, ray.rim);
-
-        if (glow > 0) resolved = draw.mix(resolved, highlight_color, scale_byte(glow, coverage));
-
-        return resolved;
+        return draw.mix(original, glass, coverage);
 
     }
 
@@ -1349,7 +1359,15 @@ test "Quartz joined header leaves its content seam optically flat" {
 
 test "Quartz regional cache preserves unrelated glass" {
 
-    var renderer = Renderer{};
+    var renderer = Renderer{
+
+        .lens_buffer = .{
+
+            .base = 1,
+
+        },
+
+    };
     const left = Rect{ .x = 10, .y = 10, .w = 40, .h = 30 };
     const right = Rect{ .x = 100, .y = 10, .w = 40, .h = 30 };
     const left_backdrop = left.inset(-damage_halo(3));
