@@ -15,28 +15,28 @@ const Surface = draw.Surface;
 
 const coordinate_bits: u5 = 4;
 const coordinate_one: i32 = 1 << coordinate_bits;
-const max_refraction: i32 = 21;
+const max_refraction: i32 = 30;
 
 // Extra stretch on encoded D so bezel morph reads clearly.
 const morph_gain_num = lib.quartz.compositor_morph_gain_num;
 const morph_gain_den = lib.quartz.compositor_morph_gain_den;
 
 // Keep RGB separation continuous while letting it read along high-contrast rims.
-const chroma_peak: i32 = coordinate_one * 3 / 2;
+const chroma_peak: i32 = coordinate_one * 8 / 2;
 const chroma_gate: u8 = 56;
-const chroma_strength: u8 = 168;
+const chroma_strength: u8 = 200;
 const chroma_radius: i32 = @divTrunc(chroma_peak + coordinate_one - 1, coordinate_one);
 const frost_scale: i32 = 2;
 const frost_blur_light: i32 = 3;
 const frost_blur_regular: i32 = 5;
 const frost_blur_prominent: i32 = 8;
 const header_bezel: i32 = 12;
-const header_refraction: i32 = coordinate_one * 4;
+const header_refraction: i32 = coordinate_one * 8;
 const header_shift_denominator = morph_gain_den * coordinate_one;
 const header_shift_pixels: i32 = @divTrunc(header_refraction * morph_gain_num + header_shift_denominator - 1, header_shift_denominator);
 
 // How hard the sharp rim wins back over frost (0..255).
-const rim_clarity: u8 = 168;
+const rim_clarity: u8 = 0;
 const mask_floor: u8 = 8;
 const color_mask: Color = 0x00ff_ffff;
 const coverage_clear = make_material_coverage(lib.quartz.material_opacity(.clear));
