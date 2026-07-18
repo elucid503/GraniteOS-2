@@ -1,4 +1,4 @@
-// File Manager: a two-pane browser over the Strata filesystem.
+// File Manager: multi-tab browser over the Strata filesystem with list and grid views.
 
 const std = @import("std");
 
@@ -13,6 +13,7 @@ const ui = lib.ui;
 
 const Rect = gfx.Rect;
 const Entry = proto.filesystem.Entry;
+const Color = gfx.Color;
 
 pub const app_meta = .{
     .title = "Files",
@@ -29,12 +30,30 @@ comptime {
 
 const max_entries = 256;
 const max_path = 512;
+const max_tabs = 6;
 const preview_bytes = 2048;
 const event_batch_max = 32;
 
-const toolbar_height: i32 = 38;
+// Banner holds up control, directory tabs, and view switcher.
+const banner_h: i32 = 44;
+const content_top: i32 = banner_h;
 const row_height: i32 = 32;
-const list_start: i32 = toolbar_height + 6;
+
+const grid_cell_w: i32 = 100;
+const grid_cell_h: i32 = 108;
+const grid_gap: i32 = 8;
+const grid_pad: i32 = 10;
+const grid_preview: i32 = 64;
+
+const tab_min_w: i32 = 72;
+const tab_max_w: i32 = 140;
+const tab_close_w: i32 = 18;
+const chrome_btn: i32 = 28;
+const view_btn: i32 = 30;
+
+// Dark frost used for the banner and inspector over Quartz.
+const chrome_tint = lib.draw.rgb(14, 14, 14);
+const chrome_solid = lib.draw.rgb(22, 22, 22);
 
 var font: lib.draw.text.Face = undefined;
 
@@ -44,21 +63,84 @@ var menu_window: ?lib.window.Window = null;
 
 var client: ?lib.fs.Client = null;
 
-var cwd_storage: [max_path]u8 = undefined;
-var cwd: []const u8 = "/";
+const ViewMode = enum(u8) {
 
-var entries: [max_entries]Entry = undefined;
-var entry_count: usize = 0;
+    row,
+    grid,
 
-var selected: ?usize = null;
-var scroll: usize = 0;
+};
 
-var pointer_y: i32 = -1;
-var last_hover: i32 = -3;
+const Tab = struct {
+
+    path: [max_path]u8 = undefined,
+    path_len: usize = 1,
+
+    entries: [max_entries]Entry = undefined,
+    entry_count: usize = 0,
+
+    selected: ?usize = null,
+    scroll: usize = 0,
+
+    fn path_slice(self: *const Tab) []const u8 {
+
+        return self.path[0..self.path_len];
+
+    }
+
+    fn set_path(self: *Tab, next: []const u8) void {
+
+        const length = @min(next.len, self.path.len);
+
+        @memcpy(self.path[0..length], next[0..length]);
+        self.path_len = length;
+
+    }
+
+    fn basename(self: *const Tab) []const u8 {
+
+        const full = self.path_slice();
+
+        if (full.len <= 1) return "/";
+
+        if (std.mem.lastIndexOfScalar(u8, full, '/')) |slash| {
+
+            if (slash + 1 < full.len) return full[slash + 1 ..];
+
+        }
+
+        return full;
+
+    }
+
+    fn clear(self: *Tab) void {
+
+        @memset(std.mem.asBytes(self), 0);
+        self.path_len = 1;
+        self.path[0] = '/';
+
+    }
+
+};
+
+var tabs: [max_tabs]Tab = undefined;
+var tab_count: usize = 1;
+var active_tab: usize = 0;
+var view_mode: ViewMode = .row;
 
 var preview: [preview_bytes]u8 = undefined;
 var preview_len: usize = 0;
 var preview_is_text = false;
+
+// Thumbnail cache for selected image previews (one decode at a time).
+const thumb_file_cap = 64 * 1024;
+const thumb_decode_cap = 256 * 1024;
+
+var thumb_file: [thumb_file_cap]u8 = undefined;
+var thumb_decode: [thumb_decode_cap]u8 = undefined;
+var thumb_path: [max_path]u8 = undefined;
+var thumb_path_len: usize = 0;
+var thumb_image: ?lib.draw.png.Image = null;
+var thumb_valid = false;
 
 const MenuAction = enum {
 
@@ -132,6 +214,8 @@ var details_length: u64 = 0;
 var details_status: []const u8 = "";
 
 var pointer_x: i32 = -1;
+var pointer_y: i32 = -1;
+var last_hover: i32 = -3;
 
 var prompt_open = false;
 var prompt_source: [max_path]u8 = undefined;
@@ -142,7 +226,7 @@ var keyboard = lib.keymap.Keyboard{};
 var name_storage: [max_path]u8 = undefined;
 var name_field = ui.EditBuffer{ .bytes = &name_storage };
 
-// Drag-to-move: press an entry, drag onto a folder or the toolbar (parent), release to drop.
+// Drag-to-move: press an entry, drag onto a folder or the banner (parent), release to drop.
 var press_index: ?usize = null;
 var press_x: i32 = 0;
 var press_y: i32 = 0;
@@ -166,7 +250,13 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(760, 480, 0, "Files");
+    window = try connection.create_window(800, 520, proto.window.flag_quartz, "Files");
+
+    // Zero in place — never materialize a multi-tab temporary on the 512 KiB stack.
+    @memset(std.mem.asBytes(&tabs), 0);
+    tabs[0].set_path("/");
+    tab_count = 1;
+    active_tab = 0;
 
     if (lib.fs.Client.connect(cap.memory)) |opened| {
 
@@ -202,6 +292,24 @@ fn run() !void {
         if (dispatch_batch(batch[0..count])) return;
 
     }
+
+}
+
+fn tab() *Tab {
+
+    return &tabs[active_tab];
+
+}
+
+fn tab_const() *const Tab {
+
+    return &tabs[active_tab];
+
+}
+
+fn cwd() []const u8 {
+
+    return tab_const().path_slice();
 
 }
 
@@ -524,8 +632,8 @@ fn button_up(event: events.Event) void {
 
         cancel_press();
 
-        // Toolbar up is handled on press; list entries open on release so a drag can steal the gesture.
-        if (index < entry_count) open_entry(index);
+        // Banner and expand chevrons handle on press; list/grid entries open on release so a drag can steal the gesture.
+        if (index < content_count()) open_entry(index);
 
         return;
 
@@ -541,9 +649,10 @@ fn start_directory(handle: *lib.fs.Client) []const u8 {
     if (lib.prefs.take_open_path(&staged)) |path| {
 
         // Copy out of the staging buffer first - take_open_path returns a slice of `staged`.
-        const length = @min(path.len, cwd_storage.len);
-        @memcpy(cwd_storage[0..length], path[0..length]);
-        const saved = cwd_storage[0..length];
+        const length = @min(path.len, max_path);
+        @memcpy(tabs[0].path[0..length], path[0..length]);
+        tabs[0].path_len = length;
+        const saved = tabs[0].path[0..length];
 
         if (handle.stat(saved)) |stat| {
 
@@ -553,17 +662,10 @@ fn start_directory(handle: *lib.fs.Client) []const u8 {
             if (std.mem.lastIndexOfScalar(u8, saved, '/')) |slash| {
 
                 const parent = if (slash == 0) "/" else saved[0..slash];
-                const parent_len = @min(parent.len, cwd_storage.len);
+                const parent_len = @min(parent.len, max_path);
 
-                // parent may alias cwd_storage; use a tiny scratch when needed.
-                if (parent.ptr == cwd_storage[0..].ptr) {
-
-                    return cwd_storage[0..parent_len];
-
-                }
-
-                @memcpy(cwd_storage[0..parent_len], parent[0..parent_len]);
-                return cwd_storage[0..parent_len];
+                tabs[0].set_path(parent[0..parent_len]);
+                return tabs[0].path_slice();
 
             }
 
@@ -586,52 +688,54 @@ fn start_directory(handle: *lib.fs.Client) []const u8 {
 
 fn set_cwd(path: []const u8) void {
 
-    const length = @min(path.len, cwd_storage.len);
+    tab().set_path(path);
 
-    @memcpy(cwd_storage[0..length], path[0..length]);
-    cwd = cwd_storage[0..length];
-
-    if (client) |*handle| handle.cwd = cwd;
+    if (client) |*handle| handle.cwd = cwd();
 
 }
 
 fn reload() void {
 
-    entry_count = 0;
-    selected = null;
-    scroll = 0;
+    const t = tab();
+
+    t.entry_count = 0;
+    t.selected = null;
+    t.scroll = 0;
     preview_len = 0;
+    invalidate_thumb();
 
     const handle = if (client) |*c| c else return;
 
-    const listing = handle.list(cwd) catch return;
+    handle.cwd = t.path_slice();
+
+    const listing = handle.list(t.path_slice()) catch return;
 
     for (listing) |entry| {
 
-        if (entry_count >= max_entries) break;
+        if (t.entry_count >= max_entries) break;
 
-        entries[entry_count] = entry;
-        entry_count += 1;
+        t.entries[t.entry_count] = entry;
+        t.entry_count += 1;
 
     }
 
-    sort_entries();
+    sort_entries(t);
 
 }
 
-fn sort_entries() void {
+fn sort_entries(t: *Tab) void {
 
     var i: usize = 1;
 
-    while (i < entry_count) : (i += 1) {
+    while (i < t.entry_count) : (i += 1) {
 
         var j = i;
 
-        while (j > 0 and precedes(entries[j], entries[j - 1])) : (j -= 1) {
+        while (j > 0 and precedes(t.entries[j], t.entries[j - 1])) : (j -= 1) {
 
-            const swap = entries[j];
-            entries[j] = entries[j - 1];
-            entries[j - 1] = swap;
+            const swap = t.entries[j];
+            t.entries[j] = t.entries[j - 1];
+            t.entries[j - 1] = swap;
 
         }
 
@@ -647,6 +751,88 @@ fn precedes(a: Entry, b: Entry) bool {
     if (a_dir != b_dir) return a_dir;
 
     return std.mem.lessThan(u8, a.name[0..a.name_len], b.name[0..b.name_len]);
+
+}
+
+fn switch_tab(index: usize) void {
+
+    if (index >= tab_count or index == active_tab) return;
+
+    active_tab = index;
+    preview_len = 0;
+    invalidate_thumb();
+
+    if (client) |*handle| handle.cwd = cwd();
+
+    clamp_scroll();
+    paint();
+
+}
+
+fn open_tab(path: []const u8) void {
+
+    if (tab_count >= max_tabs) return;
+
+    const index = tab_count;
+    tabs[index].clear();
+    tabs[index].set_path(path);
+    tab_count += 1;
+    active_tab = index;
+
+    reload();
+    paint();
+
+}
+
+fn close_tab(index: usize) void {
+
+    if (tab_count <= 1 or index >= tab_count) return;
+
+    var i = index;
+
+    while (i + 1 < tab_count) : (i += 1) {
+
+        // Byte copy avoids a large Tab temporary on the stack.
+        @memcpy(std.mem.asBytes(&tabs[i]), std.mem.asBytes(&tabs[i + 1]));
+
+    }
+
+    tab_count -= 1;
+
+    if (active_tab > index) active_tab -= 1
+    else if (active_tab >= tab_count) active_tab = tab_count - 1;
+
+    preview_len = 0;
+    invalidate_thumb();
+
+    if (client) |*handle| handle.cwd = cwd();
+
+    clamp_scroll();
+    paint();
+
+}
+
+fn set_view(mode: ViewMode) void {
+
+    if (view_mode == mode) return;
+
+    view_mode = mode;
+    tab().scroll = 0;
+
+    if (tab().selected) |s| {
+
+        if (s >= content_count()) {
+
+            tab().selected = null;
+            preview_len = 0;
+            invalidate_thumb();
+
+        }
+
+    }
+
+    clamp_scroll();
+    paint();
 
 }
 
@@ -689,7 +875,6 @@ fn update_cursor(x: i32, y: i32) void {
 
     if (drag_active) {
 
-        // Hand cursor over a valid drop; default pointer when the release would cancel.
         const valid = switch (resolve_drop(x, y)) {
 
             .none => false,
@@ -702,30 +887,121 @@ fn update_cursor(x: i32, y: i32) void {
 
     }
 
-    if (y < toolbar_height and x < 40) lib.cursor.set(&connection, .clicker)
-    else if (hover_token(x, y) >= 0) lib.cursor.set(&connection, .clicker)
+    if (chrome_hot(x, y) or hover_token(x, y) >= 0) lib.cursor.set(&connection, .clicker)
     else lib.cursor.set(&connection, .pointer);
+
+}
+
+fn chrome_hot(x: i32, y: i32) bool {
+
+    if (y >= banner_h) return false;
+
+    if (up_btn_rect().contains(x, y)) return true;
+    if (new_tab_rect().contains(x, y)) return true;
+    if (view_btn_rect(.row).contains(x, y)) return true;
+    if (view_btn_rect(.grid).contains(x, y)) return true;
+
+    var i: usize = 0;
+
+    while (i < tab_count) : (i += 1) {
+
+        if (tab_rect(i).contains(x, y)) return true;
+
+    }
+
+    return false;
 
 }
 
 fn hover_token(x: i32, y: i32) i32 {
 
-    if (y < list_start or x >= list_width()) return -1;
+    if (y < content_top or x >= list_width()) return -1;
 
-    return @divTrunc(y - list_start, row_height);
+    return switch (view_mode) {
+
+        .row => blk: {
+
+            const row: i32 = @divTrunc(y - content_top, row_height);
+            break :blk if (row < 0) -1 else row;
+
+        },
+
+        .grid => blk: {
+
+            const cols = grid_columns();
+            if (cols <= 0) break :blk -1;
+
+            const local_x = x - grid_pad;
+            const local_y = y - content_top - grid_pad;
+
+            if (local_x < 0 or local_y < 0) break :blk -1;
+
+            const col = @divTrunc(local_x, grid_cell_w + grid_gap);
+            const row = @divTrunc(local_y, grid_cell_h + grid_gap);
+
+            if (col < 0 or col >= cols or row < 0) break :blk -1;
+
+            break :blk row * cols + col;
+
+        },
+
+    };
+
+}
+
+fn content_count() usize {
+
+    return tab_const().entry_count;
 
 }
 
 fn entry_index_at(x: i32, y: i32) ?usize {
 
-    if (y < list_start or x >= list_width()) return null;
+    if (y < content_top or x >= list_width()) return null;
 
-    const row: usize = @intCast(@divTrunc(y - list_start, row_height));
-    const index = scroll + row;
+    return switch (view_mode) {
 
-    if (index >= entry_count) return null;
+        .row => blk: {
 
-    return index;
+            const row: usize = @intCast(@divTrunc(y - content_top, row_height));
+            const index = tab_const().scroll + row;
+
+            if (index >= tab_const().entry_count) break :blk null;
+
+            break :blk index;
+
+        },
+
+        .grid => blk: {
+
+            const cols = grid_columns();
+            if (cols <= 0) break :blk null;
+
+            const local_x = x - grid_pad;
+            const local_y = y - content_top - grid_pad;
+
+            if (local_x < 0 or local_y < 0) break :blk null;
+
+            const col: usize = @intCast(@divTrunc(local_x, grid_cell_w + grid_gap));
+            const row_local: usize = @intCast(@divTrunc(local_y, grid_cell_h + grid_gap));
+
+            if (col >= @as(usize, @intCast(cols))) break :blk null;
+
+            // Cell may sit in the gap between tiles.
+            const cell_x = @as(i32, @intCast(col)) * (grid_cell_w + grid_gap);
+            const cell_y = @as(i32, @intCast(row_local)) * (grid_cell_h + grid_gap);
+
+            if (local_x >= cell_x + grid_cell_w or local_y >= cell_y + grid_cell_h) break :blk null;
+
+            const index = (tab_const().scroll + row_local) * @as(usize, @intCast(cols)) + col;
+
+            if (index >= tab_const().entry_count) break :blk null;
+
+            break :blk index;
+
+        },
+
+    };
 
 }
 
@@ -738,7 +1014,7 @@ fn open_context(x: i32, y: i32) void {
     var placement_x = x;
     var placement_y = y;
 
-    selected = index;
+    select_index(index);
     menu_target = index;
     menu_hover = null;
     menu_open = true;
@@ -898,13 +1174,47 @@ fn menu_hit(x: i32, y: i32) ?usize {
 
 }
 
+fn entry_at(index: usize) ?Entry {
+
+    const t = tab_const();
+
+    if (index >= t.entry_count) return null;
+
+    return t.entries[index];
+
+}
+
+fn path_at(index: usize, buffer: *[max_path]u8) ?[]const u8 {
+
+    const t = tab_const();
+
+    if (index >= t.entry_count) return null;
+
+    const entry = t.entries[index];
+
+    return lib.fs.canonicalize(t.path_slice(), entry.name[0..entry.name_len], buffer) catch null;
+
+}
+
+fn select_index(index: usize) void {
+
+    const t = tab();
+    t.selected = index;
+
+    if (entry_at(index)) |entry| {
+
+        if (entry.kind != proto.filesystem.kind_directory) load_preview_entry(entry, index)
+        else preview_len = 0;
+
+    }
+
+}
+
 fn run_menu_action(action: MenuAction, index: usize) void {
 
-    if (index >= entry_count) return;
-
-    const entry = entries[index];
+    const entry = entry_at(index) orelse return;
     var path_buffer: [max_path]u8 = undefined;
-    const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch return;
+    const path = path_at(index, &path_buffer) orelse return;
 
     switch (action) {
 
@@ -926,7 +1236,6 @@ fn run_menu_action(action: MenuAction, index: usize) void {
 
             if (lib.prefs.add_desktop_pin(path)) {
 
-                // Wake the desktop layer so pins appear without a reboot.
                 lib.prefs.broadcast_change(&connection);
 
             }
@@ -1049,8 +1358,6 @@ fn prompt_click(x: i32, y: i32) void {
 
     }
 
-    // Mirrors paint_prompt's layout: 16px padding, then the fixed-height title label, an 8px gap, then this
-    // field - deterministic regardless of whether the status label below it is shown.
     const field_rect = Rect{ .x = rect.x + 16, .y = rect.y + 38, .w = rect.w - 32, .h = 28 };
 
     if (field_rect.contains(x, y)) {
@@ -1109,19 +1416,18 @@ fn confirm_prompt() void {
 
     };
 
-    // If the item left this directory, drop selection; otherwise keep browsing.
     reload();
 
-    selected = null;
+    tab().selected = null;
 
-    for (entries[0..entry_count], 0..) |entry, index| {
+    for (0..content_count()) |index| {
 
         var path_buffer: [max_path]u8 = undefined;
-        const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch continue;
+        const path = path_at(index, &path_buffer) orelse continue;
 
         if (std.mem.eql(u8, path, dest)) {
 
-            selected = index;
+            tab().selected = index;
             break;
 
         }
@@ -1144,7 +1450,7 @@ fn path_parent(path: []const u8) []const u8 {
 
     }
 
-    return cwd;
+    return cwd();
 
 }
 
@@ -1232,7 +1538,6 @@ fn details_click(x: i32, y: i32) void {
 
     const hit = details_hit(x, y) orelse {
 
-        // Click outside the modal dismisses it.
         if (!details_rect().contains(x, y)) close_details();
 
         return;
@@ -1278,10 +1583,9 @@ fn press_begin(x: i32, y: i32) void {
 
     cancel_press();
 
-    if (y < toolbar_height) {
+    if (y < banner_h) {
 
-        if (x < 40) navigate_up();
-
+        chrome_press(x, y);
         return;
 
     }
@@ -1291,13 +1595,60 @@ fn press_begin(x: i32, y: i32) void {
     press_index = index;
     press_x = x;
     press_y = y;
-    selected = index;
-
-    const entry = entries[index];
-
-    if (entry.kind != proto.filesystem.kind_directory) load_preview(entry);
-
+    select_index(index);
     paint();
+
+}
+
+fn chrome_press(x: i32, y: i32) void {
+
+    if (up_btn_rect().contains(x, y)) {
+
+        navigate_up();
+        return;
+
+    }
+
+    if (new_tab_rect().contains(x, y)) {
+
+        open_tab(cwd());
+        return;
+
+    }
+
+    if (view_btn_rect(.row).contains(x, y)) {
+
+        set_view(.row);
+        return;
+
+    }
+
+    if (view_btn_rect(.grid).contains(x, y)) {
+
+        set_view(.grid);
+        return;
+
+    }
+
+    var i: usize = 0;
+
+    while (i < tab_count) : (i += 1) {
+
+        const rect = tab_rect(i);
+
+        if (!rect.contains(x, y)) continue;
+
+        if (tab_count > 1 and tab_close_rect(i).contains(x, y)) {
+
+            close_tab(i);
+            return;
+
+        }
+
+        switch_tab(i);
+        return;
+
+    }
 
 }
 
@@ -1314,7 +1665,6 @@ fn track_drag(x: i32, y: i32) void {
 
     if (drag_active) {
 
-        // Repaint every move so the ghost chip stays glued to the cursor.
         drop_target = resolve_drop(x, y);
         paint();
         return;
@@ -1339,10 +1689,10 @@ fn resolve_drop(x: i32, y: i32) DropTarget {
 
     const source = drag_index orelse return .none;
 
-    // Toolbar (top strip) is the "move to parent" drop zone.
-    if (y < toolbar_height) {
+    // Banner strip is the "move to parent" drop zone.
+    if (y < banner_h) {
 
-        if (cwd.len <= 1) return .none;
+        if (cwd().len <= 1) return .none;
 
         return .parent;
 
@@ -1351,7 +1701,7 @@ fn resolve_drop(x: i32, y: i32) DropTarget {
     const target = entry_index_at(x, y) orelse return .none;
 
     if (target == source) return .none;
-    if (entries[target].kind != proto.filesystem.kind_directory) return .none;
+    if (tab_const().entries[target].kind != proto.filesystem.kind_directory) return .none;
 
     return .{ .directory = target };
 
@@ -1359,7 +1709,7 @@ fn resolve_drop(x: i32, y: i32) DropTarget {
 
 fn apply_drop(source_index: usize, target: DropTarget) void {
 
-    if (source_index >= entry_count) {
+    if (source_index >= content_count()) {
 
         paint();
         return;
@@ -1372,30 +1722,22 @@ fn apply_drop(source_index: usize, target: DropTarget) void {
 
         .parent => {
 
-            if (cwd.len <= 1) {
+            if (cwd().len <= 1) {
 
                 paint();
                 return;
 
             }
 
-            const parent = path_parent(cwd);
+            const parent = path_parent(cwd());
             move_entry_into(source_index, parent);
 
         },
 
         .directory => |dir_index| {
 
-            if (dir_index >= entry_count) {
-
-                paint();
-                return;
-
-            }
-
-            const dir = entries[dir_index];
             var dir_buf: [max_path]u8 = undefined;
-            const dir_path = lib.fs.canonicalize(cwd, dir.name[0..dir.name_len], &dir_buf) catch {
+            const dir_path = path_at(dir_index, &dir_buf) orelse {
 
                 paint();
                 return;
@@ -1419,23 +1761,21 @@ fn move_entry_into(source_index: usize, dest_dir: []const u8) void {
 
     };
 
-    if (source_index >= entry_count) {
-
-        paint();
-        return;
-
-    }
-
-    const entry = entries[source_index];
     var source_buf: [max_path]u8 = undefined;
-    const source = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &source_buf) catch {
+    const source = path_at(source_index, &source_buf) orelse {
 
         paint();
         return;
 
     };
 
-    // Refuse dropping a directory onto itself.
+    const entry = entry_at(source_index) orelse {
+
+        paint();
+        return;
+
+    };
+
     if (std.mem.eql(u8, source, dest_dir)) {
 
         paint();
@@ -1472,12 +1812,16 @@ fn move_entry_into(source_index: usize, dest_dir: []const u8) void {
 
 fn open_entry(index: usize) void {
 
-    const entry = entries[index];
+    const t = tab();
+
+    if (index >= t.entry_count) return;
+
+    const entry = t.entries[index];
 
     if (entry.kind == proto.filesystem.kind_directory) {
 
         var buffer: [max_path]u8 = undefined;
-        const target = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &buffer) catch return;
+        const target = lib.fs.canonicalize(t.path_slice(), entry.name[0..entry.name_len], &buffer) catch return;
 
         set_cwd(target);
         reload();
@@ -1487,8 +1831,14 @@ fn open_entry(index: usize) void {
 
     }
 
+    open_file(entry, index);
+
+}
+
+fn open_file(entry: Entry, index: usize) void {
+
     var path_buffer: [max_path]u8 = undefined;
-    const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch return;
+    const path = path_at(index, &path_buffer) orelse return;
 
     if (is_image_name(entry.name[0..entry.name_len])) {
 
@@ -1504,15 +1854,14 @@ fn open_entry(index: usize) void {
 
     }
 
-    if (is_text_file(entry)) {
+    if (is_text_file_path(path, entry)) {
 
         lib.wm.launch_with_path("notepad", path);
         return;
 
     }
 
-    selected = index;
-    load_preview(entry);
+    select_index(index);
     paint();
 
 }
@@ -1523,14 +1872,11 @@ fn is_image_name(name: []const u8) bool {
 
 }
 
-fn is_text_file(entry: Entry) bool {
+fn is_text_file_path(path: []const u8, entry: Entry) bool {
 
     if (entry.length == 0) return true;
 
     const handle = if (client) |*c| c else return false;
-
-    var path_buffer: [max_path]u8 = undefined;
-    const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch return false;
 
     const file = handle.open_path(path, 0) catch return false;
     defer handle.close_file(file) catch {};
@@ -1551,7 +1897,7 @@ fn is_text_file(entry: Entry) bool {
 fn navigate_up() void {
 
     var buffer: [max_path]u8 = undefined;
-    const parent = lib.fs.canonicalize(cwd, "..", &buffer) catch return;
+    const parent = lib.fs.canonicalize(cwd(), "..", &buffer) catch return;
 
     set_cwd(parent);
     reload();
@@ -1561,15 +1907,17 @@ fn navigate_up() void {
 
 fn wheel(delta: i64) void {
 
-    const rows = visible_rows();
+    const t = tab();
+    const units = visible_units();
+    const total = scroll_total();
 
-    if (delta < 0 and scroll + rows < entry_count) {
+    if (delta < 0 and t.scroll + units < total) {
 
-        scroll += 1;
+        t.scroll += 1;
 
-    } else if (delta > 0 and scroll > 0) {
+    } else if (delta > 0 and t.scroll > 0) {
 
-        scroll -= 1;
+        t.scroll -= 1;
 
     } else {
 
@@ -1581,7 +1929,7 @@ fn wheel(delta: i64) void {
 
 }
 
-fn load_preview(entry: Entry) void {
+fn load_preview_entry(_: Entry, index: usize) void {
 
     preview_len = 0;
     preview_is_text = true;
@@ -1589,7 +1937,7 @@ fn load_preview(entry: Entry) void {
     const handle = if (client) |*c| c else return;
 
     var path_buffer: [max_path]u8 = undefined;
-    const path = lib.fs.canonicalize(cwd, entry.name[0..entry.name_len], &path_buffer) catch return;
+    const path = path_at(index, &path_buffer) orelse return;
 
     const file = handle.open_path(path, 0) catch return;
     defer handle.close_file(file) catch {};
@@ -1611,7 +1959,7 @@ fn load_preview(entry: Entry) void {
 
 }
 
-// Rendering
+// Layout geometry
 
 fn list_width() i32 {
 
@@ -1619,11 +1967,174 @@ fn list_width() i32 {
 
 }
 
-fn visible_rows() usize {
+fn grid_columns() i32 {
 
-    const height = @as(i32, @intCast(window.surface.height)) - list_start;
+    const width = list_width() - ui.scrollbar_width - grid_pad * 2;
 
-    return @intCast(@max(0, @divTrunc(height, row_height)));
+    if (width < grid_cell_w) return 1;
+
+    return @max(1, @divTrunc(width + grid_gap, grid_cell_w + grid_gap));
+
+}
+
+fn visible_units() usize {
+
+    const height = @as(i32, @intCast(window.surface.height)) - content_top;
+
+    return switch (view_mode) {
+
+        .row => @intCast(@max(0, @divTrunc(height, row_height))),
+
+        .grid => blk: {
+
+            const inner = height - grid_pad * 2;
+            const rows = @max(0, @divTrunc(inner + grid_gap, grid_cell_h + grid_gap));
+            break :blk @intCast(rows);
+
+        },
+
+    };
+
+}
+
+fn scroll_total() usize {
+
+    return switch (view_mode) {
+
+        .row => tab_const().entry_count,
+
+        .grid => blk: {
+
+            const cols = @as(usize, @intCast(@max(1, grid_columns())));
+            const count = tab_const().entry_count;
+            break :blk (count + cols - 1) / cols;
+
+        },
+
+    };
+
+}
+
+fn list_scroll() ui.Scroll {
+
+    return .{
+
+        .offset = @intCast(tab_const().scroll),
+        .content = @intCast(scroll_total()),
+        .viewport = @intCast(visible_units()),
+
+    };
+
+}
+
+fn clamp_scroll() void {
+
+    tab().scroll = @intCast(list_scroll().clamped());
+
+}
+
+// Banner geometry
+
+fn up_btn_rect() Rect {
+
+    return .{ .x = 8, .y = @divTrunc(banner_h - chrome_btn, 2), .w = chrome_btn, .h = chrome_btn };
+
+}
+
+fn tabs_origin_x() i32 {
+
+    return up_btn_rect().x + up_btn_rect().w + 8;
+
+}
+
+fn view_cluster_width() i32 {
+
+    return view_btn * 2 + 4;
+
+}
+
+fn view_cluster_x() i32 {
+
+    const width: i32 = @intCast(window.surface.width);
+
+    return width - 8 - view_cluster_width();
+
+}
+
+fn new_tab_rect() Rect {
+
+    const tabs_end = tabs_origin_x() + tabs_strip_width() + 4;
+
+    return .{ .x = tabs_end, .y = @divTrunc(banner_h - chrome_btn, 2), .w = chrome_btn, .h = chrome_btn };
+
+}
+
+fn tabs_strip_width() i32 {
+
+    if (tab_count == 0) return 0;
+
+    const each = tab_slot_width();
+
+    return each * @as(i32, @intCast(tab_count));
+
+}
+
+fn tab_slot_width() i32 {
+
+    const left = tabs_origin_x();
+    // Reserve + button and view cluster with a gap.
+    const right = view_cluster_x() - chrome_btn - 16;
+    const available = @max(tab_min_w, right - left);
+
+    if (tab_count == 0) return tab_min_w;
+
+    const each = @divTrunc(available, @as(i32, @intCast(tab_count)));
+
+    return @min(tab_max_w, @max(tab_min_w, each));
+
+}
+
+fn tab_rect(index: usize) Rect {
+
+    const each = tab_slot_width();
+    const x = tabs_origin_x() + @as(i32, @intCast(index)) * each;
+
+    return .{ .x = x, .y = 6, .w = each - 4, .h = banner_h - 12 };
+
+}
+
+fn tab_close_rect(index: usize) Rect {
+
+    const rect = tab_rect(index);
+
+    return .{ .x = rect.x + rect.w - tab_close_w - 4, .y = rect.y + @divTrunc(rect.h - tab_close_w, 2), .w = tab_close_w, .h = tab_close_w };
+
+}
+
+fn view_btn_rect(mode: ViewMode) Rect {
+
+    const slot: i32 = switch (mode) {
+
+        .row => 0,
+        .grid => 1,
+
+    };
+
+    const x = view_cluster_x() + slot * (view_btn + 4);
+
+    return .{ .x = x, .y = @divTrunc(banner_h - view_btn, 2), .w = view_btn, .h = view_btn };
+
+}
+
+// Rendering
+
+fn paint_chrome_rect(surface: *const gfx.Surface, rect: Rect) void {
+
+    if (rect.is_empty()) return;
+
+    if (lib.prefs.quartz_enabled() and quartz.fill_element(surface, rect, 0, chrome_tint)) return;
+
+    surface.fill_rect(rect, chrome_solid);
 
 }
 
@@ -1633,20 +2144,20 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    surface.fill(ui.theme.window_bg);
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
 
-    paint_toolbar(surface, width);
+    paint_banner(surface, width);
 
     if (client == null) {
 
-        text(surface, 20, list_start + 12, 14, "Filesystem unavailable - no disk attached.", ui.theme.text_dim);
+        text(surface, 20, content_top + 12, 14, "Filesystem unavailable - no disk attached.", ui.theme.text_dim);
         window.present_all() catch {};
 
         return;
 
     }
 
-    paint_list(surface, height);
+    paint_content(surface, height);
     paint_side_panel(surface, width, height);
 
     if (drag_active) paint_drag_indicator(surface);
@@ -1658,13 +2169,181 @@ fn paint() void {
 
 }
 
+fn paint_banner(surface: *const gfx.Surface, width: i32) void {
+
+    const parent_hot = drag_active and drop_target == .parent;
+    const banner = Rect{ .x = 0, .y = 0, .w = width, .h = banner_h };
+
+    if (parent_hot) {
+
+        surface.fill_rect(banner, ui.theme.accent_dim);
+
+    } else {
+
+        paint_chrome_rect(surface, banner);
+
+    }
+
+    surface.fill_rect(.{ .x = 0, .y = banner_h - 1, .w = width, .h = 1 }, ui.theme.border);
+
+    // Up
+    const up = up_btn_rect();
+    const up_hot = pointer_y < banner_h and up.contains(pointer_x, pointer_y) and !drag_active;
+
+    if (up_hot) ui.fill_round_rect(surface, up, 6, ui.theme.hover);
+
+    lib.draw.vector.icon_in(surface, .{ .x = up.x + 2, .y = up.y + 2, .w = 24, .h = 24 }, lib.icons.arrow_up, ui.theme.text);
+
+    if (drag_active and cwd().len > 1) {
+
+        const hint: []const u8 = if (parent_hot) "Drop to move up" else "Drag here to move up";
+
+        text_in(surface, .{ .x = tabs_origin_x(), .y = 0, .w = view_cluster_x() - tabs_origin_x() - 8, .h = banner_h }, 0, 13, hint, ui.theme.text);
+
+    } else {
+
+        paint_tabs(surface);
+        paint_new_tab(surface);
+        paint_view_switcher(surface);
+
+    }
+
+}
+
+fn paint_tabs(surface: *const gfx.Surface) void {
+
+    var i: usize = 0;
+
+    while (i < tab_count) : (i += 1) {
+
+        const rect = tab_rect(i);
+        const active = i == active_tab;
+        const hovered = !drag_active and rect.contains(pointer_x, pointer_y);
+        const fill = if (active) ui.theme.active else if (hovered) ui.theme.hover else null;
+
+        if (fill) |color| ui.fill_round_rect(surface, rect, 6, color);
+
+        if (active) ui.stroke_round_rect(surface, rect, 6, 1, ui.theme.border);
+
+        const label = tabs[i].basename();
+        const close_space: i32 = if (tab_count > 1) tab_close_w + 6 else 4;
+        const label_rect = Rect{ .x = rect.x + 8, .y = rect.y, .w = rect.w - close_space - 8, .h = rect.h };
+
+        text_in(surface, label_rect, 0, 12, label, if (active) ui.theme.text else ui.theme.text_dim);
+
+        if (tab_count > 1) {
+
+            const close = tab_close_rect(i);
+            const close_hot = close.contains(pointer_x, pointer_y);
+
+            if (close_hot) ui.fill_round_rect(surface, close, 4, ui.theme.hover);
+
+            const cx = close.x + @divTrunc(close.w, 2);
+            const cy = close.y + @divTrunc(close.h, 2);
+            const arm: i32 = 4;
+            const color = if (close_hot) ui.theme.text else ui.theme.text_dim;
+            var d: i32 = -arm;
+
+            while (d <= arm) : (d += 1) {
+
+                surface.fill_rect(.{ .x = cx + d, .y = cy + d, .w = 1, .h = 1 }, color);
+                surface.fill_rect(.{ .x = cx + d, .y = cy - d, .w = 1, .h = 1 }, color);
+
+            }
+
+        }
+
+    }
+
+}
+
+fn paint_new_tab(surface: *const gfx.Surface) void {
+
+    if (tab_count >= max_tabs) return;
+
+    const rect = new_tab_rect();
+    const hot = !drag_active and rect.contains(pointer_x, pointer_y);
+
+    if (hot) ui.fill_round_rect(surface, rect, 6, ui.theme.hover);
+
+    const cx = rect.x + @divTrunc(rect.w, 2);
+    const cy = rect.y + @divTrunc(rect.h, 2);
+    const arm: i32 = 6;
+    const color = if (hot) ui.theme.text else ui.theme.text_dim;
+
+    surface.fill_rect(.{ .x = cx - arm, .y = cy, .w = arm * 2 + 1, .h = 1 }, color);
+    surface.fill_rect(.{ .x = cx, .y = cy - arm, .w = 1, .h = arm * 2 + 1 }, color);
+
+}
+
+fn paint_view_switcher(surface: *const gfx.Surface) void {
+
+    const modes = [_]ViewMode{ .row, .grid };
+
+    for (modes) |mode| {
+
+        const rect = view_btn_rect(mode);
+        const active = view_mode == mode;
+        const hot = !drag_active and rect.contains(pointer_x, pointer_y);
+
+        if (active) ui.fill_round_rect(surface, rect, 6, ui.theme.active)
+        else if (hot) ui.fill_round_rect(surface, rect, 6, ui.theme.hover);
+
+        const color = if (active) ui.theme.text else ui.theme.text_dim;
+
+        paint_view_icon(surface, rect, mode, color);
+
+    }
+
+}
+
+fn paint_view_icon(surface: *const gfx.Surface, rect: Rect, mode: ViewMode, color: Color) void {
+
+    const cx = rect.x + @divTrunc(rect.w, 2);
+    const cy = rect.y + @divTrunc(rect.h, 2);
+
+    switch (mode) {
+
+        .row => {
+
+            // Three horizontal lines.
+            var i: i32 = 0;
+
+            while (i < 3) : (i += 1) {
+
+                const y = cy - 6 + i * 6;
+
+                surface.fill_rect(.{ .x = cx - 7, .y = y, .w = 14, .h = 2 }, color);
+
+            }
+
+        },
+
+        .grid => {
+
+            lib.draw.vector.icon_in(surface, .{ .x = rect.x + 5, .y = rect.y + 5, .w = 20, .h = 20 }, lib.icons.apps, color);
+
+        },
+
+    }
+
+}
+
+fn paint_content(surface: *const gfx.Surface, height: i32) void {
+
+    switch (view_mode) {
+
+        .row => paint_list(surface, height),
+        .grid => paint_grid(surface, height),
+
+    }
+
+}
+
 fn paint_drag_indicator(surface: *const gfx.Surface) void {
 
     const index = drag_index orelse return;
-
-    if (index >= entry_count) return;
-
-    const entry = entries[index];
+    const entry = entry_at(index) orelse return;
     const name = entry.name[0..entry.name_len];
 
     const chip_h: i32 = 28;
@@ -1677,7 +2356,6 @@ fn paint_drag_indicator(surface: *const gfx.Surface) void {
     const label_w = font.text_width(visible, 12);
     const chip_w = pad + icon_box + gap + label_w + pad;
 
-    // Sit just below-right of the pointer so the hot tip stays free for hit-testing.
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
@@ -1695,7 +2373,7 @@ fn paint_drag_indicator(surface: *const gfx.Surface) void {
     ui.stroke_round_rect(surface, rect, 6, 1, ui.theme.border);
 
     const is_dir = entry.kind == proto.filesystem.kind_directory;
-    const icon = if (is_dir) lib.icons.folder else lib.icons.file;
+    const icon = entry_icon(entry);
     const tint = if (is_dir) ui.theme.accent else ui.theme.text_dim;
 
     lib.draw.vector.icon_in(surface, .{
@@ -1797,101 +2475,40 @@ fn paint_prompt(surface: *const gfx.Surface) void {
 
 }
 
-fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
-
-    const parent_hot = drag_active and drop_target == .parent;
-
-    surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_height }, if (parent_hot) ui.theme.accent_dim else ui.theme.surface_alt);
-    surface.fill_rect(.{ .x = 0, .y = toolbar_height, .w = width, .h = 1 }, ui.theme.border);
-
-    lib.draw.vector.icon_in(surface, .{ .x = 8, .y = 7, .w = 24, .h = 24 }, lib.icons.arrow_up, ui.theme.text);
-
-    if (drag_active and cwd.len > 1) {
-
-        // While dragging, the whole top strip is the parent drop target.
-        const hint: []const u8 = if (parent_hot) "Drop to move up" else "Drag here to move up";
-
-        text_in(surface, .{ .x = 44, .y = 0, .w = width - 52, .h = toolbar_height }, 0, 13, hint, ui.theme.text);
-
-    } else {
-
-        text_in(surface, .{ .x = 44, .y = 0, .w = width - 52, .h = toolbar_height }, 0, 13, cwd, ui.theme.text);
-
-    }
-
-}
-
-fn list_scroll() ui.Scroll {
-
-    return .{
-
-        .offset = @intCast(scroll),
-        .content = @intCast(entry_count),
-        .viewport = @intCast(visible_rows()),
-
-    };
-
-}
-
-fn clamp_scroll() void {
-
-    scroll = @intCast(list_scroll().clamped());
-
-}
-
 fn paint_list(surface: *const gfx.Surface, height: i32) void {
 
+    const t = tab_const();
     const width = list_width();
-
-    // A gutter on the right holds the scrollbar so long directory listings read as overflowing, not truncated.
     const gutter = ui.scrollbar_width;
     const content_w = width - gutter;
 
-    surface.fill_rect(.{ .x = 0, .y = list_start, .w = width, .h = height - list_start }, ui.theme.window_bg);
+    if (!lib.prefs.quartz_enabled()) {
 
-    if (entry_count == 0) {
+        surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
 
-        text(surface, 16, list_start + 10, 13, "Empty directory", ui.theme.text_dim);
+    }
 
+    if (t.entry_count == 0) {
+
+        text(surface, 16, content_top + 10, 13, "Empty directory", ui.theme.text_dim);
         return;
 
     }
 
-    const rows = visible_rows();
+    const rows = visible_units();
     var row: usize = 0;
 
-    while (row < rows and scroll + row < entry_count) : (row += 1) {
+    while (row < rows and t.scroll + row < t.entry_count) : (row += 1) {
 
-        const index = scroll + row;
-        const entry = entries[index];
-        const y = list_start + @as(i32, @intCast(row)) * row_height;
+        const index = t.scroll + row;
+        const entry = t.entries[index];
+        const y = content_top + @as(i32, @intCast(row)) * row_height;
         const rect = Rect{ .x = 0, .y = y, .w = content_w, .h = row_height };
 
-        const is_selected = selected != null and selected.? == index;
-        const is_drop = switch (drop_target) {
-
-            .directory => |dir| dir == index,
-            else => false,
-
-        };
-        const hovered = !drag_active and pointer_y >= y and pointer_y < y + row_height and pointer_x < width;
-
-        if (is_drop) {
-
-            ui.fill_round_rect(surface, rect.inset(3), 5, ui.theme.accent_dim);
-
-        } else if (is_selected) {
-
-            ui.fill_round_rect(surface, rect.inset(3), 5, if (drag_active) ui.theme.hover else ui.theme.accent_dim);
-
-        } else if (hovered) {
-
-            ui.fill_round_rect(surface, rect.inset(3), 5, ui.theme.hover);
-
-        }
+        paint_row_background(surface, rect, index, width);
 
         const is_dir = entry.kind == proto.filesystem.kind_directory;
-        const icon = if (is_dir) lib.icons.folder else lib.icons.file;
+        const icon = entry_icon(entry);
         const tint = if (is_dir) ui.theme.accent else ui.theme.text_dim;
 
         lib.draw.vector.icon_in(surface, .{ .x = 10, .y = y + @divTrunc(row_height - 16, 2), .w = 16, .h = 16 }, icon, tint);
@@ -1909,47 +2526,241 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
 
     }
 
-    ui.scrollbar(surface, .{ .x = width - gutter, .y = list_start, .w = gutter, .h = height - list_start }, list_scroll());
+    ui.scrollbar(surface, .{ .x = width - gutter, .y = content_top, .w = gutter, .h = height - content_top }, list_scroll());
+
+}
+
+fn paint_grid(surface: *const gfx.Surface, height: i32) void {
+
+    const t = tab_const();
+    const width = list_width();
+    const gutter = ui.scrollbar_width;
+    const content_w = width - gutter;
+
+    if (!lib.prefs.quartz_enabled()) {
+
+        surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
+
+    }
+
+    if (t.entry_count == 0) {
+
+        text(surface, 16, content_top + 10, 13, "Empty directory", ui.theme.text_dim);
+        return;
+
+    }
+
+    const cols = grid_columns();
+    const vis_rows = visible_units();
+    var row: usize = 0;
+
+    while (row < vis_rows) : (row += 1) {
+
+        const grid_row = t.scroll + row;
+        var col: i32 = 0;
+
+        while (col < cols) : (col += 1) {
+
+            const index = grid_row * @as(usize, @intCast(cols)) + @as(usize, @intCast(col));
+
+            if (index >= t.entry_count) break;
+
+            const entry = t.entries[index];
+            const x = grid_pad + col * (grid_cell_w + grid_gap);
+            const y = content_top + grid_pad + @as(i32, @intCast(row)) * (grid_cell_h + grid_gap);
+            const rect = Rect{ .x = x, .y = y, .w = grid_cell_w, .h = grid_cell_h };
+
+            if (y + grid_cell_h > height) break;
+
+            paint_grid_cell(surface, rect, entry, index);
+
+        }
+
+    }
+
+    ui.scrollbar(surface, .{ .x = width - gutter, .y = content_top, .w = gutter, .h = height - content_top }, list_scroll());
+
+    _ = content_w;
+
+}
+
+fn paint_grid_cell(surface: *const gfx.Surface, rect: Rect, entry: Entry, index: usize) void {
+
+    const t = tab_const();
+    const is_selected = t.selected != null and t.selected.? == index;
+    const is_drop = switch (drop_target) {
+
+        .directory => |dir| dir == index,
+        else => false,
+
+    };
+    const hovered = !drag_active and pointer_x >= rect.x and pointer_x < rect.x + rect.w and pointer_y >= rect.y and pointer_y < rect.y + rect.h;
+
+    if (is_drop) {
+
+        ui.fill_round_rect(surface, rect, 8, ui.theme.accent_dim);
+
+    } else if (is_selected) {
+
+        ui.fill_round_rect(surface, rect, 8, if (drag_active) ui.theme.hover else ui.theme.accent_dim);
+
+    } else if (hovered) {
+
+        ui.fill_round_rect(surface, rect, 8, ui.theme.hover);
+
+    }
+
+    const preview_rect = Rect{
+
+        .x = rect.x + @divTrunc(rect.w - grid_preview, 2),
+        .y = rect.y + 8,
+        .w = grid_preview,
+        .h = grid_preview,
+
+    };
+
+    ui.fill_round_rect(surface, preview_rect, 8, ui.theme.surface_alt);
+
+    const is_dir = entry.kind == proto.filesystem.kind_directory;
+    const icon = entry_icon(entry);
+    const tint = if (is_dir) ui.theme.accent else ui.theme.text_dim;
+    const icon_box: i32 = 32;
+
+    // Prefer a live PNG fit for the selected image; other tiles use type icons so paint stays cheap.
+    var drew_image = false;
+
+    if (!is_dir and is_image_name(entry.name[0..entry.name_len])) {
+
+        const selected = tab_const().selected != null and tab_const().selected.? == index;
+
+        if (selected and ensure_thumb(index, entry)) {
+
+            if (thumb_image) |img| {
+
+                const view = lib.draw.image.Image.from_png(img);
+                view.draw_fit(surface, preview_rect.inset(4));
+                drew_image = true;
+
+            }
+
+        }
+
+    }
+
+    if (!drew_image) {
+
+        lib.draw.vector.icon_in(surface, .{
+
+            .x = preview_rect.x + @divTrunc(preview_rect.w - icon_box, 2),
+            .y = preview_rect.y + @divTrunc(preview_rect.h - icon_box, 2),
+            .w = icon_box,
+            .h = icon_box,
+
+        }, icon, tint);
+
+    }
+
+    const name_rect = Rect{ .x = rect.x + 4, .y = rect.y + grid_preview + 12, .w = rect.w - 8, .h = 20 };
+
+    text_centered(surface, name_rect, 11, entry.name[0..entry.name_len], ui.theme.text);
+
+}
+
+fn paint_row_background(surface: *const gfx.Surface, rect: Rect, index: usize, list_w: i32) void {
+
+    const t = tab_const();
+    const is_selected = t.selected != null and t.selected.? == index;
+    const is_drop = switch (drop_target) {
+
+        .directory => |dir| dir == index,
+        else => false,
+
+    };
+    const hovered = !drag_active and pointer_y >= rect.y and pointer_y < rect.y + rect.h and pointer_x < list_w and pointer_x >= 0 and pointer_y >= content_top;
+
+    if (is_drop) {
+
+        ui.fill_round_rect(surface, rect.inset(3), 5, ui.theme.accent_dim);
+
+    } else if (is_selected) {
+
+        ui.fill_round_rect(surface, rect.inset(3), 5, if (drag_active) ui.theme.hover else ui.theme.accent_dim);
+
+    } else if (hovered) {
+
+        ui.fill_round_rect(surface, rect.inset(3), 5, ui.theme.hover);
+
+    }
 
 }
 
 fn paint_side_panel(surface: *const gfx.Surface, width: i32, height: i32) void {
 
     const x = list_width();
+    // Flush under the banner — no gap.
+    const panel = Rect{ .x = x, .y = content_top, .w = width - x, .h = height - content_top };
 
-    surface.fill_rect(.{ .x = x, .y = list_start, .w = width - x, .h = height - list_start }, ui.theme.surface);
-    surface.fill_rect(.{ .x = x, .y = list_start, .w = 1, .h = height - list_start }, ui.theme.border);
+    paint_chrome_rect(surface, panel);
+    surface.fill_rect(.{ .x = x, .y = content_top, .w = 1, .h = height - content_top }, ui.theme.border);
 
     const pad = x + 16;
+    const t = tab_const();
 
-    const index = selected orelse {
+    const index = t.selected orelse {
 
         var count_buffer: [48]u8 = undefined;
-        const summary = std.fmt.bufPrint(&count_buffer, "{d} items", .{entry_count}) catch "";
+        const summary = std.fmt.bufPrint(&count_buffer, "{d} items", .{t.entry_count}) catch "";
 
-        text(surface, pad, list_start + 16, 14, "No selection", ui.theme.text_dim);
-        text(surface, pad, list_start + 40, 13, summary, ui.theme.text_faint);
+        text(surface, pad, content_top + 16, 14, "No selection", ui.theme.text_dim);
+        text(surface, pad, content_top + 40, 13, summary, ui.theme.text_faint);
+        text(surface, pad, content_top + 64, 12, t.path_slice(), ui.theme.text_faint);
 
         return;
 
     };
 
-    const entry = entries[index];
+    const entry = entry_at(index) orelse return;
 
-    text(surface, pad, list_start + 14, 15, entry.name[0..entry.name_len], ui.theme.text);
+    text(surface, pad, content_top + 14, 15, entry.name[0..entry.name_len], ui.theme.text);
 
     var meta: [64]u8 = undefined;
     const size = human_size(entry.length, meta[0..24]);
     const kind_label: []const u8 = if (entry.kind == proto.filesystem.kind_directory) "directory" else "file";
     const line = std.fmt.bufPrint(meta[24..], "{s}  -  {s}", .{ kind_label, size }) catch kind_label;
 
-    text(surface, pad, list_start + 38, 12, line, ui.theme.text_dim);
+    text(surface, pad, content_top + 38, 12, line, ui.theme.text_dim);
 
-    surface.fill_rect(.{ .x = pad, .y = list_start + 58, .w = width - pad - 16, .h = 1 }, ui.theme.border);
+    surface.fill_rect(.{ .x = pad, .y = content_top + 58, .w = width - pad - 16, .h = 1 }, ui.theme.border);
 
     if (entry.kind == proto.filesystem.kind_directory) {
 
-        text(surface, pad, list_start + 70, 12, "Folder - open to browse", ui.theme.text_faint);
+        text(surface, pad, content_top + 70, 12, "Folder - open to browse", ui.theme.text_faint);
+
+        return;
+
+    }
+
+    // Image preview in the inspector when the selection is a PNG.
+    if (is_image_name(entry.name[0..entry.name_len])) {
+
+        const image_rect = Rect{ .x = pad, .y = content_top + 70, .w = width - pad - 16, .h = @min(160, height - content_top - 100) };
+
+        ui.fill_round_rect(surface, image_rect, 6, ui.theme.surface_alt);
+
+        if (ensure_thumb(index, entry)) {
+
+            if (thumb_image) |img| {
+
+                const view = lib.draw.image.Image.from_png(img);
+                view.draw_fit(surface, image_rect.inset(6));
+
+            }
+
+        } else {
+
+            text(surface, pad + 8, content_top + 78, 12, "Image preview unavailable", ui.theme.text_faint);
+
+        }
 
         return;
 
@@ -1957,7 +2768,7 @@ fn paint_side_panel(surface: *const gfx.Surface, width: i32, height: i32) void {
 
     if (preview_len == 0) {
 
-        text(surface, pad, list_start + 70, 12, "(empty file)", ui.theme.text_faint);
+        text(surface, pad, content_top + 70, 12, "(empty file)", ui.theme.text_faint);
 
         return;
 
@@ -1965,13 +2776,13 @@ fn paint_side_panel(surface: *const gfx.Surface, width: i32, height: i32) void {
 
     if (!preview_is_text) {
 
-        text(surface, pad, list_start + 70, 12, "Binary file - no preview", ui.theme.text_faint);
+        text(surface, pad, content_top + 70, 12, "Binary file - no preview", ui.theme.text_faint);
 
         return;
 
     }
 
-    const preview_rect = Rect{ .x = pad, .y = list_start + 68, .w = width - pad - 16, .h = height - list_start - 78 };
+    const preview_rect = Rect{ .x = pad, .y = content_top + 68, .w = width - pad - 16, .h = height - content_top - 78 };
 
     draw_preview(surface, preview_rect);
 
@@ -2007,26 +2818,19 @@ fn paint_menu(surface: *const gfx.Surface) void {
 
     };
 
-    quartz.clear(surface);
+    if (!lib.prefs.quartz_enabled()) {
 
-    if (lib.prefs.quartz_level == .off) {
-
+        surface.fill(lib.draw.transparent);
         lib.draw.round.fill_round_rect(surface, bounds, 6, ui.theme.surface);
         ui.stroke_round_rect(surface, bounds, 6, 1, ui.theme.border);
 
     } else {
 
-        var appearance = quartz.style(switch (lib.prefs.quartz_level) {
-
-            .off => unreachable,
-            .light => .clear,
-            .medium => .regular,
-            .dark => .prominent,
-
-        }, ui.theme.surface, ui.theme.accent);
+        var appearance = quartz.style(lib.quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), ui.theme.surface, ui.theme.accent);
 
         appearance.radius = 6;
 
+        quartz.clear(surface);
         quartz.panel(surface, bounds, appearance);
 
     }
@@ -2049,7 +2853,6 @@ fn paint_menu(surface: *const gfx.Surface) void {
                 const label = menu_label(action);
                 const text_y = rect.y + @divTrunc(rect.h - font.line_height(13), 2);
 
-                // Draw without truncate-to-fit clipping so labels are never cut mid-word.
                 font.draw(surface, rect.x + menu_label_pad, text_y, 13, label, color);
 
                 cursor_y += menu_row_h;
@@ -2126,8 +2929,6 @@ fn paint_details_modal(surface: *const gfx.Surface) void {
 
 }
 
-// The TTF face has no wrapped helper, so lay the preview out line by line, clipping to the pane.
-
 fn draw_preview(surface: *const gfx.Surface, rect: Rect) void {
 
     var y = rect.y;
@@ -2153,6 +2954,85 @@ fn draw_preview(surface: *const gfx.Surface, rect: Rect) void {
         }
 
     }
+
+}
+
+fn entry_icon(entry: Entry) []const u8 {
+
+    if (entry.kind == proto.filesystem.kind_directory) return lib.icons.folder;
+
+    const name = entry.name[0..entry.name_len];
+
+    if (is_image_name(name)) return lib.icons.image;
+    if (lib.file_picker.has_extension(name, "wav")) return lib.icons.music;
+
+    return lib.icons.file;
+
+}
+
+// Grid / inspector PNG thumbnail (small files only).
+
+fn invalidate_thumb() void {
+
+    thumb_valid = false;
+    thumb_path_len = 0;
+    thumb_image = null;
+
+}
+
+fn ensure_thumb(index: usize, entry: Entry) bool {
+
+    if (entry.length == 0 or entry.length > thumb_file_cap) return false;
+
+    var path_buffer: [max_path]u8 = undefined;
+    const path = path_at(index, &path_buffer) orelse return false;
+
+    if (thumb_valid and thumb_path_len == path.len and std.mem.eql(u8, thumb_path[0..thumb_path_len], path)) {
+
+        return thumb_image != null;
+
+    }
+
+    thumb_valid = false;
+    thumb_image = null;
+    thumb_path_len = @min(path.len, thumb_path.len);
+    @memcpy(thumb_path[0..thumb_path_len], path[0..thumb_path_len]);
+
+    const handle = if (client) |*c| c else return false;
+
+    const file = handle.open_path(path, 0) catch return false;
+    defer handle.close_file(file) catch {};
+
+    const to_read: usize = @intCast(@min(entry.length, thumb_file_cap));
+    const read = handle.read(file, 0, thumb_file[0..to_read]) catch return false;
+
+    if (read < 8) return false;
+
+    var fba = std.heap.FixedBufferAllocator.init(thumb_decode[0..]);
+
+    thumb_image = lib.draw.png.decode(fba.allocator(), thumb_file[0..read]) catch {
+
+        thumb_valid = true;
+        return false;
+
+    };
+
+    // Drop absurdly large decoded images so the fixed arena stays stable.
+    if (thumb_image) |img| {
+
+        if (img.width > 2048 or img.height > 2048) {
+
+            thumb_image = null;
+            thumb_valid = true;
+            return false;
+
+        }
+
+    }
+
+    thumb_valid = true;
+
+    return thumb_image != null;
 
 }
 

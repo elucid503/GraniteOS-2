@@ -121,6 +121,17 @@ var drag_id: u32 = 0;
 var drag_dx: i32 = 0;
 var drag_dy: i32 = 0;
 
+// Last position that was actually glass-composited while dragging (not every pointer sample).
+var drag_last_painted: Rect = Rect.empty;
+var drag_moved_since_paint = false;
+var last_drag_composite_ms: u64 = 0;
+
+// Cap glass rebuilds only for large Quartz windows while dragging. Small glass surfaces stay
+// per-sample (they were never the problem). Effects stay full-quality on each painted frame.
+const drag_composite_interval_ms: u64 = 32;
+// Roughly ≥ Files/default large windows; calculator/about/timer stay per-sample.
+const drag_coalesce_min_pixels: u64 = 380_000;
+
 // Interactive resize draws a rubber-band outline while the grip is held.
 
 var resize_id: u32 = 0;
@@ -1065,6 +1076,7 @@ fn handle_pointer_move() void {
         const window = manager.by_id(drag_id) orelse {
 
             drag_id = 0;
+            drag_moved_since_paint = false;
 
             return;
 
@@ -1074,7 +1086,16 @@ fn handle_pointer_move() void {
 
         if (manager.move(drag_id, pointer_x - drag_dx, pointer_y - drag_dy) != null) {
 
-            add_movement_damage(window, before, window.frame());
+            // Large glass surfaces coalesce; everything else damags every sample so light apps stay snappy.
+            if (drag_should_coalesce(window)) {
+
+                drag_moved_since_paint = true;
+
+            } else {
+
+                add_movement_damage(window, before, window.frame());
+
+            }
 
         }
 
@@ -1144,6 +1165,9 @@ fn handle_button_down(event: events.Event) void {
             drag_id = window.id;
             drag_dx = pointer_x - window.x;
             drag_dy = pointer_y - window.y;
+            drag_last_painted = window.frame();
+            drag_moved_since_paint = false;
+            last_drag_composite_ms = lib.time.now_ms();
 
         },
 
@@ -1200,7 +1224,20 @@ fn handle_button_up(event: events.Event) void {
 
     if (drag_id != 0) {
 
+        // Final glass pass for the resting place (may have been rate-limited mid-drag).
+        if (drag_moved_since_paint) {
+
+            if (manager.by_id(drag_id)) |window| {
+
+                if (drag_should_coalesce(window)) enqueue_drag_paint(window.frame());
+
+            }
+
+        }
+
         drag_id = 0;
+        drag_moved_since_paint = false;
+        drag_last_painted = Rect.empty;
 
         return;
 
@@ -1423,11 +1460,13 @@ fn add_damage(rect: Rect) void {
 
     if (clipped.is_empty()) return;
 
+    // Invalidate glass caches with a halo; the paint list stays tight and expands once in composite().
     const halo = quartz_halo(clipped);
-    const affected = if (halo > 0) clipped.inset(-halo).intersect(screen_bounds()) else clipped;
 
-    quartz_renderer.invalidate_region(affected);
-    damage.add(affected);
+    if (halo > 0) quartz_renderer.invalidate_region(clipped.inset(-halo).intersect(screen_bounds()))
+    else quartz_renderer.invalidate_region(clipped);
+
+    damage.add(clipped);
 
 }
 
@@ -1449,11 +1488,13 @@ fn add_window_damage(window: *const Window, rect: Rect) void {
 
     if (clipped.is_empty()) return;
 
+    // Cache invalidation needs the morph halo; the dirty rect stays tight and expands once when painted.
     const halo = quartz_halo_above(clipped, window);
-    const affected = if (halo > 0) clipped.inset(-halo).intersect(screen_bounds()) else clipped;
 
-    quartz_renderer.invalidate_region(affected);
-    damage.add(affected);
+    if (halo > 0) quartz_renderer.invalidate_region(clipped.inset(-halo).intersect(screen_bounds()))
+    else quartz_renderer.invalidate_region(clipped);
+
+    damage.add(clipped);
 
 }
 
@@ -1480,9 +1521,45 @@ fn quartz_halo(rect: Rect) i32 {
 
 }
 
+fn window_needs_glass(window: *const Window) bool {
+
+    return lib.prefs.quartz_enabled() and quartz_renderer.ready() and window.flags & proto.window.flag_quartz != 0;
+
+}
+
+fn drag_should_coalesce(window: *const Window) bool {
+
+    if (!window_needs_glass(window)) return false;
+
+    const frame = window.frame();
+    const area = @as(u64, @intCast(@max(0, frame.w))) * @as(u64, @intCast(@max(0, frame.h)));
+
+    return area >= drag_coalesce_min_pixels;
+
+}
+
+fn enqueue_drag_paint(current: Rect) void {
+
+    const previous = if (drag_last_painted.is_empty()) current else drag_last_painted;
+    const covered = previous.cover(current).intersect(screen_bounds());
+
+    if (covered.is_empty()) return;
+
+    // Geometry only — composite() applies a single frost halo when painting.
+    const density: u8 = @intFromEnum(lib.prefs.quartz_level);
+    const halo = quartz_effect.damage_halo(density);
+
+    quartz_renderer.invalidate_region(covered.inset(-halo).intersect(screen_bounds()));
+    damage.add(covered);
+    drag_last_painted = current;
+    drag_moved_since_paint = false;
+    last_drag_composite_ms = lib.time.now_ms();
+
+}
+
 fn quartz_halo_above(rect: Rect, source: ?*const Window) i32 {
 
-    if (!quartz_renderer.ready() or lib.prefs.quartz_level == .off) return 0;
+    if (!quartz_renderer.ready() or !lib.prefs.quartz_enabled()) return 0;
 
     const max_layers: i32 = 3;
     var first: usize = 0;
@@ -1539,7 +1616,8 @@ fn quartz_halo_above(rect: Rect, source: ?*const Window) i32 {
         if (layer_halo == 0) continue;
 
         layers += 1;
-        halo += layer_halo;
+        // Take the max halo once — summing per stacked layer ballooned paint regions to 100+ px.
+        halo = @max(halo, layer_halo);
         affected = affected.inset(-layer_halo).intersect(screen_bounds());
 
         // Bounds filter propagation through stacked Quartz surfaces without unbounded overdraw.
@@ -1567,6 +1645,30 @@ fn screen_bounds() Rect {
 
 fn composite() !void {
 
+    // Fold coalesced *glass* drag geometry into the damage list (opaque drags already damag every sample).
+    if (drag_id != 0 and drag_moved_since_paint) {
+
+        if (manager.by_id(drag_id)) |window| {
+
+            if (drag_should_coalesce(window)) {
+
+                const now = lib.time.now_ms();
+                const due = now -% last_drag_composite_ms >= drag_composite_interval_ms;
+
+                // Rate-limit pure large-glass drag frames so one Files-sized window cannot pin the server.
+                // Unrelated damage still forces an immediate pass and takes the drag with it.
+                if (due or damage.len != 0) enqueue_drag_paint(window.frame());
+
+            } else {
+
+                drag_moved_since_paint = false;
+
+            }
+
+        }
+
+    }
+
     if (damage.len == 0) return;
 
     const pending = damage;
@@ -1579,8 +1681,12 @@ fn composite() !void {
 
     for (pending.rects[0..pending.len]) |region| {
 
-        const halo = quartz_halo(region);
-        const paint_region = if (halo > 0) region.inset(-halo).intersect(screen_bounds()) else region;
+        // One frost/morph margin for sampling — applied here only (not stacked with add_*).
+        const density: u8 = @intFromEnum(lib.prefs.quartz_level);
+        const paint_region = if (lib.prefs.quartz_enabled() and quartz_renderer.ready())
+            region.inset(-quartz_effect.damage_halo(density)).intersect(screen_bounds())
+        else
+            region.intersect(screen_bounds());
         var first: usize = 0;
         var covered = false;
 
@@ -1701,7 +1807,7 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     const surface = surfaces.surface_of(slot) orelse return;
 
-    if (lib.prefs.quartz_level == .off or window.flags & proto.window.flag_quartz == 0 or !quartz_renderer.composite(&back, &surface, window.content(), clip, window.id)) {
+    if (!lib.prefs.quartz_enabled() or window.flags & proto.window.flag_quartz == 0 or !quartz_renderer.composite(&back, &surface, window.content(), clip, window.id)) {
 
         render.blit_content(&back, window, &surface, clip, theme.border);
 

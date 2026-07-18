@@ -69,7 +69,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(640, 480, 0, "Notepad");
+    window = try connection.create_window(640, 480, lib.proto.window.flag_quartz, "Notepad");
 
     if (lib.fs.Client.connect(cap.memory)) |opened| {
 
@@ -648,7 +648,7 @@ fn paint() void {
     const surface = &window.surface;
     const width: i32 = @intCast(surface.width);
 
-    surface.fill(ui.theme.window_bg);
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
 
     paint_toolbar(surface, width);
 

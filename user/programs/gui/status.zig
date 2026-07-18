@@ -224,7 +224,7 @@ fn run() !void {
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
 
-    window = try connection.create_window(720, 460, 0, "Status");
+    window = try connection.create_window(720, 460, lib.proto.window.flag_quartz, "Status");
 
     _ = lib.draw.round.masks_for(6);
 
@@ -433,7 +433,7 @@ fn paint() void {
 
     const surface = &window.surface;
 
-    surface.fill(ui.theme.window_bg);
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
 
     paint_tabs(surface);
 

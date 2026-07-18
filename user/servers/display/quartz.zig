@@ -154,6 +154,259 @@ const Buffer = struct {
 
 };
 
+// Multi-core glass pipeline: helpers drain independent row/column units while the compositor thread
+// works the same queue. Optics stay identical; large Files-style windows scale across cores.
+
+const max_helpers = 3;
+const worker_stack_pages = 16;
+const page_size = 4096;
+const parallel_min_units = 32;
+
+const JobKind = enum(u8) {
+
+    none = 0,
+    blur_h,
+    blur_v,
+    downsample,
+    resolve,
+    header,
+
+};
+
+const ParallelJob = struct {
+
+    kind: JobKind = .none,
+    next: u32 = 0,
+    limit: u32 = 0,
+    finished: u32 = 0,
+
+    source: [*]const Color = undefined,
+    dest: [*]Color = undefined,
+    rect: Rect = Rect.empty,
+    radius: i32 = 0,
+    plane_width: usize = 0,
+    scene_width: usize = 0,
+    scene: [*]const Color = undefined,
+    scene_rect: Rect = Rect.empty,
+
+    renderer: ?*Renderer = null,
+    back: ?*const Surface = null,
+    foreground: ?*const Surface = null,
+    content: Rect = Rect.empty,
+    visible: Rect = Rect.empty,
+    frost_bounds: Rect = Rect.empty,
+
+    tint: Color = 0,
+    opacity: u8 = 0,
+    header_radius: i32 = 0,
+    joined: bool = false,
+
+};
+
+const Helper = struct {
+
+    wake: Handle = 0,
+    thread: Handle = 0,
+
+};
+
+var parallel_job: ParallelJob = .{};
+var helpers: [max_helpers]Helper = [_]Helper{.{}} ** max_helpers;
+var helper_count: u32 = 0;
+var helper_boot_id: u32 = 0;
+var pool_started = false;
+
+fn ensure_pool() void {
+
+    if (pool_started) return;
+
+    pool_started = true;
+
+    const cores: u32 = @intCast(@max(@as(u64, 1), lib.start.word(lib.proto.init.core_count_word)));
+    const want: u32 = @min(max_helpers, if (cores > 1) cores - 1 else 0);
+    var index: u32 = 0;
+
+    while (index < want) : (index += 1) {
+
+        const wake = sys.create(.notification, 0, 0) catch break;
+        const stack = sys.create(.region, worker_stack_pages * page_size, cap.memory) catch {
+
+            sys.close(wake) catch {};
+            break;
+
+        };
+        const base = sys.map(cap.self_space, stack, 0, sys.read | sys.write) catch {
+
+            sys.close(stack) catch {};
+            sys.close(wake) catch {};
+            break;
+
+        };
+        const thread = sys.create_thread(@intFromPtr(&helper_entry), base + worker_stack_pages * page_size) catch {
+
+            sys.unmap(cap.self_space, base) catch {};
+            sys.close(stack) catch {};
+            sys.close(wake) catch {};
+            break;
+
+        };
+
+        sys.close(stack) catch {};
+        helpers[helper_count] = .{ .wake = wake, .thread = thread };
+        helper_count += 1;
+        sys.start(thread) catch {};
+
+    }
+
+}
+
+fn helper_entry() callconv(.c) noreturn {
+
+    const id = @atomicRmw(u32, &helper_boot_id, .Add, 1, .acq_rel);
+    const wake = if (id < max_helpers) helpers[id].wake else 0;
+
+    while (true) {
+
+        _ = sys.wait(wake) catch sys.yield();
+
+        const kind: JobKind = @enumFromInt(@atomicLoad(u8, @as(*u8, @ptrCast(&parallel_job.kind)), .acquire));
+
+        if (kind == .none) continue;
+
+        drain_units(kind);
+        _ = @atomicRmw(u32, &parallel_job.finished, .Add, 1, .release);
+
+    }
+
+}
+
+fn drain_units(kind: JobKind) void {
+
+    while (true) {
+
+        const index = @atomicRmw(u32, &parallel_job.next, .Add, 1, .acq_rel);
+
+        if (index >= @atomicLoad(u32, &parallel_job.limit, .acquire)) return;
+
+        process_unit(kind, index);
+
+    }
+
+}
+
+fn parallel_run(kind: JobKind, units: u32) void {
+
+    if (units == 0) return;
+
+    ensure_pool();
+
+    if (helper_count == 0 or units < parallel_min_units) {
+
+        var index: u32 = 0;
+
+        while (index < units) : (index += 1) process_unit(kind, index);
+
+        return;
+
+    }
+
+    @atomicStore(u32, &parallel_job.next, 0, .release);
+    @atomicStore(u32, &parallel_job.limit, units, .release);
+    @atomicStore(u32, &parallel_job.finished, 0, .release);
+    @atomicStore(u8, @as(*u8, @ptrCast(&parallel_job.kind)), @intFromEnum(kind), .release);
+
+    var helper: u32 = 0;
+
+    while (helper < helper_count) : (helper += 1) {
+
+        sys.notify(helpers[helper].wake, 1) catch {};
+
+    }
+
+    drain_units(kind);
+
+    while (@atomicLoad(u32, &parallel_job.finished, .acquire) < helper_count) sys.yield();
+
+    @atomicStore(u8, @as(*u8, @ptrCast(&parallel_job.kind)), @intFromEnum(JobKind.none), .release);
+
+}
+
+fn process_unit(kind: JobKind, index: u32) void {
+
+    switch (kind) {
+
+        .none => {},
+
+        .blur_h => blur_frost_horizontal_row(
+            parallel_job.source,
+            parallel_job.dest,
+            parallel_job.rect,
+            parallel_job.radius,
+            parallel_job.plane_width,
+            parallel_job.rect.y + @as(i32, @intCast(index)),
+        ),
+
+        .blur_v => blur_frost_vertical_column(
+            parallel_job.source,
+            parallel_job.dest,
+            parallel_job.rect,
+            parallel_job.radius,
+            parallel_job.plane_width,
+            parallel_job.rect.x + @as(i32, @intCast(index)),
+        ),
+
+        .downsample => downsample_scene_row(
+            parallel_job.scene,
+            parallel_job.dest,
+            parallel_job.scene_rect,
+            parallel_job.rect,
+            parallel_job.scene_width,
+            parallel_job.plane_width,
+            parallel_job.rect.y + @as(i32, @intCast(index)),
+        ),
+
+        .resolve => {
+
+            const renderer = parallel_job.renderer orelse return;
+            const back = parallel_job.back orelse return;
+            const foreground = parallel_job.foreground orelse return;
+
+            renderer.resolve_compact_row(
+                back,
+                foreground,
+                parallel_job.content,
+                parallel_job.visible,
+                parallel_job.scene_rect,
+                parallel_job.frost_bounds,
+                parallel_job.visible.y + @as(i32, @intCast(index)),
+            );
+
+        },
+
+        .header => {
+
+            const renderer = parallel_job.renderer orelse return;
+            const back = parallel_job.back orelse return;
+
+            renderer.resolve_header_row(
+                back,
+                parallel_job.content,
+                parallel_job.visible,
+                parallel_job.scene_rect,
+                parallel_job.frost_bounds,
+                parallel_job.tint,
+                parallel_job.opacity,
+                parallel_job.header_radius,
+                parallel_job.joined,
+                parallel_job.visible.y + @as(i32, @intCast(index)),
+            );
+
+        },
+
+    }
+
+}
+
 pub const Renderer = struct {
 
     scene_buffer: Buffer = .{},
@@ -293,8 +546,6 @@ pub const Renderer = struct {
 
         if (visible.is_empty()) return true;
 
-        const scene_rect = visible.inset(-damage_halo_from_radius(self.frost_radius)).intersect(back.bounds());
-
         if (self.output_reusable(window, content, visible)) {
 
             self.blit_cached(back, visible);
@@ -304,6 +555,8 @@ pub const Renderer = struct {
         }
 
         self.invalidate_output_overlap(visible);
+
+        const scene_rect = visible.inset(-damage_halo_from_radius(self.frost_radius)).intersect(back.bounds());
 
         self.capture_scene(back, scene_rect);
         const frost_bounds = self.build_frost(scene_rect);
@@ -327,7 +580,6 @@ pub const Renderer = struct {
 
         if (visible.is_empty()) return true;
 
-        const scene_rect = visible.inset(-header_halo_from_radius(self.frost_radius)).intersect(back.bounds());
         const cache_key = window ^ 0x8000_0000;
 
         if (self.output_reusable(cache_key, content, visible)) {
@@ -339,6 +591,8 @@ pub const Renderer = struct {
         }
 
         self.invalidate_output_overlap(visible);
+
+        const scene_rect = visible.inset(-header_halo_from_radius(self.frost_radius)).intersect(back.bounds());
 
         self.capture_scene(back, scene_rect);
         const frost_bounds = self.build_frost(scene_rect);
@@ -437,132 +691,32 @@ pub const Renderer = struct {
     fn build_frost(self: *Renderer, scene_rect: Rect) Rect {
 
         const rect = frost_rect(scene_rect);
+        const scale: usize = @intCast(frost_scale);
+        const plane_width = (@as(usize, self.width) + scale - 1) / scale;
 
-        self.downsample_scene(scene_rect, rect);
-        self.blur_frost_horizontal(self.temp, self.scratch, rect, self.frost_radius);
-        self.blur_frost_vertical(self.scratch, self.temp, rect, self.frost_radius);
+        parallel_job.scene = self.scene;
+        parallel_job.dest = self.temp;
+        parallel_job.scene_rect = scene_rect;
+        parallel_job.rect = rect;
+        parallel_job.scene_width = self.width;
+        parallel_job.plane_width = plane_width;
+        parallel_run(.downsample, @intCast(@max(0, rect.h)));
+
+        parallel_job.source = self.temp;
+        parallel_job.dest = self.scratch;
+        parallel_job.rect = rect;
+        parallel_job.radius = self.frost_radius;
+        parallel_job.plane_width = plane_width;
+        parallel_run(.blur_h, @intCast(@max(0, rect.h)));
+
+        parallel_job.source = self.scratch;
+        parallel_job.dest = self.temp;
+        parallel_job.rect = rect;
+        parallel_job.radius = self.frost_radius;
+        parallel_job.plane_width = plane_width;
+        parallel_run(.blur_v, @intCast(@max(0, rect.w)));
 
         return rect;
-
-    }
-
-    fn downsample_scene(self: *Renderer, scene_rect: Rect, rect: Rect) void {
-
-        const max_x = scene_rect.x + scene_rect.w - 1;
-        const max_y = scene_rect.y + scene_rect.h - 1;
-        const scene_width = @as(usize, self.width);
-        const scale: usize = @intCast(frost_scale);
-        const compact_width = (scene_width + scale - 1) / scale;
-        var y = rect.y;
-
-        while (y < rect.y + rect.h) : (y += 1) {
-
-            const source_y = clamp_axis(y * frost_scale, scene_rect.y, max_y);
-            const next_y = @min(source_y + 1, max_y);
-            const source_top = @as(usize, @intCast(source_y)) * scene_width;
-            const source_bottom = @as(usize, @intCast(next_y)) * scene_width;
-            const destination_row = @as(usize, @intCast(y)) * compact_width;
-            var x = rect.x;
-
-            while (x < rect.x + rect.w) : (x += 1) {
-
-                const source_x = clamp_axis(x * frost_scale, scene_rect.x, max_x);
-                const next_x = @min(source_x + 1, max_x);
-                const source_index: usize = @intCast(source_x);
-                const next_index: usize = @intCast(next_x);
-
-                self.temp[destination_row + @as(usize, @intCast(x))] = average_four(
-                    self.scene[source_top + source_index],
-                    self.scene[source_top + next_index],
-                    self.scene[source_bottom + source_index],
-                    self.scene[source_bottom + next_index],
-                );
-
-            }
-
-        }
-
-    }
-
-    fn blur_frost_horizontal(self: *Renderer, source: [*]const Color, destination: [*]Color, rect: Rect, radius: i32) void {
-
-        const min_x = rect.x;
-        const max_x = rect.x + rect.w - 1;
-        const max_y = rect.y + rect.h - 1;
-        const count: u32 = @intCast(radius * 2 + 1);
-        const scale: usize = @intCast(frost_scale);
-        const width = (@as(usize, self.width) + scale - 1) / scale;
-        var y = rect.y;
-
-        while (y <= max_y) : (y += 1) {
-
-            var sum = PixelSum{};
-            var offset = -radius;
-            const row = @as(usize, @intCast(y)) * width;
-
-            while (offset <= radius) : (offset += 1) {
-
-                sum.add(source[row + @as(usize, @intCast(clamp_axis(min_x + offset, min_x, max_x)))]);
-
-            }
-
-            var x = min_x;
-
-            while (x <= max_x) : (x += 1) {
-
-                destination[row + @as(usize, @intCast(x))] = sum.average_frost(count);
-
-                const leaving_x = clamp_axis(x - radius, min_x, max_x);
-                const entering_x = clamp_axis(x + radius + 1, min_x, max_x);
-
-                sum.remove(source[row + @as(usize, @intCast(leaving_x))]);
-                sum.add(source[row + @as(usize, @intCast(entering_x))]);
-
-            }
-
-        }
-
-    }
-
-    fn blur_frost_vertical(self: *Renderer, source: [*]const Color, destination: [*]Color, rect: Rect, radius: i32) void {
-
-        const min_y = rect.y;
-        const max_x = rect.x + rect.w - 1;
-        const max_y = rect.y + rect.h - 1;
-        const count: u32 = @intCast(radius * 2 + 1);
-        const scale: usize = @intCast(frost_scale);
-        const width = (@as(usize, self.width) + scale - 1) / scale;
-        var x = rect.x;
-
-        while (x <= max_x) : (x += 1) {
-
-            var sum = PixelSum{};
-            var offset = -radius;
-            const column: usize = @intCast(x);
-
-            while (offset <= radius) : (offset += 1) {
-
-                const sample_y = clamp_axis(min_y + offset, min_y, max_y);
-
-                sum.add(source[@as(usize, @intCast(sample_y)) * width + column]);
-
-            }
-
-            var y = min_y;
-
-            while (y <= max_y) : (y += 1) {
-
-                destination[@as(usize, @intCast(y)) * width + column] = sum.average_frost(count);
-
-                const leaving_y = clamp_axis(y - radius, min_y, max_y);
-                const entering_y = clamp_axis(y + radius + 1, min_y, max_y);
-
-                sum.remove(source[@as(usize, @intCast(leaving_y)) * width + column]);
-                sum.add(source[@as(usize, @intCast(entering_y)) * width + column]);
-
-            }
-
-        }
 
     }
 
@@ -647,49 +801,86 @@ pub const Renderer = struct {
 
     }
 
+    /// Flat interior glass (no bezel displacement): frost + tint only.
+    inline fn resolve_flat_glass(self: *const Renderer, x: i32, y: i32, coverage: u8, material: Color, original: Color, frost_bounds: Rect) Color {
+
+        const optical = self.sample_frost(x * coordinate_one, y * coordinate_one, frost_bounds);
+        const glass = draw.composite_premultiplied(optical, material);
+
+        return draw.mix(original, glass, coverage);
+
+    }
+
     fn resolve_compact(self: *Renderer, back: *const Surface, foreground: *const Surface, content: Rect, visible: Rect, scene_rect: Rect, frost_bounds: Rect) void {
 
-        var y = visible.y;
+        parallel_job.renderer = self;
+        parallel_job.back = back;
+        parallel_job.foreground = foreground;
+        parallel_job.content = content;
+        parallel_job.visible = visible;
+        parallel_job.scene_rect = scene_rect;
+        parallel_job.frost_bounds = frost_bounds;
+        parallel_run(.resolve, @intCast(@max(0, visible.h)));
 
-        while (y < visible.y + visible.h) : (y += 1) {
+    }
 
-            const source_y: u32 = @intCast(y - content.y);
-            const row = source_y * foreground.stride;
-            const destination_row = @as(usize, @intCast(y)) * back.stride;
-            const cache_row = @as(usize, @intCast(y)) * @as(usize, self.width);
-            var x = visible.x;
+    fn resolve_compact_row(
+        self: *Renderer,
+        back: *const Surface,
+        foreground: *const Surface,
+        content: Rect,
+        visible: Rect,
+        scene_rect: Rect,
+        frost_bounds: Rect,
+        y: i32,
+    ) void {
 
-            while (x < visible.x + visible.w) : (x += 1) {
+        if (y < visible.y or y >= visible.y + visible.h) return;
 
-                const source_x: u32 = @intCast(x - content.x);
-                const source = foreground.pixels[row + source_x];
-                const opacity = draw.pixel_alpha(source);
-                const destination_index = destination_row + @as(usize, @intCast(x));
-                const cache_index = cache_row + @as(usize, @intCast(x));
-                const original = back.pixels[destination_index];
-                var resolved = original;
+        const source_y: u32 = @intCast(y - content.y);
+        const row = source_y * foreground.stride;
+        const destination_row = @as(usize, @intCast(y)) * back.stride;
+        const cache_row = @as(usize, @intCast(y)) * @as(usize, self.width);
+        var x = visible.x;
 
-                if (opacity == 255) {
+        while (x < visible.x + visible.w) : (x += 1) {
 
-                    resolved = source;
+            const source_x: u32 = @intCast(x - content.x);
+            const source = foreground.pixels[row + source_x];
+            const opacity = draw.pixel_alpha(source);
+            const destination_index = destination_row + @as(usize, @intCast(x));
+            const cache_index = cache_row + @as(usize, @intCast(x));
+            const original = back.pixels[destination_index];
+            var resolved = original;
 
-                } else if (opacity != 0 and !is_material(source)) {
+            if (opacity == 255) {
 
-                    resolved = draw.composite_premultiplied(original, source);
+                resolved = source;
 
-                } else if (opacity != 0) {
+            } else if (opacity != 0 and !is_material(source)) {
 
-                    const coverage = self.coverage_table[opacity];
-                    const displacement = optical_displacement(foreground, @intCast(source_x), @intCast(source_y));
+                resolved = draw.composite_premultiplied(original, source);
+
+            } else if (opacity != 0) {
+
+                const coverage = self.coverage_table[opacity];
+                const displacement = optical_displacement(foreground, @intCast(source_x), @intCast(source_y));
+
+                // Window interiors (and other flat material) skip morph/chroma but still sample frost.
+                if (displacement.x == 0 and displacement.y == 0) {
+
+                    resolved = self.resolve_flat_glass(x, y, coverage, source, original, frost_bounds);
+
+                } else {
 
                     resolved = self.resolve_glass(x, y, displacement, coverage, source, original, scene_rect, frost_bounds);
 
                 }
 
-                self.lens[cache_index] = resolved;
-                back.pixels[destination_index] = resolved;
-
             }
+
+            self.lens[cache_index] = resolved;
+            back.pixels[destination_index] = resolved;
 
         }
 
@@ -697,48 +888,72 @@ pub const Renderer = struct {
 
     fn resolve_header(self: *Renderer, back: *const Surface, content: Rect, visible: Rect, scene_rect: Rect, frost_bounds: Rect, tint: Color, opacity: u8, radius: i32, joined: bool) void {
 
+        parallel_job.renderer = self;
+        parallel_job.back = back;
+        parallel_job.content = content;
+        parallel_job.visible = visible;
+        parallel_job.scene_rect = scene_rect;
+        parallel_job.frost_bounds = frost_bounds;
+        parallel_job.tint = tint;
+        parallel_job.opacity = opacity;
+        parallel_job.header_radius = radius;
+        parallel_job.joined = joined;
+        parallel_run(.header, @intCast(@max(0, visible.h)));
+
+    }
+
+    fn resolve_header_row(
+        self: *Renderer,
+        back: *const Surface,
+        content: Rect,
+        visible: Rect,
+        scene_rect: Rect,
+        frost_bounds: Rect,
+        tint: Color,
+        opacity: u8,
+        radius: i32,
+        joined: bool,
+        y: i32,
+    ) void {
+
+        if (y < visible.y or y >= visible.y + visible.h) return;
+
         const material = draw.with_alpha(tint, opacity);
         const r = draw.round.clamp_radius(content, radius);
         const masks = draw.round.masks_for(r);
         const bezel = header_bezel;
         const refraction = lib.quartz.safe_refraction(header_refraction, bezel);
         const profile = HeaderProfile.init(bezel, refraction);
-        var y = visible.y;
+        const displacement_y = header_vertical(content, y, &profile, joined);
+        const destination_row = @as(usize, @intCast(y)) * back.stride;
+        const cache_row = @as(usize, @intCast(y)) * @as(usize, self.width);
+        var x = visible.x;
 
-        while (y < visible.y + visible.h) : (y += 1) {
+        while (x < visible.x + visible.w) : (x += 1) {
 
-            const displacement_y = header_vertical(content, y, &profile, joined);
-            const destination_row = @as(usize, @intCast(y)) * back.stride;
-            const cache_row = @as(usize, @intCast(y)) * @as(usize, self.width);
-            var x = visible.x;
+            const destination_index = destination_row + @as(usize, @intCast(x));
+            const cache_index = cache_row + @as(usize, @intCast(x));
+            const coverage = header_coverage(content, x, y, r, masks);
+            const original = back.pixels[destination_index];
 
-            while (x < visible.x + visible.w) : (x += 1) {
+            if (coverage == 0) {
 
-                const destination_index = destination_row + @as(usize, @intCast(x));
-                const cache_index = cache_row + @as(usize, @intCast(x));
-                const coverage = header_coverage(content, x, y, r, masks);
-                const original = back.pixels[destination_index];
+                self.lens[cache_index] = original;
 
-                if (coverage == 0) {
-
-                    self.lens[cache_index] = original;
-
-                    continue;
-
-                }
-
-                const displacement = attenuate_displacement(.{
-
-                    .x = header_horizontal(content, x, &profile),
-                    .y = displacement_y,
-
-                }, coverage);
-                const resolved = self.resolve_glass(x, y, displacement, coverage, material, original, scene_rect, frost_bounds);
-
-                self.lens[cache_index] = resolved;
-                back.pixels[destination_index] = resolved;
+                continue;
 
             }
+
+            const displacement = attenuate_displacement(.{
+
+                .x = header_horizontal(content, x, &profile),
+                .y = displacement_y,
+
+            }, coverage);
+            const resolved = self.resolve_glass(x, y, displacement, coverage, material, original, scene_rect, frost_bounds);
+
+            self.lens[cache_index] = resolved;
+            back.pixels[destination_index] = resolved;
 
         }
 
@@ -832,6 +1047,127 @@ pub const Renderer = struct {
     }
 
 };
+
+fn downsample_scene_row(
+    scene: [*]const Color,
+    dest: [*]Color,
+    scene_rect: Rect,
+    rect: Rect,
+    scene_width: usize,
+    plane_width: usize,
+    y: i32,
+) void {
+
+    if (y < rect.y or y >= rect.y + rect.h) return;
+
+    const max_x = scene_rect.x + scene_rect.w - 1;
+    const max_y = scene_rect.y + scene_rect.h - 1;
+    const source_y = clamp_axis(y * frost_scale, scene_rect.y, max_y);
+    const next_y = @min(source_y + 1, max_y);
+    const source_top = @as(usize, @intCast(source_y)) * scene_width;
+    const source_bottom = @as(usize, @intCast(next_y)) * scene_width;
+    const destination_row = @as(usize, @intCast(y)) * plane_width;
+    var x = rect.x;
+
+    while (x < rect.x + rect.w) : (x += 1) {
+
+        const source_x = clamp_axis(x * frost_scale, scene_rect.x, max_x);
+        const next_x = @min(source_x + 1, max_x);
+        const source_index: usize = @intCast(source_x);
+        const next_index: usize = @intCast(next_x);
+
+        dest[destination_row + @as(usize, @intCast(x))] = average_four(
+            scene[source_top + source_index],
+            scene[source_top + next_index],
+            scene[source_bottom + source_index],
+            scene[source_bottom + next_index],
+        );
+
+    }
+
+}
+
+fn blur_frost_horizontal_row(
+    source: [*]const Color,
+    destination: [*]Color,
+    rect: Rect,
+    radius: i32,
+    width: usize,
+    y: i32,
+) void {
+
+    if (y < rect.y or y > rect.y + rect.h - 1) return;
+
+    const min_x = rect.x;
+    const max_x = rect.x + rect.w - 1;
+    const count: u32 = @intCast(radius * 2 + 1);
+    var sum = PixelSum{};
+    var offset = -radius;
+    const row = @as(usize, @intCast(y)) * width;
+
+    while (offset <= radius) : (offset += 1) {
+
+        sum.add(source[row + @as(usize, @intCast(clamp_axis(min_x + offset, min_x, max_x)))]);
+
+    }
+
+    var x = min_x;
+
+    while (x <= max_x) : (x += 1) {
+
+        destination[row + @as(usize, @intCast(x))] = sum.average_frost(count);
+
+        const leaving_x = clamp_axis(x - radius, min_x, max_x);
+        const entering_x = clamp_axis(x + radius + 1, min_x, max_x);
+
+        sum.remove(source[row + @as(usize, @intCast(leaving_x))]);
+        sum.add(source[row + @as(usize, @intCast(entering_x))]);
+
+    }
+
+}
+
+fn blur_frost_vertical_column(
+    source: [*]const Color,
+    destination: [*]Color,
+    rect: Rect,
+    radius: i32,
+    width: usize,
+    x: i32,
+) void {
+
+    if (x < rect.x or x > rect.x + rect.w - 1) return;
+
+    const min_y = rect.y;
+    const max_y = rect.y + rect.h - 1;
+    const count: u32 = @intCast(radius * 2 + 1);
+    var sum = PixelSum{};
+    var offset = -radius;
+    const column: usize = @intCast(x);
+
+    while (offset <= radius) : (offset += 1) {
+
+        const sample_y = clamp_axis(min_y + offset, min_y, max_y);
+
+        sum.add(source[@as(usize, @intCast(sample_y)) * width + column]);
+
+    }
+
+    var y = min_y;
+
+    while (y <= max_y) : (y += 1) {
+
+        destination[@as(usize, @intCast(y)) * width + column] = sum.average_frost(count);
+
+        const leaving_y = clamp_axis(y - radius, min_y, max_y);
+        const entering_y = clamp_axis(y + radius + 1, min_y, max_y);
+
+        sum.remove(source[@as(usize, @intCast(leaving_y)) * width + column]);
+        sum.add(source[@as(usize, @intCast(entering_y)) * width + column]);
+
+    }
+
+}
 
 fn frost_rect(rect: Rect) Rect {
 

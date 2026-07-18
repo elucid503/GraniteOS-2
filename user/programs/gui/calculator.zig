@@ -107,7 +107,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(280, 380, 0, "Calculator");
+    window = try connection.create_window(280, 380, lib.proto.window.flag_quartz, "Calculator");
 
     set_display_text("0");
     paint();
@@ -476,7 +476,7 @@ fn paint() void {
     const surface = &window.surface;
     const width: i32 = @intCast(surface.width);
 
-    surface.fill(ui.theme.window_bg);
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
 
     const display = Rect{ .x = pad, .y = pad, .w = width - 2 * pad, .h = display_h };
 

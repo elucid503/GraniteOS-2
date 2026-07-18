@@ -1,10 +1,11 @@
-// The M9 welcome screen: a fullscreen window with the system title and a click-to-continue prompt.
+// The M9 welcome screen: a fullscreen Quartz window with the system title and a click-to-continue prompt.
 
 const lib = @import("lib");
 
 const cap = lib.cap;
 const events = lib.events;
 const gfx = lib.gfx;
+const quartz = lib.quartz;
 const sys = lib.sys;
 
 comptime {
@@ -36,7 +37,7 @@ fn run() !void {
     try load_assets();
 
     var connection = try connect();
-    var window = try connection.create_window(0, 0, lib.proto.window.flag_fullscreen, "welcome");
+    var window = try connection.create_window(0, 0, lib.proto.window.flag_fullscreen | lib.proto.window.flag_quartz, "welcome");
 
     draw(&window.surface);
     gfx.fence();
@@ -53,6 +54,16 @@ fn run() !void {
             events.kind_window_resize => {
 
                 try window.resize(@intCast(event.x), @intCast(event.y));
+
+                draw(&window.surface);
+                gfx.fence();
+                try window.present_all();
+
+            },
+
+            events.kind_prefs_changed => {
+
+                _ = lib.prefs.apply_event(event);
 
                 draw(&window.surface);
                 gfx.fence();
@@ -108,6 +119,8 @@ fn load_assets() !void {
 
 fn draw(surface: *const gfx.Surface) void {
 
+    paint_background(surface);
+
     if (inter) |*font| {
 
         var page = ui.Page{ .font = font };
@@ -120,7 +133,6 @@ fn draw(surface: *const gfx.Surface) void {
             .align_main = .center,
             .align_cross = .center,
             .gap = 24,
-            .background = lib.prefs.wallpaper(),
 
         });
 
@@ -142,5 +154,27 @@ fn draw(surface: *const gfx.Surface) void {
         page.paint(surface);
 
     }
+
+}
+
+fn paint_background(surface: *const gfx.Surface) void {
+
+    if (!lib.prefs.quartz_enabled()) {
+
+        surface.fill(lib.prefs.wallpaper());
+
+        return;
+
+    }
+
+    quartz.clear(surface);
+
+    var appearance = quartz.welcome_style(quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), ui.theme.window_bg, ui.theme.accent);
+
+    // Full-screen glass with the usual edge bezel so the rim still reads.
+    appearance.radius = 0;
+    appearance.shadow = lib.draw.transparent;
+
+    quartz.panel(surface, surface.bounds(), appearance);
 
 }

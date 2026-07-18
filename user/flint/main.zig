@@ -648,6 +648,7 @@ fn spawn_display() !void {
         .args = &.{"display"},
         .grants = &grants,
         .data3 = device.base - page,
+        .data5 = machine_core_count,
 
     }, &.{ window, interrupt, memory, init_endpoint, report });
 

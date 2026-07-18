@@ -81,6 +81,12 @@ pub const quartz_level_names = [_][]const u8{
 
 pub var quartz_level: QuartzLevel = .medium;
 
+pub fn quartz_enabled() bool {
+
+    return quartz_level != .off;
+
+}
+
 /// Display unit for weather temperatures (stored in Celsius from the API).
 pub const TempUnit = enum(u8) {
 
@@ -743,6 +749,20 @@ fn parse_config(text: []const u8) void {
             const value = std.fmt.parseInt(u8, line[7..], 10) catch continue;
 
             if (value < quartz_level_count) quartz_level = @enumFromInt(value);
+
+        } else if (std.mem.startsWith(u8, line, "quartz_pct=")) {
+
+            // Migrate continuous 0..=100 back onto the discrete scale.
+            const value = std.fmt.parseInt(u8, line[11..], 10) catch continue;
+
+            quartz_level = if (value == 0)
+                .off
+            else if (value <= 33)
+                .light
+            else if (value <= 66)
+                .medium
+            else
+                .dark;
 
         }
 

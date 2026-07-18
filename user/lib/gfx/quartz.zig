@@ -62,17 +62,75 @@ pub fn material_opacity(kind: Kind) u8 {
 
 }
 
+/// Map discrete density 0..=3 (off/light/medium/dark) onto a material kind.
+pub fn kind_from_level(level: u8) Kind {
+
+    return switch (level) {
+
+        1 => .clear,
+        3 => .prominent,
+        else => .regular,
+
+    };
+
+}
+
+/// Heavy-tint alpha for ordinary window content (lets almost no backdrop through).
+pub fn window_opacity(kind: Kind) u8 {
+
+    return switch (kind) {
+
+        .clear => 220,
+        .regular => 232,
+        .prominent => 245,
+
+    };
+
+}
+
+/// Welcome splash: denser than panels, slightly lighter than app windows.
+pub fn welcome_opacity(kind: Kind) u8 {
+
+    return switch (kind) {
+
+        .clear => 200,
+        .regular => 220,
+        .prominent => 236,
+
+    };
+
+}
+
 pub fn style(kind: Kind, tint: Color, accent: Color) Style {
+
+    return style_with_opacity(tint, accent, material_opacity(kind), bezel_width, max_fixed, 24, draw.rgba(0, 0, 0, 48));
+
+}
+
+/// Quiet window chrome: heavy tint, soft optics, no free-standing shadow.
+pub fn window_style(kind: Kind, tint: Color, accent: Color) Style {
+
+    return style_with_opacity(tint, accent, window_opacity(kind), 10, max_fixed / 3, 0, draw.transparent);
+
+}
+
+/// Full-screen welcome material with the usual rim bezel and denser tint.
+pub fn welcome_style(kind: Kind, tint: Color, accent: Color) Style {
+
+    return style_with_opacity(tint, accent, welcome_opacity(kind), bezel_width, max_fixed, 0, draw.transparent);
+
+}
+
+fn style_with_opacity(tint: Color, accent: Color, opacity: u8, bezel: i32, refraction: i32, radius: i32, shadow: Color) Style {
 
     return .{
 
-        .radius = 24,
-        .bezel = bezel_width,
-        // Density leaves optical strength stable while the compositor varies frost and tint.
-        .refraction = max_fixed,
+        .radius = radius,
+        .bezel = bezel,
+        .refraction = refraction,
 
-        .fill = draw.with_alpha(tint, material_opacity(kind)),
-        .shadow = draw.rgba(0, 0, 0, 48),
+        .fill = draw.with_alpha(tint, opacity),
+        .shadow = shadow,
 
         .control = draw.rgb(255, 255, 255),
         .control_alpha = 28,
@@ -80,6 +138,28 @@ pub fn style(kind: Kind, tint: Color, accent: Color) Style {
         .control_hover_alpha = 80,
 
     };
+
+}
+
+/// Paint an ordinary app window background. `level` is 0=off, 1..=3 = light/medium/dark.
+pub fn fill_window(surface: *const Surface, tint: Color, level: u8) void {
+
+    if (level == 0) {
+
+        surface.fill(tint);
+
+        return;
+
+    }
+
+    clear(surface);
+
+    var appearance = window_style(kind_from_level(level), tint, draw.rgb(255, 255, 255));
+
+    appearance.radius = 0;
+    appearance.shadow = draw.transparent;
+
+    panel_joined_top(surface, surface.bounds(), appearance);
 
 }
 

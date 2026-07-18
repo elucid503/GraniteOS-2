@@ -70,7 +70,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(720, 480, 0, "Images");
+    window = try connection.create_window(720, 480, lib.proto.window.flag_quartz, "Images");
     _ = lib.draw.round.masks_for(radius);
     _ = lib.draw.round.masks_for(6);
 
@@ -396,7 +396,7 @@ fn paint() void {
     const width = win_w();
     const height = win_h();
 
-    surface.fill(ui.theme.window_bg);
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
 
     // Toolbar.
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_h }, ui.theme.surface);

@@ -1120,6 +1120,92 @@ fn menu_y(screen_height: u32, height: u32) i32 {
 
 }
 
+const slide_duration_ms: u64 = 180;
+const slide_distance: i32 = 28;
+
+/// Ease-out cubic progress in 0..=1000 for `elapsed` of `duration`.
+fn slide_progress(elapsed: u64, duration: u64) i32 {
+
+    if (elapsed >= duration) return 1000;
+
+    const inv = 1000 - @as(i32, @intCast(@divTrunc(elapsed * 1000, duration)));
+
+    return 1000 - @divTrunc(inv * inv * inv, 1_000_000);
+
+}
+
+fn slide_offset(progress: i32) i32 {
+
+    return slide_distance - @divTrunc(slide_distance * progress, 1000);
+
+}
+
+/// Reveal a popup by sliding it up into `final_y` (window already painted).
+fn reveal_slide_up(window: *const lib.window.Window, final_x: i32, final_y: i32) void {
+
+    const start_y = final_y + slide_distance;
+
+    lib.wm.move_window(&connection, window.id, final_x, start_y) catch {};
+    lib.wm.restore(&connection, window.id) catch {};
+    window.present_all() catch {};
+
+    const start = lib.time.now_ms();
+
+    while (true) {
+
+        const progress = slide_progress(lib.time.now_ms() -% start, slide_duration_ms);
+        const y = final_y + slide_offset(progress);
+
+        lib.wm.move_window(&connection, window.id, final_x, y) catch {};
+
+        if (progress >= 1000) break;
+
+        lib.time.sleep_ms(8);
+
+    }
+
+    lib.wm.move_window(&connection, window.id, final_x, final_y) catch {};
+
+}
+
+/// Slide two stacked popups up together (weather above calendar).
+fn reveal_slide_up_pair(
+    upper: *const lib.window.Window,
+    upper_x: i32,
+    upper_y: i32,
+    bottom: *const lib.window.Window,
+    bottom_x: i32,
+    bottom_y: i32,
+) void {
+
+    lib.wm.move_window(&connection, upper.id, upper_x, upper_y + slide_distance) catch {};
+    lib.wm.move_window(&connection, bottom.id, bottom_x, bottom_y + slide_distance) catch {};
+    lib.wm.restore(&connection, upper.id) catch {};
+    upper.present_all() catch {};
+    lib.wm.restore(&connection, bottom.id) catch {};
+    bottom.present_all() catch {};
+
+    const start = lib.time.now_ms();
+
+    while (true) {
+
+        const progress = slide_progress(lib.time.now_ms() -% start, slide_duration_ms);
+        const dy = slide_offset(progress);
+
+        lib.wm.move_window(&connection, upper.id, upper_x, upper_y + dy) catch {};
+        lib.wm.move_window(&connection, bottom.id, bottom_x, bottom_y + dy) catch {};
+
+        if (progress >= 1000) break;
+
+        lib.time.sleep_ms(8);
+
+    }
+
+    lib.wm.move_window(&connection, upper.id, upper_x, upper_y) catch {};
+    lib.wm.move_window(&connection, bottom.id, bottom_x, bottom_y) catch {};
+
+}
+
 fn sync_menu_size(allow_shrink: bool) void {
 
     if (menu) |*menu_window| {
@@ -1181,20 +1267,20 @@ fn open_menu() void {
     sync_menu_size(true);
 
     const menu_window = menu orelse return;
+    const final_x = dock_margin();
+    var final_y: i32 = 0;
 
     if (lib.wm.screen_info(&connection)) |screen| {
 
-        lib.wm.move_window(&connection, menu_window.id, dock_margin(), menu_y(screen.height, menu_window.surface.height)) catch {};
+        final_y = menu_y(screen.height, menu_window.surface.height);
 
     } else |_| {}
 
     menu_open = true;
 
     paint_menu_content();
-
     gfx.fence();
-    lib.wm.restore(&connection, menu_window.id) catch {};
-    menu_window.present_all() catch {};
+    reveal_slide_up(&menu_window, final_x, final_y);
 
     paint_bar();
 
@@ -1302,7 +1388,7 @@ fn paint_pin_menu_content() void {
     const window = pin_menu orelse return;
     const surface = &window.surface;
 
-    if (lib.prefs.quartz_level == .off) {
+    if (!lib.prefs.quartz_enabled()) {
 
         surface.fill(ui.theme.surface);
         pin_menu_widget.paint(surface, &font);
@@ -1468,14 +1554,18 @@ fn open_calendar() void {
     const weather_window = weather_popup orelse return;
     const calendar_window = calendar orelse return;
 
+    var popup_x: i32 = 0;
+    var calendar_y: i32 = 0;
+    var weather_y: i32 = 0;
+
     if (lib.wm.screen_info(&connection)) |screen| {
 
-        const popup_x = @as(i32, @intCast(screen.width)) - @as(i32, @intCast(calendar_width())) - dock_margin();
-        const calendar_y = @as(i32, @intCast(screen.height)) - bar_height() - dock_margin() - @as(i32, @intCast(calendar_height())) - 10;
-        const weather_y = calendar_y - popup_gap() - @as(i32, @intCast(weather_height()));
-
-        lib.wm.move_window(&connection, weather_window.id, @max(0, popup_x), @max(0, weather_y)) catch {};
-        lib.wm.move_window(&connection, calendar_window.id, @max(0, popup_x), @max(0, calendar_y)) catch {};
+        popup_x = @as(i32, @intCast(screen.width)) - @as(i32, @intCast(calendar_width())) - dock_margin();
+        calendar_y = @as(i32, @intCast(screen.height)) - bar_height() - dock_margin() - @as(i32, @intCast(calendar_height())) - 10;
+        weather_y = calendar_y - popup_gap() - @as(i32, @intCast(weather_height()));
+        popup_x = @max(0, popup_x);
+        calendar_y = @max(0, calendar_y);
+        weather_y = @max(0, weather_y);
 
     } else |_| {}
 
@@ -1486,10 +1576,7 @@ fn open_calendar() void {
     paint_calendar_content();
 
     gfx.fence();
-    lib.wm.restore(&connection, weather_window.id) catch {};
-    weather_window.present_all() catch {};
-    lib.wm.restore(&connection, calendar_window.id) catch {};
-    calendar_window.present_all() catch {};
+    reveal_slide_up_pair(&weather_window, popup_x, weather_y, &calendar_window, popup_x, calendar_y);
 
     paint_bar();
     request_weather_refresh();
@@ -2280,7 +2367,7 @@ fn paint_clock_only() void {
     const width: i32 = @intCast(surface.width);
     const rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
 
-    if (lib.prefs.quartz_level == .off) {
+    if (!lib.prefs.quartz_enabled()) {
 
         surface.fill_rect(rect, ui.theme.surface_alt);
 
@@ -2594,9 +2681,8 @@ fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, content: []co
 
 fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
 
-    if (lib.prefs.quartz_level == .off) {
+    if (!lib.prefs.quartz_enabled()) {
 
-        // Fill directly
         lib.draw.round.fill_round_rect(surface, rect, dock_radius(), color);
         ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
 
@@ -2604,14 +2690,7 @@ fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
 
     }
 
-    var appearance = quartz.style(switch (lib.prefs.quartz_level) {
-
-        .off => unreachable,
-        .light => .clear,
-        .medium => .regular,
-        .dark => .prominent,
-
-    }, color, ui.theme.accent);
+    var appearance = quartz.style(lib.quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), color, ui.theme.accent);
 
     appearance.radius = dock_radius();
 

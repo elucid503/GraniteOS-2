@@ -128,7 +128,7 @@ fn run() !void {
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
 
-    window = try connection.create_window(760, 560, 0, "Fetch");
+    window = try connection.create_window(760, 560, lib.proto.window.flag_quartz, "Fetch");
 
     url_buffer = ui.EditBuffer.init(&url_storage);
     port_buffer = ui.EditBuffer.init(&port_storage);
@@ -755,7 +755,7 @@ fn paint() void {
     const surface = &window.surface;
     const width: i32 = @intCast(surface.width);
 
-    surface.fill(ui.theme.window_bg);
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
 
     paint_toolbar(surface, width);
 

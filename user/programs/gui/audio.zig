@@ -75,7 +75,7 @@ fn run() !void {
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(600, 360, 0, "Geode");
+    window = try connection.create_window(600, 360, lib.proto.window.flag_quartz, "Geode");
 
     file_region = try sys.create(.region, max_file_bytes, cap.memory);
     file_base = try sys.map(cap.self_space, file_region, 0, sys.read | sys.write);
@@ -505,7 +505,7 @@ fn paint() void {
     const width = win_w();
     const height = win_h();
 
-    surface.fill(ui.theme.window_bg);
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_h }, ui.theme.surface);
     surface.fill_rect(.{ .x = 0, .y = toolbar_h - 1, .w = width, .h = 1 }, ui.theme.border);
 

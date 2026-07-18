@@ -167,7 +167,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(700, 540, 0, "Chisel");
+    window = try connection.create_window(700, 540, lib.proto.window.flag_quartz, "Chisel");
     _ = lib.draw.round.masks_for(radius);
     _ = lib.draw.round.masks_for(chip_radius);
     _ = lib.draw.round.masks_for(4);
@@ -1115,7 +1115,7 @@ fn paint_full() void {
     const width = win_w();
     const height = win_h();
 
-    surface.fill(ui.theme.window_bg);
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
     paint_toolbar(surface, width);
 
     const origin = canvas_origin();

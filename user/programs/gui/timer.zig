@@ -89,7 +89,7 @@ fn run() !void {
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
-    window = try connection.create_window(340, 280, 0, "Timer");
+    window = try connection.create_window(340, 280, lib.proto.window.flag_quartz, "Timer");
 
     _ = lib.draw.round.masks_for(6);
 
@@ -400,7 +400,7 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    surface.fill(ui.theme.window_bg);
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
 
     regions.reset();
     tab_strip.paint(surface, &font, width, if (mode == .stopwatch) 0 else 1);

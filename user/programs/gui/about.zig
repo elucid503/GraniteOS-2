@@ -278,29 +278,7 @@ fn paint(repaint_all: bool) void {
 
 fn paint_background(surface: *const gfx.Surface) void {
 
-    quartz.clear(surface);
-
-    if (lib.prefs.quartz_level == .off) {
-
-        surface.fill(ui.theme.window_bg);
-
-        return;
-
-    }
-
-    var appearance = quartz.style(switch (lib.prefs.quartz_level) {
-
-        .off => unreachable,
-        .light => .clear,
-        .medium => .regular,
-        .dark => .prominent,
-
-    }, ui.theme.window_bg, ui.theme.accent);
-
-    appearance.radius = 0;
-    appearance.shadow = lib.draw.transparent;
-
-    quartz.panel_joined_top(surface, surface.bounds(), appearance);
+    quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
 
 }
 

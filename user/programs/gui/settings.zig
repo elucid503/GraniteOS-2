@@ -52,7 +52,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(520, 430, 0, "Settings");
+    window = try connection.create_window(520, 430, lib.proto.window.flag_quartz, "Settings");
 
     paint();
 
@@ -83,6 +83,13 @@ fn run() !void {
             },
 
             events.kind_pointer_move => update_cursor(event.x, event.y),
+
+            events.kind_prefs_changed => {
+
+                _ = lib.prefs.apply_event(event);
+                paint();
+
+            },
 
             else => {},
 
@@ -146,6 +153,8 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
+    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
+
     page.begin(width, height, .{
 
         .direction = .column,
@@ -153,7 +162,6 @@ fn paint() void {
         .height = .{ .px = height },
         .padding = ui.Edge.all(pad),
         .gap = 18,
-        .background = ui.theme.window_bg,
 
     });
 
