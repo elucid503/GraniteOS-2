@@ -60,23 +60,36 @@ const Transform = struct {
 
 };
 
-/// Half-pixel snap for odd whole-pixel stroke widths; none for even — keeps lines on the pixel grid.
+/// Half-pixel snap for near-odd integer widths so hairlines sit on pixel centres.
 fn stroke_snap(width: f32) f32 {
 
-    const width_px: i32 = @intFromFloat(@floor(width + 0.5));
+    const nearest = @round(width);
+
+    // Fractional Lucide widths keep their true subpixel phase; only snap clean integers.
+    if (@abs(width - nearest) > 0.05) return 0;
+
+    const width_px: i32 = @intFromFloat(nearest);
 
     return if ((width_px & 1) != 0) 0.5 else 0;
 
 }
 
-/// Build stroked SVG shapes into path; width_fx zero uses the icon-set default (side/12).
+/// Lucide default: stroke-width 2 in a 24-unit viewBox. Kept fractional for AA (the FP raster handles it).
+fn icon_stroke_width(side_px: i32, width_in: f32) f32 {
+
+    if (width_in > 0) return width_in;
+
+    const side = path_mod.from_px(side_px);
+
+    return @max(1.0 / 32.0, side * 2.0 / 24.0);
+
+}
+
+/// Build stroked SVG shapes into path; width zero uses the Lucide 2/24 default.
 pub fn build_stroked(path: *Path, rect: Rect, svg: []const u8, width_in: f32) void {
 
-    // Slightly heavier default at tiny sizes so 16px icons do not thin out after AA.
-    const side = @min(rect.w, rect.h);
-    const default_width = path_mod.from_px(side) * 2 / 24;
-    const floor_width: f32 = if (side <= 18) 1.75 else 1.5;
-    const width: f32 = if (width_in > 0) width_in else @max(floor_width, default_width);
+    const side_px = @min(rect.w, rect.h);
+    const width = icon_stroke_width(side_px, width_in);
     const transform = Transform{ .view = parse_view_box(svg), .dest = rect, .snap = stroke_snap(width) };
 
     var offset: usize = 0;
@@ -146,13 +159,10 @@ pub fn build_stroked(path: *Path, rect: Rect, svg: []const u8, width_in: f32) vo
         const origin = transform.point(.{ .x = x, .y = y });
         const px_w = transform.x(x + w) - origin.x;
         const px_h = transform.y(y + h) - origin.y;
+        const px_r = transform.length(radius);
 
-        // A ring border centered on the outline: expand outward by half the width.
-
-        const half = width * 0.5;
-
-        path.add_round_rect(origin.x - half, origin.y - half, px_w + width, px_h + width, transform.length(radius) + half);
-        path.add_round_rect_reversed(origin.x + half, origin.y + half, px_w - width, px_h - width, @max(0, transform.length(radius) - half));
+        // Outline as a continuous stroke (not a fill-ring) so nested Lucide rects stay hollow at small sizes.
+        stroke_round_rect_outline(path, origin.x, origin.y, px_w, px_h, px_r, width);
 
     }
 
@@ -214,6 +224,21 @@ pub fn build_filled(path: *Path, rect: Rect, svg: []const u8) void {
 /// Stroke-render `svg` into `rect` on `surface` without caching.
 pub fn draw_icon(surface: *const Surface, rect: Rect, svg: []const u8, color: Color) void {
 
+    if (rect.w <= 0 or rect.h <= 0) return;
+
+    if (rect.w <= icon_box and rect.h <= icon_box) {
+
+        var coverage: [icon_box * icon_box]u8 = undefined;
+        const cells: usize = @intCast(rect.w * rect.h);
+
+        if (!rasterize_icon(svg, @intCast(rect.w), @intCast(rect.h), coverage[0..cells])) return;
+
+        surface.blend_coverage(rect.x, rect.y, coverage[0..cells], @intCast(rect.w), @intCast(rect.h), color);
+
+        return;
+
+    }
+
     var path = Path{};
 
     build_stroked(&path, rect, svg, 0);
@@ -221,15 +246,17 @@ pub fn draw_icon(surface: *const Surface, rect: Rect, svg: []const u8, color: Co
 
 }
 
-// Icon cache: rasterize once per source/size, blit in any tint; single-threaded like the glyph cache.
+// Icon cache: one coverage mask per static SVG pointer and size; single-threaded like the glyph cache.
 
 const icon_box: u32 = 48;
-const icon_capacity: usize = 64;
+const icon_hi_box: u32 = 96;
+const icon_capacity: usize = 96;
+const icon_ss: u32 = 2;
 
 const IconEntry = struct {
 
     used: bool = false,
-    hash: u64 = 0,
+    key: u64 = 0,
 
     w: u16 = 0,
     h: u16 = 0,
@@ -238,6 +265,7 @@ const IconEntry = struct {
 
 var icon_meta = [_]IconEntry{.{}} ** icon_capacity;
 var icon_coverage: [icon_capacity][icon_box * icon_box]u8 = undefined;
+var icon_hi: [icon_hi_box * icon_hi_box]u8 = undefined;
 
 /// Cached stroke-rendered icon; the everyday entry point.
 pub fn icon(surface: *const Surface, rect: Rect, svg: []const u8, color: Color) void {
@@ -272,62 +300,47 @@ pub fn icon_in(surface: *const Surface, rect: Rect, svg: []const u8, color: Colo
 
 }
 
+// Static Lucide embeds are unique by pointer; size fits in the high bits.
+fn icon_key(svg: []const u8, w: u32, h: u32) u64 {
+
+    return @intFromPtr(svg.ptr) ^ (@as(u64, svg.len) *% 0x9e37_79b9_7f4a_7c15) ^ (@as(u64, w) << 40) ^ (@as(u64, h) << 48);
+
+}
+
 fn cached_icon(svg: []const u8, w: u32, h: u32) ?usize {
 
-    const hash = icon_hash(svg) ^ (@as(u64, w) << 48) ^ (@as(u64, h) << 56);
-    const start: usize = @intCast((hash ^ (hash >> 32)) % icon_capacity);
+    const key = icon_key(svg, w, h);
+    const start: usize = @intCast((key ^ (key >> 32)) % icon_capacity);
 
     var probe: usize = 0;
     var slot = start;
 
-    while (probe < 8) : (probe += 1) {
+    while (probe < 12) : (probe += 1) {
 
         const entry = &icon_meta[slot];
 
-        if (entry.used and entry.hash == hash) return slot;
+        if (entry.used and entry.key == key) return slot;
 
-        if (!entry.used) return render_icon(slot, svg, hash, w, h);
+        if (!entry.used) return render_icon(slot, svg, key, w, h);
 
         slot = (slot + 1) % icon_capacity;
 
     }
 
-    return render_icon(start, svg, hash, w, h);
+    return render_icon(start, svg, key, w, h);
 
 }
 
-fn icon_hash(svg: []const u8) u64 {
-
-    var hash: u64 = 0xcbf2_9ce4_8422_2325;
-
-    for (svg) |byte| {
-
-        hash = (hash ^ byte) *% 0x0000_0100_0000_01b3;
-
-    }
-
-    return hash;
-
-}
-
-fn render_icon(slot: usize, svg: []const u8, hash: u64, w: u32, h: u32) ?usize {
+fn render_icon(slot: usize, svg: []const u8, key: u64, w: u32, h: u32) ?usize {
 
     const cells = w * h;
 
-    @memset(icon_coverage[slot][0..cells], 0);
-
-    var path = Path{};
-
-    build_stroked(&path, .{ .x = 0, .y = 0, .w = @intCast(w), .h = @intCast(h) }, svg, 0);
-
-    if (path.overflowed) return null;
-
-    raster.fill_coverage(&path, icon_coverage[slot][0..cells], w, h, 0, 0);
+    if (!rasterize_icon(svg, w, h, icon_coverage[slot][0..cells])) return null;
 
     icon_meta[slot] = .{
 
         .used = true,
-        .hash = hash,
+        .key = key,
 
         .w = @intCast(w),
         .h = @intCast(h),
@@ -335,6 +348,59 @@ fn render_icon(slot: usize, svg: []const u8, hash: u64, w: u32, h: u32) ?usize {
     };
 
     return slot;
+
+}
+
+/// Rasterize `svg` into `out` (w×h coverage). 2× supersample when it fits for crisper small icons.
+fn rasterize_icon(svg: []const u8, w: u32, h: u32, out: []u8) bool {
+
+    const cells = w * h;
+
+    if (out.len < cells) return false;
+
+    @memset(out[0..cells], 0);
+
+    const ss: u32 = if (w * icon_ss <= icon_hi_box and h * icon_ss <= icon_hi_box) icon_ss else 1;
+    const rw = w * ss;
+    const rh = h * ss;
+    const hi_cells = rw * rh;
+
+    var path = Path{};
+
+    build_stroked(&path, .{ .x = 0, .y = 0, .w = @intCast(rw), .h = @intCast(rh) }, svg, 0);
+
+    if (path.overflowed) return false;
+
+    if (ss == 1) {
+
+        raster.fill_coverage(&path, out[0..cells], w, h, 0, 0);
+
+        return true;
+
+    }
+
+    @memset(icon_hi[0..hi_cells], 0);
+    raster.fill_coverage(&path, icon_hi[0..hi_cells], rw, rh, 0, 0);
+
+    // Box-filter 2×2 → 1 coverage sample per destination pixel.
+    var y: u32 = 0;
+
+    while (y < h) : (y += 1) {
+
+        var x: u32 = 0;
+
+        while (x < w) : (x += 1) {
+
+            const base = (y * ss) * rw + x * ss;
+            const sum: u32 = @as(u32, icon_hi[base]) + icon_hi[base + 1] + icon_hi[base + rw] + icon_hi[base + rw + 1];
+
+            out[y * w + x] = @intCast((sum + 2) / 4);
+
+        }
+
+    }
+
+    return true;
 
 }
 
@@ -521,6 +587,7 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
     var current = Point{ .x = 0, .y = 0 };
     var start = current;
     var control = current;
+    var last_was_cubic = false;
 
     while (parser.more()) {
 
@@ -538,6 +605,8 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
                 current = p;
                 start = p;
+                control = p;
+                last_was_cubic = false;
 
                 const mapped = transform.point(p);
 
@@ -554,6 +623,8 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
                 path.line_to(mapped.x, mapped.y);
                 current = p;
+                control = p;
+                last_was_cubic = false;
 
             },
 
@@ -565,6 +636,8 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
                 path.line_to(mapped.x, mapped.y);
                 current = p;
+                control = p;
+                last_was_cubic = false;
 
             },
 
@@ -576,6 +649,8 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
                 path.line_to(mapped.x, mapped.y);
                 current = p;
+                control = p;
+                last_was_cubic = false;
 
             },
 
@@ -591,6 +666,7 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
                 current = end;
                 control = c;
+                last_was_cubic = false;
 
             },
 
@@ -608,6 +684,28 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
                 current = end;
                 control = c2;
+                last_was_cubic = true;
+
+            },
+
+            'S' => {
+
+                const c1 = if (last_was_cubic)
+                    Point{ .x = current.x * 2 - control.x, .y = current.y * 2 - control.y }
+                else
+                    current;
+                const c2 = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
+
+                const m1 = transform.point(c1);
+                const m2 = transform.point(c2);
+                const me = transform.point(end);
+
+                path.cubic_to(m1.x, m1.y, m2.x, m2.y, me.x, me.y);
+
+                current = end;
+                control = c2;
+                last_was_cubic = true;
 
             },
 
@@ -623,6 +721,24 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
                 current = end;
                 control = reflected;
+                last_was_cubic = false;
+
+            },
+
+            'A' => {
+
+                const rx = parser.number() orelse break;
+                const ry = parser.number() orelse break;
+                const rotation = parser.number() orelse break;
+                const large = parser.number() orelse break;
+                const sweep = parser.number() orelse break;
+                const end = parser.point(relative, current) orelse break;
+
+                fill_arc(path, transform, current, end, rx, ry, rotation, large != 0, sweep != 0);
+
+                current = end;
+                control = end;
+                last_was_cubic = false;
 
             },
 
@@ -630,6 +746,8 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
                 path.close();
                 current = start;
+                control = start;
+                last_was_cubic = false;
 
             },
 
@@ -650,6 +768,7 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
     var current = Point{ .x = 0, .y = 0 };
     var start = current;
     var control = current;
+    var last_was_cubic = false;
 
     while (parser.more()) {
 
@@ -667,6 +786,8 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
                 current = p;
                 start = p;
+                control = p;
+                last_was_cubic = false;
                 command = if (relative) 'l' else 'L';
 
             },
@@ -677,6 +798,8 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
                 stroke_between(path, transform, current, p, width);
                 current = p;
+                control = p;
+                last_was_cubic = false;
 
             },
 
@@ -687,6 +810,8 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
                 stroke_between(path, transform, current, p, width);
                 current = p;
+                control = p;
+                last_was_cubic = false;
 
             },
 
@@ -697,6 +822,8 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
                 stroke_between(path, transform, current, p, width);
                 current = p;
+                control = p;
+                last_was_cubic = false;
 
             },
 
@@ -709,6 +836,7 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
                 current = end;
                 control = c;
+                last_was_cubic = false;
 
             },
 
@@ -722,6 +850,24 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
                 current = end;
                 control = c2;
+                last_was_cubic = true;
+
+            },
+
+            'S' => {
+
+                const c1 = if (last_was_cubic)
+                    Point{ .x = current.x * 2 - control.x, .y = current.y * 2 - control.y }
+                else
+                    current;
+                const c2 = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
+
+                stroke_cubic(path, transform, current, c1, c2, end, width);
+
+                current = end;
+                control = c2;
+                last_was_cubic = true;
 
             },
 
@@ -734,6 +880,24 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
                 current = end;
                 control = reflected;
+                last_was_cubic = false;
+
+            },
+
+            'A' => {
+
+                const rx = parser.number() orelse break;
+                const ry = parser.number() orelse break;
+                const rotation = parser.number() orelse break;
+                const large = parser.number() orelse break;
+                const sweep = parser.number() orelse break;
+                const end = parser.point(relative, current) orelse break;
+
+                stroke_arc(path, transform, current, end, rx, ry, rotation, large != 0, sweep != 0, width);
+
+                current = end;
+                control = end;
+                last_was_cubic = false;
 
             },
 
@@ -741,6 +905,8 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
                 stroke_between(path, transform, current, start, width);
                 current = start;
+                control = start;
+                last_was_cubic = false;
 
             },
 
@@ -761,14 +927,244 @@ fn stroke_between(path: *Path, transform: *const Transform, a: Point, b: Point, 
 
 }
 
+/// Stroke a rounded-rect outline as a continuous chain (no per-sample join discs).
+fn stroke_round_rect_outline(path: *Path, x: f32, y: f32, w: f32, h: f32, radius_in: f32, width: f32) void {
+
+    if (w <= 0 or h <= 0 or width <= 0) return;
+
+    const radius = @max(0, @min(radius_in, @min(w, h) * 0.5));
+    const half = width * 0.5;
+
+    // Analytic ring: exact hollow border, no tessellation noise at nested Lucide rects.
+    if (w > width and h > width) {
+
+        path.add_round_rect(x - half, y - half, w + width, h + width, radius + half);
+        path.add_round_rect_reversed(x + half, y + half, w - width, h - width, @max(0, radius - half));
+
+        return;
+
+    }
+
+    // Too small for a clear hole: filled rounded rect of the stroke footprint.
+    path.add_round_rect(x - half, y - half, w + width, h + width, radius + half);
+
+}
+
+// Elliptical arc → cubics (SVG impl note). Used heavily by Lucide rounded corners.
+
+const ArcCubic = struct {
+
+    c1: Point,
+    c2: Point,
+    end: Point,
+
+};
+
+fn fill_arc(path: *Path, transform: *const Transform, from: Point, to: Point, rx_in: f32, ry_in: f32, rotation_deg: f32, large: bool, sweep: bool) void {
+
+    var cubics: [4]ArcCubic = undefined;
+    const count = arc_to_cubics(from, to, rx_in, ry_in, rotation_deg, large, sweep, &cubics);
+
+    for (cubics[0..count]) |seg| {
+
+        const m1 = transform.point(seg.c1);
+        const m2 = transform.point(seg.c2);
+        const me = transform.point(seg.end);
+
+        path.cubic_to(m1.x, m1.y, m2.x, m2.y, me.x, me.y);
+
+    }
+
+}
+
+fn stroke_arc(path: *Path, transform: *const Transform, from: Point, to: Point, rx_in: f32, ry_in: f32, rotation_deg: f32, large: bool, sweep: bool, width: f32) void {
+
+    var cubics: [4]ArcCubic = undefined;
+    const count = arc_to_cubics(from, to, rx_in, ry_in, rotation_deg, large, sweep, &cubics);
+
+    var prev = from;
+
+    for (cubics[0..count]) |seg| {
+
+        stroke_cubic(path, transform, prev, seg.c1, seg.c2, seg.end, width);
+        prev = seg.end;
+
+    }
+
+}
+
+fn arc_to_cubics(from: Point, to: Point, rx_in: f32, ry_in: f32, rotation_deg: f32, large: bool, sweep: bool, out: *[4]ArcCubic) usize {
+
+    var rx = @abs(rx_in);
+    var ry = @abs(ry_in);
+
+    if (rx == 0 or ry == 0 or (from.x == to.x and from.y == to.y)) {
+
+        out[0] = .{ .c1 = from, .c2 = to, .end = to };
+
+        return 1;
+
+    }
+
+    const phi = rotation_deg * std.math.pi / 180.0;
+    const cos_phi = @cos(phi);
+    const sin_phi = @sin(phi);
+
+    const dx = (from.x - to.x) * 0.5;
+    const dy = (from.y - to.y) * 0.5;
+
+    const x1p = cos_phi * dx + sin_phi * dy;
+    const y1p = -sin_phi * dx + cos_phi * dy;
+
+    // Scale radii when the ellipse is too small for the endpoints.
+    const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+
+    if (lambda > 1) {
+
+        const scale = @sqrt(lambda);
+
+        rx *= scale;
+        ry *= scale;
+
+    }
+
+    const rx_sq = rx * rx;
+    const ry_sq = ry * ry;
+    const x1p_sq = x1p * x1p;
+    const y1p_sq = y1p * y1p;
+
+    var num = rx_sq * ry_sq - rx_sq * y1p_sq - ry_sq * x1p_sq;
+    const den = rx_sq * y1p_sq + ry_sq * x1p_sq;
+
+    num = if (num < 0) 0 else num;
+
+    var coef = if (den == 0) 0 else @sqrt(num / den);
+
+    if (large == sweep) coef = -coef;
+
+    const cxp = coef * (rx * y1p) / ry;
+    const cyp = coef * -(ry * x1p) / rx;
+
+    const cx = cos_phi * cxp - sin_phi * cyp + (from.x + to.x) * 0.5;
+    const cy = sin_phi * cxp + cos_phi * cyp + (from.y + to.y) * 0.5;
+
+    const start_vec_x = (x1p - cxp) / rx;
+    const start_vec_y = (y1p - cyp) / ry;
+    const end_vec_x = (-x1p - cxp) / rx;
+    const end_vec_y = (-y1p - cyp) / ry;
+
+    const theta1 = vector_angle(1, 0, start_vec_x, start_vec_y);
+    var delta = vector_angle(start_vec_x, start_vec_y, end_vec_x, end_vec_y);
+
+    if (!sweep and delta > 0) delta -= 2 * std.math.pi;
+    if (sweep and delta < 0) delta += 2 * std.math.pi;
+
+    // One cubic covers at most a quarter turn.
+    const segments: usize = @intFromFloat(@ceil(@abs(delta) / (std.math.pi * 0.5)));
+    const count = @max(@as(usize, 1), @min(segments, 4));
+    const delta_seg = delta / @as(f32, @floatFromInt(count));
+
+    // alpha = 4/3 * tan(delta/4) for the unit-circle cubic approximation.
+    const alpha = 4.0 / 3.0 * @tan(delta_seg * 0.25);
+
+    var index: usize = 0;
+
+    while (index < count) : (index += 1) {
+
+        const t0 = theta1 + delta_seg * @as(f32, @floatFromInt(index));
+        const t1 = t0 + delta_seg;
+
+        const cos0 = @cos(t0);
+        const sin0 = @sin(t0);
+        const cos1 = @cos(t1);
+        const sin1 = @sin(t1);
+
+        const p0 = ellipse_point(cx, cy, rx, ry, cos_phi, sin_phi, cos0, sin0);
+        const p1 = ellipse_point(cx, cy, rx, ry, cos_phi, sin_phi, cos1, sin1);
+
+        const e0x = -rx * cos_phi * sin0 - ry * sin_phi * cos0;
+        const e0y = -rx * sin_phi * sin0 + ry * cos_phi * cos0;
+        const e1x = -rx * cos_phi * sin1 - ry * sin_phi * cos1;
+        const e1y = -rx * sin_phi * sin1 + ry * cos_phi * cos1;
+
+        out[index] = .{
+
+            .c1 = .{ .x = p0.x + alpha * e0x, .y = p0.y + alpha * e0y },
+            .c2 = .{ .x = p1.x - alpha * e1x, .y = p1.y - alpha * e1y },
+            .end = p1,
+
+        };
+
+    }
+
+    // Snap the first sample to the true start so floating error does not open a gap.
+    if (count > 0) {
+
+        const e0x = -rx * cos_phi * @sin(theta1) - ry * sin_phi * @cos(theta1);
+        const e0y = -rx * sin_phi * @sin(theta1) + ry * cos_phi * @cos(theta1);
+
+        out[0].c1 = .{ .x = from.x + alpha * e0x, .y = from.y + alpha * e0y };
+        out[count - 1].end = to;
+
+    }
+
+    return count;
+
+}
+
+fn ellipse_point(cx: f32, cy: f32, rx: f32, ry: f32, cos_phi: f32, sin_phi: f32, cos_t: f32, sin_t: f32) Point {
+
+    return .{
+
+        .x = cx + rx * cos_phi * cos_t - ry * sin_phi * sin_t,
+        .y = cy + rx * sin_phi * cos_t + ry * cos_phi * sin_t,
+
+    };
+
+}
+
+fn vector_angle(ux: f32, uy: f32, vx: f32, vy: f32) f32 {
+
+    const dot = ux * vx + uy * vy;
+    const len = @sqrt(ux * ux + uy * uy) * @sqrt(vx * vx + vy * vy);
+
+    if (len == 0) return 0;
+
+    const cos_a = std.math.clamp(dot / len, -1, 1);
+    const angle = std.math.acos(cos_a);
+
+    return if (ux * vy - uy * vx < 0) -angle else angle;
+
+}
+
+const max_curve_steps = 24;
+
+// Steps follow the control polygon's length in destination pixels: tiny icons stop over-tessellating
+// (every extra vertex used to cost a join disc) and large ones stop faceting.
+
+fn curve_steps(transform: *const Transform, hull: []const Point) usize {
+
+    var span: f32 = 0;
+
+    for (hull[1..], 0..) |p, index| {
+
+        span += @abs(p.x - hull[index].x) + @abs(p.y - hull[index].y);
+
+    }
+
+    return @intFromFloat(std.math.clamp(transform.length(span) * 0.5, 3, max_curve_steps));
+
+}
+
 fn stroke_quad(path: *Path, transform: *const Transform, a: Point, b: Point, c: Point, width: f32) void {
 
-    const steps = 8;
-    var points: [steps + 1]Point = undefined;
+    const steps = curve_steps(transform, &.{ a, b, c });
 
-    for (&points, 0..) |*out, step| {
+    var points: [max_curve_steps + 1]Point = undefined;
 
-        const t = @as(f32, @floatFromInt(step)) / steps;
+    for (points[0 .. steps + 1], 0..) |*out, step| {
+
+        const t = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(steps));
         const mt = 1 - t;
 
         out.* = transform.point(.{
@@ -780,18 +1176,19 @@ fn stroke_quad(path: *Path, transform: *const Transform, a: Point, b: Point, c: 
 
     }
 
-    stroke.polyline(path, &points, width);
+    stroke.chain(path, points[0 .. steps + 1], width);
 
 }
 
 fn stroke_cubic(path: *Path, transform: *const Transform, a: Point, b: Point, c: Point, d: Point, width: f32) void {
 
-    const steps = 12;
-    var points: [steps + 1]Point = undefined;
+    const steps = curve_steps(transform, &.{ a, b, c, d });
 
-    for (&points, 0..) |*out, step| {
+    var points: [max_curve_steps + 1]Point = undefined;
 
-        const t = @as(f32, @floatFromInt(step)) / steps;
+    for (points[0 .. steps + 1], 0..) |*out, step| {
+
+        const t = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(steps));
         const mt = 1 - t;
 
         out.* = transform.point(.{
@@ -803,7 +1200,7 @@ fn stroke_cubic(path: *Path, transform: *const Transform, a: Point, b: Point, c:
 
     }
 
-    stroke.polyline(path, &points, width);
+    stroke.chain(path, points[0 .. steps + 1], width);
 
 }
 
@@ -1055,6 +1452,73 @@ test "stroked icon covers its geometry" {
 
 }
 
+test "small icon strokes keep a solid spine with Lucide width" {
+
+    var buffer: [16 * 16]u8 = [_]u8{0} ** (16 * 16);
+
+    const svg =
+        \\<svg viewBox="0 0 24 24"><line x1="4" y1="12" x2="20" y2="12"/></svg>
+    ;
+
+    var path = Path{};
+
+    build_stroked(&path, .{ .x = 0, .y = 0, .w = 16, .h = 16 }, svg, 0);
+    raster.fill_coverage(&path, &buffer, 16, 16, 0, 0);
+
+    // Lucide 2/24 at 16px ≈ 1.33 — centre row must be solid; at most two rows carry ink.
+    try testing.expectEqual(@as(u8, 255), buffer[8 * 16 + 8]);
+
+    var rows: usize = 0;
+
+    for (0..16) |y| {
+
+        if (buffer[y * 16 + 8] > 32) rows += 1;
+
+    }
+
+    try testing.expect(rows >= 1 and rows <= 3);
+
+}
+
+test "a small icon keeps its interior open instead of blobbing" {
+
+    var buffer: [16 * 16]u8 = [_]u8{0} ** (16 * 16);
+
+    const svg =
+        \\<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3 Q17 12 12 21"/><path d="M12 3 Q7 12 12 21"/></svg>
+    ;
+
+    var path = Path{};
+
+    build_stroked(&path, .{ .x = 0, .y = 0, .w = 16, .h = 16 }, svg, 0);
+    raster.fill_coverage(&path, &buffer, 16, 16, 0, 0);
+
+    // Heavy strokes plus a join disc per flattened vertex used to merge rim and meridians into a solid disc.
+
+    try testing.expect(buffer[5 * 16 + 4] < 64);
+
+}
+
+test "curve flattening scales with the destination size" {
+
+    const svg =
+        \\<svg viewBox="0 0 24 24"><path d="M12 3 Q17 12 12 21"/></svg>
+    ;
+
+    var small = Path{};
+    var large = Path{};
+
+    build_stroked(&small, .{ .x = 0, .y = 0, .w = 16, .h = 16 }, svg, 0);
+    build_stroked(&large, .{ .x = 0, .y = 0, .w = 48, .h = 48 }, svg, 0);
+
+    try testing.expect(small.verb_count < large.verb_count);
+
+    // Smooth curves carry two cap discs, not one per flattened vertex.
+
+    try testing.expect(small.verb_count < 60);
+
+}
+
 test "filled cursor produces opaque interior with outline" {
 
     var pixels: [64 * 64]u32 = undefined;
@@ -1077,5 +1541,89 @@ test "filled cursor produces opaque interior with outline" {
 
     try testing.expect(found_fill);
     try testing.expectEqual(@as(u32, 0), pixels[63 * 64 + 63]);
+
+}
+
+test "elliptical arcs from Lucide path data stroke without overflowing" {
+
+    const svg =
+        \\<svg viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+    ;
+
+    var path = Path{};
+
+    build_stroked(&path, .{ .x = 0, .y = 0, .w = 20, .h = 20 }, svg, 0);
+
+    try testing.expect(!path.overflowed);
+    try testing.expect(path.verb_count > 8);
+
+    var buffer: [20 * 20]u8 = [_]u8{0} ** (20 * 20);
+
+    raster.fill_coverage(&path, &buffer, 20, 20, 0, 0);
+
+    // Folder outline leaves the center mostly empty.
+    try testing.expect(buffer[10 * 20 + 10] < 64);
+
+    var ink: usize = 0;
+
+    for (buffer) |cell| {
+
+        if (cell > 0) ink += 1;
+
+    }
+
+    try testing.expect(ink > 20);
+
+}
+
+test "cached icons at the same size do not bleed into each other" {
+
+    var pixels: [40 * 24]u32 = [_]u32{0} ** (40 * 24);
+    const surface = Surface.from_pixels(&pixels, 40, 24);
+
+    const left =
+        \\<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>
+    ;
+    const right =
+        \\<svg viewBox="0 0 24 24"><line x1="4" y1="12" x2="20" y2="12"/></svg>
+    ;
+
+    icon(&surface, .{ .x = 0, .y = 2, .w = 16, .h = 16 }, left, 0xffffff);
+    icon(&surface, .{ .x = 20, .y = 2, .w = 16, .h = 16 }, right, 0xffffff);
+
+    // Right icon is a mid-row line: left half of that cell pair should stay dark at the top.
+    try testing.expectEqual(@as(u32, 0), pixels[2 * 40 + 20]);
+
+}
+
+test "nested rect icons stay hollow at tab size" {
+
+    // CPU-like nested rounded rects used to fill solid at 20px with ring strokes.
+    const svg =
+        \\<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/></svg>
+    ;
+
+    var buffer: [20 * 20]u8 = [_]u8{0} ** (20 * 20);
+
+    try testing.expect(rasterize_icon(svg, 20, 20, &buffer));
+
+    // Centre of the inner rect must stay open.
+    try testing.expect(buffer[10 * 20 + 10] < 48);
+
+    // Outer frame mid-top edge carries ink.
+    try testing.expect(buffer[4 * 20 + 10] > 64);
+
+}
+
+test "supersampled icon spine is opaque" {
+
+    var buffer: [20 * 20]u8 = [_]u8{0} ** (20 * 20);
+
+    const svg =
+        \\<svg viewBox="0 0 24 24"><line x1="4" y1="12" x2="20" y2="12"/></svg>
+    ;
+
+    try testing.expect(rasterize_icon(svg, 20, 20, &buffer));
+    try testing.expect(buffer[10 * 20 + 10] > 200);
 
 }

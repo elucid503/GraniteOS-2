@@ -244,25 +244,7 @@ pub fn open_catalog(bundle: *const bundle_mod.Bundle) ?app_catalog.Catalog {
 
 pub fn icon_by_name(name: []const u8) []const u8 {
 
-    if (std.mem.eql(u8, name, "folder")) return icons.folder;
-    if (std.mem.eql(u8, name, "file")) return icons.file;
-    if (std.mem.eql(u8, name, "chart")) return icons.chart;
-    if (std.mem.eql(u8, name, "terminal")) return icons.terminal;
-    if (std.mem.eql(u8, name, "network")) return icons.network;
-    if (std.mem.eql(u8, name, "home")) return icons.home;
-    if (std.mem.eql(u8, name, "search")) return icons.search;
-    if (std.mem.eql(u8, name, "clock")) return icons.clock;
-    if (std.mem.eql(u8, name, "cpu")) return icons.cpu;
-    if (std.mem.eql(u8, name, "disk")) return icons.disk;
-    if (std.mem.eql(u8, name, "memory")) return icons.memory;
-    if (std.mem.eql(u8, name, "settings")) return icons.apps;
-    if (std.mem.eql(u8, name, "calculator")) return icons.calculator;
-    if (std.mem.eql(u8, name, "timer")) return icons.timer;
-    if (std.mem.eql(u8, name, "paint")) return icons.paint;
-    if (std.mem.eql(u8, name, "image")) return icons.image;
-    if (std.mem.eql(u8, name, "music")) return icons.music;
-    if (std.mem.eql(u8, name, "weather")) return icons.weather_app;
-    return icons.apps;
+    return icons.get(name);
 
 }
 

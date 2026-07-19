@@ -54,27 +54,13 @@ fn segment_body(path: *Path, x0: f32, y0: f32, x1: f32, y1: f32, half: f32) void
 /// Append a stroked open polyline with round joins.
 pub fn polyline(path: *Path, points: []const Point, width: f32) void {
 
-    if (points.len == 0) return;
+    chain(path, points, width);
+
+    if (points.len < 3) return;
 
     const half = @max(min_half, width * 0.5);
 
-    if (points.len == 1) {
-
-        path.add_circle(points[0].x, points[0].y, half);
-
-        return;
-
-    }
-
-    var index: usize = 0;
-
-    while (index + 1 < points.len) : (index += 1) {
-
-        segment_body(path, points[index].x, points[index].y, points[index + 1].x, points[index + 1].y, half);
-
-    }
-
-    for (points) |point| {
+    for (points[1 .. points.len - 1]) |point| {
 
         path.add_circle(point.x, point.y, half);
 
