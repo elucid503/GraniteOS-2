@@ -21,7 +21,7 @@ pub const Kind = enum(u8) {
 const fill_color: gfx.Color = 0xffff_ffff;
 const outline_color: gfx.Color = 0xff00_0000;
 
-const icon_size: i32 = 24;
+const icon_size: i32 = 20;
 
 pub fn hot_spot(kind: Kind) struct { x: u32, y: u32 } {
 
