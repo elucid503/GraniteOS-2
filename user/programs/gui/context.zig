@@ -8,7 +8,6 @@ const cap = lib.cap;
 const events = lib.events;
 const gfx = lib.gfx;
 const proto = lib.proto;
-const quartz = lib.quartz;
 const sys = lib.sys;
 const ui = lib.ui;
 
@@ -489,7 +488,7 @@ fn ensure_context_menu_window() !void {
 
     }
 
-    const window = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_quartz, "context-menu");
+    const window = try connection.create_window(width, height, proto.window.flag_undecorated, "context-menu");
 
     try lib.wm.minimize(&connection, window.id);
 
@@ -801,28 +800,12 @@ fn paint_context_menu_content() void {
     const surface = &window.surface;
     const fade = menu_fade_alpha();
 
-    if (!lib.prefs.quartz_enabled()) {
+    surface.fill(lib.draw.transparent);
 
-        surface.fill(lib.draw.transparent);
+    const fill = lib.draw.with_alpha(ui.theme.surface, fade);
 
-        const fill = lib.draw.with_alpha(ui.theme.surface, fade);
-
-        lib.draw.round.fill_round_rect(surface, surface.bounds(), 6, fill);
-        ui.stroke_round_rect(surface, surface.bounds(), 6, 1, lib.draw.with_alpha(ui.theme.border, fade));
-        menu.paint_content(surface, &font);
-
-        return;
-
-    }
-
-    var appearance = quartz.style(lib.quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), ui.theme.surface, ui.theme.accent);
-
-    appearance.radius = 6;
-    appearance.fill = lib.draw.with_alpha(appearance.fill, scale_u8(lib.draw.pixel_alpha(appearance.fill), fade));
-    appearance.shadow = lib.draw.with_alpha(appearance.shadow, scale_u8(lib.draw.pixel_alpha(appearance.shadow), fade));
-
-    quartz.clear(surface);
-    quartz.panel(surface, surface.bounds(), appearance);
+    lib.draw.round.fill_round_rect(surface, surface.bounds(), 6, fill);
+    ui.stroke_round_rect(surface, surface.bounds(), 6, 1, lib.draw.with_alpha(ui.theme.border, fade));
     menu.paint_content(surface, &font);
 
 }

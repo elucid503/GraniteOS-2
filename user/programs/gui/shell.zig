@@ -220,7 +220,7 @@ fn run() !void {
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
 
-    window = try connection.create_window(724, 436, lib.proto.window.flag_quartz, "Terminal");
+    window = try connection.create_window(724, 436, 0, "Terminal");
 
     resize_grid();
 
@@ -984,7 +984,7 @@ fn paint() void {
     const char_w = console.mono_width(mono_px);
     const char_h = console.mono_height(mono_px);
 
-    lib.quartz.fill_window(surface, bg, @intFromEnum(lib.prefs.quartz_level));
+    surface.fill(bg);
 
     row = 0;
 

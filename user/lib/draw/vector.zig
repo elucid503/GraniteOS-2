@@ -13,47 +13,46 @@ const Point = path_mod.Point;
 const Rect = draw_mod.Rect;
 const Surface = draw_mod.Surface;
 
-const fixed_one = 1 << 16;
 const max_poly_points = 256;
 
 const ViewBox = struct {
 
-    x: i32 = 0,
-    y: i32 = 0,
+    x: f32 = 0,
+    y: f32 = 0,
 
-    w: i32 = 24 * fixed_one,
-    h: i32 = 24 * fixed_one,
+    w: f32 = 24,
+    h: f32 = 24,
 
 };
 
-// Maps 16.16 view-box coordinates into 26.6 destination space.
+// Maps view-box user units into destination pixels.
 
 const Transform = struct {
 
     view: ViewBox,
     dest: Rect,
     // Subpixel offset so stroke centres land on pixel centres (odd widths) or pixel edges (even).
-    snap: i32 = 0,
+    snap: f32 = 0,
 
-    fn x(self: *const Transform, value: i32) i32 {
+    fn x(self: *const Transform, value: f32) f32 {
 
-        return path_mod.from_px(self.dest.x) + @as(i32, @intCast(@divTrunc(@as(i64, value - self.view.x) * self.dest.w * 64, self.view.w))) + self.snap;
-
-    }
-
-    fn y(self: *const Transform, value: i32) i32 {
-
-        return path_mod.from_px(self.dest.y) + @as(i32, @intCast(@divTrunc(@as(i64, value - self.view.y) * self.dest.h * 64, self.view.h))) + self.snap;
+        return path_mod.from_px(self.dest.x) + (value - self.view.x) * path_mod.from_px(self.dest.w) / self.view.w + self.snap;
 
     }
 
-    fn length(self: *const Transform, value: i32) i32 {
+    fn y(self: *const Transform, value: f32) f32 {
 
-        return @intCast(@divTrunc(@as(i64, value) * @min(self.dest.w, self.dest.h) * 64, @min(self.view.w, self.view.h)));
+        return path_mod.from_px(self.dest.y) + (value - self.view.y) * path_mod.from_px(self.dest.h) / self.view.h + self.snap;
 
     }
 
-    fn point(self: *const Transform, p: FixedPoint) Point {
+    fn length(self: *const Transform, value: f32) f32 {
+
+        return value * path_mod.from_px(@min(self.dest.w, self.dest.h)) / @min(self.view.w, self.view.h);
+
+    }
+
+    fn point(self: *const Transform, p: Point) Point {
 
         return .{ .x = self.x(p.x), .y = self.y(p.y) };
 
@@ -62,29 +61,22 @@ const Transform = struct {
 };
 
 /// Half-pixel snap for odd whole-pixel stroke widths; none for even — keeps lines on the pixel grid.
-fn stroke_snap(width_fx: i32) i32 {
+fn stroke_snap(width: f32) f32 {
 
-    const width_px = @divTrunc(width_fx + 32, 64);
+    const width_px: i32 = @intFromFloat(@floor(width + 0.5));
 
-    return if ((width_px & 1) != 0) 32 else 0;
+    return if ((width_px & 1) != 0) 0.5 else 0;
 
 }
 
-const FixedPoint = struct {
-
-    x: i32,
-    y: i32,
-
-};
-
 /// Build stroked SVG shapes into path; width_fx zero uses the icon-set default (side/12).
-pub fn build_stroked(path: *Path, rect: Rect, svg: []const u8, width_fx: i32) void {
+pub fn build_stroked(path: *Path, rect: Rect, svg: []const u8, width_in: f32) void {
 
     // Slightly heavier default at tiny sizes so 16px icons do not thin out after AA.
     const side = @min(rect.w, rect.h);
-    const default_width: i32 = @intCast(@divTrunc(@as(i64, side) * 2 * 64 + 12, 24));
-    const floor_width: i32 = if (side <= 18) 112 else 96;
-    const width: i32 = if (width_fx > 0) width_fx else @max(floor_width, default_width);
+    const default_width = path_mod.from_px(side) * 2 / 24;
+    const floor_width: f32 = if (side <= 18) 1.75 else 1.5;
+    const width: f32 = if (width_in > 0) width_in else @max(floor_width, default_width);
     const transform = Transform{ .view = parse_view_box(svg), .dest = rect, .snap = stroke_snap(width) };
 
     var offset: usize = 0;
@@ -157,7 +149,7 @@ pub fn build_stroked(path: *Path, rect: Rect, svg: []const u8, width_fx: i32) vo
 
         // A ring border centered on the outline: expand outward by half the width.
 
-        const half = @divTrunc(width, 2);
+        const half = width * 0.5;
 
         path.add_round_rect(origin.x - half, origin.y - half, px_w + width, px_h + width, transform.length(radius) + half);
         path.add_round_rect_reversed(origin.x + half, origin.y + half, px_w - width, px_h - width, @max(0, transform.length(radius) - half));
@@ -369,8 +361,8 @@ pub fn raster_cursor(side: usize, pixels: [*]u32, svg: []const u8, dst: Rect, fi
     @memset(over[0 .. side * side], 0);
 
     const w: u32 = @intCast(side);
-    const thin = @max(64, path_mod.from_px(@divTrunc(@min(dst.w, dst.h), 24)));
-    const thick = @max(128, path_mod.from_px(@divTrunc(@min(dst.w, dst.h), 8)));
+    const thin = @max(1, path_mod.from_px(@divTrunc(@min(dst.w, dst.h), 24)));
+    const thick = @max(2, path_mod.from_px(@divTrunc(@min(dst.w, dst.h), 8)));
 
     var path = Path{};
 
@@ -380,7 +372,7 @@ pub fn raster_cursor(side: usize, pixels: [*]u32, svg: []const u8, dst: Rect, fi
 
             // Outline stroke beneath the filled interior.
 
-            build_stroked(&path, dst, svg, thin + 64);
+            build_stroked(&path, dst, svg, thin + 1);
             raster.fill_coverage(&path, under[0 .. side * side], w, w, 0, 0);
 
             path.reset();
@@ -395,7 +387,7 @@ pub fn raster_cursor(side: usize, pixels: [*]u32, svg: []const u8, dst: Rect, fi
             raster.fill_coverage(&path, under[0 .. side * side], w, w, 0, 0);
 
             path.reset();
-            build_stroked(&path, dst, svg, @max(96, thick - 64));
+            build_stroked(&path, dst, svg, @max(1.5, thick - 1));
             raster.fill_coverage(&path, over[0 .. side * side], w, w, 0, 0);
 
         },
@@ -469,7 +461,7 @@ fn argb_over(under_px: u32, over_px: u32) u32 {
 
 // Shape walkers.
 
-fn stroke_points(path: *Path, transform: *const Transform, text: []const u8, close: bool, width: i32) void {
+fn stroke_points(path: *Path, transform: *const Transform, text: []const u8, close: bool, width: f32) void {
 
     var parser = PathParser{ .text = text };
     var points: [max_poly_points]Point = undefined;
@@ -526,7 +518,7 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
     var parser = PathParser{ .text = d };
     var command: u8 = 0;
-    var current = FixedPoint{ .x = 0, .y = 0 };
+    var current = Point{ .x = 0, .y = 0 };
     var start = current;
     var control = current;
 
@@ -542,7 +534,7 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
             'M' => {
 
-                const p = parser.fixed_point(relative, current) orelse break;
+                const p = parser.point(relative, current) orelse break;
 
                 current = p;
                 start = p;
@@ -557,7 +549,7 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
             'L' => {
 
-                const p = parser.fixed_point(relative, current) orelse break;
+                const p = parser.point(relative, current) orelse break;
                 const mapped = transform.point(p);
 
                 path.line_to(mapped.x, mapped.y);
@@ -568,7 +560,7 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
             'H' => {
 
                 const x = parser.number() orelse break;
-                const p = FixedPoint{ .x = if (relative) current.x + x else x, .y = current.y };
+                const p = Point{ .x = if (relative) current.x + x else x, .y = current.y };
                 const mapped = transform.point(p);
 
                 path.line_to(mapped.x, mapped.y);
@@ -579,7 +571,7 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
             'V' => {
 
                 const y = parser.number() orelse break;
-                const p = FixedPoint{ .x = current.x, .y = if (relative) current.y + y else y };
+                const p = Point{ .x = current.x, .y = if (relative) current.y + y else y };
                 const mapped = transform.point(p);
 
                 path.line_to(mapped.x, mapped.y);
@@ -589,8 +581,8 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
             'Q' => {
 
-                const c = parser.fixed_point(relative, current) orelse break;
-                const end = parser.fixed_point(relative, current) orelse break;
+                const c = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
 
                 const mc = transform.point(c);
                 const me = transform.point(end);
@@ -604,9 +596,9 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
             'C' => {
 
-                const c1 = parser.fixed_point(relative, current) orelse break;
-                const c2 = parser.fixed_point(relative, current) orelse break;
-                const end = parser.fixed_point(relative, current) orelse break;
+                const c1 = parser.point(relative, current) orelse break;
+                const c2 = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
 
                 const m1 = transform.point(c1);
                 const m2 = transform.point(c2);
@@ -621,8 +613,8 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
             'T' => {
 
-                const reflected = FixedPoint{ .x = current.x * 2 - control.x, .y = current.y * 2 - control.y };
-                const end = parser.fixed_point(relative, current) orelse break;
+                const reflected = Point{ .x = current.x * 2 - control.x, .y = current.y * 2 - control.y };
+                const end = parser.point(relative, current) orelse break;
 
                 const mc = transform.point(reflected);
                 const me = transform.point(end);
@@ -651,11 +643,11 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
 
 }
 
-fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, width: i32) void {
+fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, width: f32) void {
 
     var parser = PathParser{ .text = d };
     var command: u8 = 0;
-    var current = FixedPoint{ .x = 0, .y = 0 };
+    var current = Point{ .x = 0, .y = 0 };
     var start = current;
     var control = current;
 
@@ -671,7 +663,7 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
             'M' => {
 
-                const p = parser.fixed_point(relative, current) orelse break;
+                const p = parser.point(relative, current) orelse break;
 
                 current = p;
                 start = p;
@@ -681,7 +673,7 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
             'L' => {
 
-                const p = parser.fixed_point(relative, current) orelse break;
+                const p = parser.point(relative, current) orelse break;
 
                 stroke_between(path, transform, current, p, width);
                 current = p;
@@ -691,7 +683,7 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
             'H' => {
 
                 const x = parser.number() orelse break;
-                const p = FixedPoint{ .x = if (relative) current.x + x else x, .y = current.y };
+                const p = Point{ .x = if (relative) current.x + x else x, .y = current.y };
 
                 stroke_between(path, transform, current, p, width);
                 current = p;
@@ -701,7 +693,7 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
             'V' => {
 
                 const y = parser.number() orelse break;
-                const p = FixedPoint{ .x = current.x, .y = if (relative) current.y + y else y };
+                const p = Point{ .x = current.x, .y = if (relative) current.y + y else y };
 
                 stroke_between(path, transform, current, p, width);
                 current = p;
@@ -710,8 +702,8 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
             'Q' => {
 
-                const c = parser.fixed_point(relative, current) orelse break;
-                const end = parser.fixed_point(relative, current) orelse break;
+                const c = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
 
                 stroke_quad(path, transform, current, c, end, width);
 
@@ -722,9 +714,9 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
             'C' => {
 
-                const c1 = parser.fixed_point(relative, current) orelse break;
-                const c2 = parser.fixed_point(relative, current) orelse break;
-                const end = parser.fixed_point(relative, current) orelse break;
+                const c1 = parser.point(relative, current) orelse break;
+                const c2 = parser.point(relative, current) orelse break;
+                const end = parser.point(relative, current) orelse break;
 
                 stroke_cubic(path, transform, current, c1, c2, end, width);
 
@@ -735,8 +727,8 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
             'T' => {
 
-                const reflected = FixedPoint{ .x = current.x * 2 - control.x, .y = current.y * 2 - control.y };
-                const end = parser.fixed_point(relative, current) orelse break;
+                const reflected = Point{ .x = current.x * 2 - control.x, .y = current.y * 2 - control.y };
+                const end = parser.point(relative, current) orelse break;
 
                 stroke_quad(path, transform, current, reflected, end, width);
 
@@ -760,7 +752,7 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
 
 }
 
-fn stroke_between(path: *Path, transform: *const Transform, a: FixedPoint, b: FixedPoint, width: i32) void {
+fn stroke_between(path: *Path, transform: *const Transform, a: Point, b: Point, width: f32) void {
 
     const ma = transform.point(a);
     const mb = transform.point(b);
@@ -769,23 +761,20 @@ fn stroke_between(path: *Path, transform: *const Transform, a: FixedPoint, b: Fi
 
 }
 
-fn stroke_quad(path: *Path, transform: *const Transform, a: FixedPoint, b: FixedPoint, c: FixedPoint, width: i32) void {
+fn stroke_quad(path: *Path, transform: *const Transform, a: Point, b: Point, c: Point, width: f32) void {
 
-    const steps: i64 = 8;
+    const steps = 8;
     var points: [steps + 1]Point = undefined;
 
-    var step: i64 = 0;
+    for (&points, 0..) |*out, step| {
 
-    while (step <= steps) : (step += 1) {
+        const t = @as(f32, @floatFromInt(step)) / steps;
+        const mt = 1 - t;
 
-        const t = step;
-        const mt = steps - step;
-        const denom = steps * steps;
+        out.* = transform.point(.{
 
-        points[@intCast(step)] = transform.point(.{
-
-            .x = @intCast(round_div(mt * mt * @as(i64, a.x) + 2 * mt * t * @as(i64, b.x) + t * t * @as(i64, c.x), denom)),
-            .y = @intCast(round_div(mt * mt * @as(i64, a.y) + 2 * mt * t * @as(i64, b.y) + t * t * @as(i64, c.y), denom)),
+            .x = mt * mt * a.x + 2 * mt * t * b.x + t * t * c.x,
+            .y = mt * mt * a.y + 2 * mt * t * b.y + t * t * c.y,
 
         });
 
@@ -795,23 +784,20 @@ fn stroke_quad(path: *Path, transform: *const Transform, a: FixedPoint, b: Fixed
 
 }
 
-fn stroke_cubic(path: *Path, transform: *const Transform, a: FixedPoint, b: FixedPoint, c: FixedPoint, d: FixedPoint, width: i32) void {
+fn stroke_cubic(path: *Path, transform: *const Transform, a: Point, b: Point, c: Point, d: Point, width: f32) void {
 
-    const steps: i64 = 12;
+    const steps = 12;
     var points: [steps + 1]Point = undefined;
 
-    var step: i64 = 0;
+    for (&points, 0..) |*out, step| {
 
-    while (step <= steps) : (step += 1) {
+        const t = @as(f32, @floatFromInt(step)) / steps;
+        const mt = 1 - t;
 
-        const t = step;
-        const mt = steps - step;
-        const denom = steps * steps * steps;
+        out.* = transform.point(.{
 
-        points[@intCast(step)] = transform.point(.{
-
-            .x = @intCast(round_div(mt * mt * mt * @as(i64, a.x) + 3 * mt * mt * t * @as(i64, b.x) + 3 * mt * t * t * @as(i64, c.x) + t * t * t * @as(i64, d.x), denom)),
-            .y = @intCast(round_div(mt * mt * mt * @as(i64, a.y) + 3 * mt * mt * t * @as(i64, b.y) + 3 * mt * t * t * @as(i64, c.y) + t * t * t * @as(i64, d.y), denom)),
+            .x = mt * mt * mt * a.x + 3 * mt * mt * t * b.x + 3 * mt * t * t * c.x + t * t * t * d.x,
+            .y = mt * mt * mt * a.y + 3 * mt * mt * t * b.y + 3 * mt * t * t * c.y + t * t * t * d.y,
 
         });
 
@@ -821,17 +807,7 @@ fn stroke_cubic(path: *Path, transform: *const Transform, a: FixedPoint, b: Fixe
 
 }
 
-fn round_div(numerator: i64, denominator: i64) i64 {
-
-    const half = @divTrunc(denominator, 2);
-
-    if (numerator >= 0) return @divTrunc(numerator + half, denominator);
-
-    return -@divTrunc(-numerator + half, denominator);
-
-}
-
-// Parsing (16.16 fixed-point numbers, tolerant of the icon set's formatting).
+// Parsing (decimal numbers, tolerant of the icon set's formatting).
 
 const PathParser = struct {
 
@@ -877,18 +853,7 @@ const PathParser = struct {
 
     }
 
-    fn fixed_point(self: *PathParser, relative: bool, current: FixedPoint) ?FixedPoint {
-
-        const x = self.number() orelse return null;
-        const y = self.number() orelse return null;
-
-        if (relative) return .{ .x = current.x + x, .y = current.y + y };
-
-        return .{ .x = x, .y = y };
-
-    }
-
-    fn number(self: *PathParser) ?i32 {
+    fn number(self: *PathParser) ?f32 {
 
         self.skip();
 
@@ -910,6 +875,22 @@ const PathParser = struct {
 
         }
 
+        if (saw_digit and self.offset < self.text.len and (self.text[self.offset] == 'e' or self.text[self.offset] == 'E')) {
+
+            const mark = self.offset;
+
+            self.offset += 1;
+
+            if (self.offset < self.text.len and (self.text[self.offset] == '-' or self.text[self.offset] == '+')) self.offset += 1;
+
+            if (self.offset < self.text.len and is_digit(self.text[self.offset])) {
+
+                while (self.offset < self.text.len and is_digit(self.text[self.offset])) : (self.offset += 1) {}
+
+            } else self.offset = mark;
+
+        }
+
         if (!saw_digit) {
 
             self.offset = start;
@@ -918,7 +899,7 @@ const PathParser = struct {
 
         }
 
-        return parse_fixed(self.text[start..self.offset]);
+        return parse_number(self.text[start..self.offset]);
 
     }
 
@@ -1004,55 +985,17 @@ fn attr(tag: []const u8, name: []const u8) ?[]const u8 {
 
 }
 
-fn parse_attr_number(tag: []const u8, name: []const u8) ?i32 {
+fn parse_attr_number(tag: []const u8, name: []const u8) ?f32 {
 
     const value = attr(tag, name) orelse return null;
 
-    return parse_fixed(value);
+    return parse_number(value);
 
 }
 
-fn parse_fixed(bytes: []const u8) i32 {
+fn parse_number(bytes: []const u8) f32 {
 
-    var negative = false;
-    var offset: usize = 0;
-
-    if (offset < bytes.len and (bytes[offset] == '-' or bytes[offset] == '+')) {
-
-        negative = bytes[offset] == '-';
-        offset += 1;
-
-    }
-
-    var whole: i64 = 0;
-
-    while (offset < bytes.len and is_digit(bytes[offset])) : (offset += 1) {
-
-        whole = whole * 10 + @as(i64, bytes[offset] - '0');
-
-    }
-
-    var frac: i64 = 0;
-    var scale: i64 = 1;
-
-    if (offset < bytes.len and bytes[offset] == '.') {
-
-        offset += 1;
-
-        while (offset < bytes.len and is_digit(bytes[offset])) : (offset += 1) {
-
-            frac = frac * 10 + @as(i64, bytes[offset] - '0');
-            scale *= 10;
-
-        }
-
-    }
-
-    var value = whole * fixed_one + @divTrunc(frac * fixed_one, scale);
-
-    if (negative) value = -value;
-
-    return @intCast(value);
+    return std.fmt.parseFloat(f32, bytes) catch 0;
 
 }
 
@@ -1070,10 +1013,12 @@ fn is_name_char(c: u8) bool {
 
 const testing = std.testing;
 
-test "parse fixed decimal numbers" {
+test "parse decimal numbers" {
 
-    try testing.expectEqual(@as(i32, 12 * fixed_one + fixed_one / 2), parse_fixed("12.5"));
-    try testing.expectEqual(@as(i32, -3 * fixed_one), parse_fixed("-3"));
+    try testing.expectEqual(@as(f32, 12.5), parse_number("12.5"));
+    try testing.expectEqual(@as(f32, -3), parse_number("-3"));
+    try testing.expectEqual(@as(f32, 0.25), parse_number("2.5e-1"));
+    try testing.expectEqual(@as(f32, 0), parse_number("nonsense"));
 
 }
 
@@ -1081,7 +1026,7 @@ test "read viewBox attribute" {
 
     const box = parse_view_box("<svg viewBox=\"0 0 24 24\"></svg>");
 
-    try testing.expectEqual(@as(i32, 24 * fixed_one), box.w);
+    try testing.expectEqual(@as(f32, 24), box.w);
 
 }
 

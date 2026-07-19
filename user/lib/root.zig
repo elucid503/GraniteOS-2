@@ -23,7 +23,6 @@ pub const file_picker = @import("ui/file_picker.zig");
 pub const anim = @import("gfx/anim.zig");
 pub const prefs = @import("gfx/prefs.zig");
 pub const notify = @import("gfx/notify.zig");
-pub const quartz = @import("gfx/quartz.zig");
 pub const cursor = @import("gfx/cursor.zig");
 pub const icons = @import("gfx/icons.zig");
 pub const desktop = @import("gfx/desktop.zig");

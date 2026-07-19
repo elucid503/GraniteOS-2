@@ -124,7 +124,7 @@ fn run() !void {
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
-    window = try connection.create_window(560, 620, lib.proto.window.flag_quartz, "Weather");
+    window = try connection.create_window(560, 620, 0, "Weather");
 
     _ = lib.draw.round.masks_for(6);
 
@@ -418,7 +418,7 @@ fn paint() void {
 
     const surface = &window.surface;
 
-    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
+    surface.fill(ui.theme.window_bg);
 
     regions.reset();
 

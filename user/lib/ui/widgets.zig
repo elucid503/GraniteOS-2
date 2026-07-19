@@ -5,7 +5,6 @@ const std = @import("std");
 const draw = @import("../draw/draw.zig");
 const text_mod = @import("../draw/text.zig");
 const vector = @import("../draw/vector.zig");
-const quartz = @import("../gfx/quartz.zig");
 
 const ui = @import("ui.zig");
 
@@ -447,11 +446,7 @@ pub const Menu = struct {
                     const rect = Rect{ .x = self.x + self.inset, .y = cursor_y, .w = self.width - 2 * self.inset, .h = self.row_height - 1 };
                     const is_hovered = self.hover != null and self.hover.? == index;
 
-                    if (is_hovered and !quartz.control_fill(surface, rect, 4, ui.theme.hover)) {
-
-                        ui.fill_round_rect(surface, rect, 4, ui.theme.hover);
-
-                    }
+                    if (is_hovered) ui.fill_round_rect(surface, rect, 4, ui.theme.hover);
 
                     const visible = ui.truncate(font, label, 13, rect.w - 24);
                     const text_y = rect.y + @divTrunc(rect.h - font.line_height(13), 2);

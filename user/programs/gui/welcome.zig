@@ -5,7 +5,6 @@ const lib = @import("lib");
 const cap = lib.cap;
 const events = lib.events;
 const gfx = lib.gfx;
-const quartz = lib.quartz;
 const sys = lib.sys;
 
 comptime {
@@ -37,7 +36,7 @@ fn run() !void {
     try load_assets();
 
     var connection = try connect();
-    var window = try connection.create_window(0, 0, lib.proto.window.flag_fullscreen | lib.proto.window.flag_quartz, "welcome");
+    var window = try connection.create_window(0, 0, lib.proto.window.flag_fullscreen, "welcome");
 
     draw(&window.surface);
     gfx.fence();
@@ -159,22 +158,6 @@ fn draw(surface: *const gfx.Surface) void {
 
 fn paint_background(surface: *const gfx.Surface) void {
 
-    if (!lib.prefs.quartz_enabled()) {
-
-        surface.fill(lib.prefs.wallpaper());
-
-        return;
-
-    }
-
-    quartz.clear(surface);
-
-    var appearance = quartz.welcome_style(quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), ui.theme.window_bg, ui.theme.accent);
-
-    // Full-screen glass with the usual edge bezel so the rim still reads.
-    appearance.radius = 0;
-    appearance.shadow = lib.draw.transparent;
-
-    quartz.panel(surface, surface.bounds(), appearance);
+    surface.fill(lib.prefs.wallpaper());
 
 }

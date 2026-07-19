@@ -30,8 +30,6 @@ to size the virtual machine and persistent disk image (defaults: 4 cores,
 512 MiB RAM, 64 MiB disk). The default disk is `disk.img`; non-default sizes
 use `disk-<MiB>M.img`. A virtio-net NIC on QEMU's user-mode network is attached
 by default; pass `-Dnet=false` to boot without one.
-Pass `-Dweb=true` for browser-hosted builds; this hard-disables Quartz and its
-effect surfaces, including the Quartz controls in Settings.
 
 `zig build qemu` boots, discovers the machine from the device tree, logs each
 subsystem as it comes up (memory, interrupts, objects, and the SMP scheduler),

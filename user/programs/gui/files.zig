@@ -8,7 +8,6 @@ const cap = lib.cap;
 const events = lib.events;
 const gfx = lib.gfx;
 const proto = lib.proto;
-const quartz = lib.quartz;
 const ui = lib.ui;
 
 const Rect = gfx.Rect;
@@ -250,7 +249,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(800, 520, proto.window.flag_quartz, "Files");
+    window = try connection.create_window(800, 520, 0, "Files");
 
     // Zero in place — never materialize a multi-tab temporary on the 512 KiB stack.
     @memset(std.mem.asBytes(&tabs), 0);
@@ -1083,7 +1082,7 @@ fn ensure_menu_window() !void {
 
     }
 
-    const popup = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_quartz, "files-menu");
+    const popup = try connection.create_window(width, height, proto.window.flag_undecorated, "files-menu");
 
     try lib.wm.minimize(&connection, popup.id);
 
@@ -2132,8 +2131,6 @@ fn paint_chrome_rect(surface: *const gfx.Surface, rect: Rect) void {
 
     if (rect.is_empty()) return;
 
-    if (lib.prefs.quartz_enabled() and quartz.fill_element(surface, rect, 0, chrome_tint)) return;
-
     surface.fill_rect(rect, chrome_solid);
 
 }
@@ -2144,7 +2141,7 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
+    surface.fill(ui.theme.window_bg);
 
     paint_banner(surface, width);
 
@@ -2482,11 +2479,7 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
     const gutter = ui.scrollbar_width;
     const content_w = width - gutter;
 
-    if (!lib.prefs.quartz_enabled()) {
-
-        surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
-
-    }
+    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
 
     if (t.entry_count == 0) {
 
@@ -2537,11 +2530,7 @@ fn paint_grid(surface: *const gfx.Surface, height: i32) void {
     const gutter = ui.scrollbar_width;
     const content_w = width - gutter;
 
-    if (!lib.prefs.quartz_enabled()) {
-
-        surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
-
-    }
+    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
 
     if (t.entry_count == 0) {
 
@@ -2818,22 +2807,9 @@ fn paint_menu(surface: *const gfx.Surface) void {
 
     };
 
-    if (!lib.prefs.quartz_enabled()) {
-
-        surface.fill(lib.draw.transparent);
-        lib.draw.round.fill_round_rect(surface, bounds, 6, ui.theme.surface);
-        ui.stroke_round_rect(surface, bounds, 6, 1, ui.theme.border);
-
-    } else {
-
-        var appearance = quartz.style(lib.quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), ui.theme.surface, ui.theme.accent);
-
-        appearance.radius = 6;
-
-        quartz.clear(surface);
-        quartz.panel(surface, bounds, appearance);
-
-    }
+    surface.fill(lib.draw.transparent);
+    lib.draw.round.fill_round_rect(surface, bounds, 6, ui.theme.surface);
+    ui.stroke_round_rect(surface, bounds, 6, 1, ui.theme.border);
 
     var cursor_y = menu_y + menu_inset;
 

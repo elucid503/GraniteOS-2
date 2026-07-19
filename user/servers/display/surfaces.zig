@@ -43,7 +43,7 @@ pub fn Store(comptime capacity: usize) type {
         /// Allocate a size-classed surface, preserving a fitting buffer until the client presents its new layout.
         pub fn allocate(self: *Self, slot: usize, width: u32, height: u32, format: draw.Format) Error!Handle {
 
-            const bytes = surface_bytes(width, height, format) orelse return error.TooLarge;
+            const bytes = surface_bytes(width, height) orelse return error.TooLarge;
 
             if (self.slots[slot].region != 0 and bytes <= self.slots[slot].capacity) {
 
@@ -73,14 +73,6 @@ pub fn Store(comptime capacity: usize) type {
             const pixels: [*]u32 = @ptrFromInt(base);
 
             @memset(pixels[0..pixel_count], if (format == .alpha) draw.transparent else 0);
-
-            if (format == .alpha) {
-
-                const effect: [*]u8 = @ptrFromInt(base + pixel_count * @sizeOf(u32));
-
-                @memset(effect[0 .. pixel_count * 2], 0);
-
-            }
 
             self.slots[slot] = .{
 
@@ -149,14 +141,6 @@ pub fn Store(comptime capacity: usize) type {
 
             if (entry.base == 0) return null;
 
-            if (entry.format == .alpha) {
-
-                const effect_base = entry.base + @as(usize, entry.width) * entry.height * @sizeOf(u32);
-
-                return draw.Surface.from_base_effect(entry.base, entry.width, entry.height, entry.width * 4, effect_base, entry.width * 2);
-
-            }
-
             return draw.Surface.from_base_format(entry.base, entry.width, entry.height, entry.width * 4, entry.format);
 
         }
@@ -184,7 +168,7 @@ pub fn Store(comptime capacity: usize) type {
 
 }
 
-pub fn surface_bytes(width: u32, height: u32, format: draw.Format) ?usize {
+pub fn surface_bytes(width: u32, height: u32) ?usize {
 
     if (width == 0 or height == 0 or width > max_side or height > max_side) return null;
 
@@ -192,10 +176,7 @@ pub fn surface_bytes(width: u32, height: u32, format: draw.Format) ?usize {
 
     const pixel_bytes = std.math.mul(usize, pixels, @sizeOf(u32)) catch return null;
 
-    return if (format == .alpha)
-        std.math.add(usize, pixel_bytes, std.math.mul(usize, pixels, 2) catch return null) catch null
-    else
-        pixel_bytes;
+    return pixel_bytes;
 
 }
 
@@ -203,10 +184,9 @@ const testing = std.testing;
 
 test "surface byte math rejects zero and oversized surfaces" {
 
-    try testing.expectEqual(@as(?usize, null), surface_bytes(0, 100, .xrgb));
-    try testing.expectEqual(@as(?usize, null), surface_bytes(100, 0, .xrgb));
-    try testing.expectEqual(@as(?usize, null), surface_bytes(max_side + 1, 1, .xrgb));
-    try testing.expectEqual(@as(?usize, 400), surface_bytes(10, 10, .xrgb));
-    try testing.expectEqual(@as(?usize, 600), surface_bytes(10, 10, .alpha));
+    try testing.expectEqual(@as(?usize, null), surface_bytes(0, 100));
+    try testing.expectEqual(@as(?usize, null), surface_bytes(100, 0));
+    try testing.expectEqual(@as(?usize, null), surface_bytes(max_side + 1, 1));
+    try testing.expectEqual(@as(?usize, 400), surface_bytes(10, 10));
 
 }

@@ -299,7 +299,6 @@ pub const Rect = struct {
 pub const Surface = struct {
 
     pixels: [*]u32,
-    effect: ?[*]u8,
 
     format: Format,
 
@@ -308,7 +307,6 @@ pub const Surface = struct {
 
     // In pixels, not bytes; rows may be padded (the scanout stride).
     stride: u32,
-    effect_stride: u32,
 
     // Every primitive clips to this rect as well as the surface bounds, so callers can scope painting to a pane.
     clip: Rect,
@@ -324,7 +322,6 @@ pub const Surface = struct {
         return .{
 
             .pixels = @ptrFromInt(base),
-            .effect = null,
 
             .format = format,
 
@@ -332,7 +329,6 @@ pub const Surface = struct {
             .height = height,
 
             .stride = stride_bytes / @sizeOf(u32),
-            .effect_stride = 0,
 
             .clip = .{ .x = 0, .y = 0, .w = @intCast(width), .h = @intCast(height) },
 
@@ -346,23 +342,11 @@ pub const Surface = struct {
 
     }
 
-    pub fn from_base_effect(base: usize, width: u32, height: u32, stride_bytes: u32, effect_base: usize, effect_stride: u32) Surface {
-
-        var surface = from_base_format(base, width, height, stride_bytes, .alpha);
-
-        surface.effect = @ptrFromInt(effect_base);
-        surface.effect_stride = effect_stride;
-
-        return surface;
-
-    }
-
     pub fn from_pixels_format(pixels: [*]u32, width: u32, height: u32, format: Format) Surface {
 
         return .{
 
             .pixels = pixels,
-            .effect = null,
 
             .format = format,
 
@@ -370,7 +354,6 @@ pub const Surface = struct {
             .height = height,
 
             .stride = width,
-            .effect_stride = 0,
 
             .clip = .{ .x = 0, .y = 0, .w = @intCast(width), .h = @intCast(height) },
 
@@ -958,7 +941,7 @@ test "divide-free mix matches rounded scalar division" {
 
 test "alpha surface preserves coverage and composites over XRGB" {
 
-    var quartz_pixels = [_]u32{
+    var alpha_pixels = [_]u32{
 
         transparent,
 
@@ -970,14 +953,14 @@ test "alpha surface preserves coverage and composites over XRGB" {
 
     };
 
-    const quartz = Surface.from_pixels_format(&quartz_pixels, 1, 1, .alpha);
+    const alpha_surface = Surface.from_pixels_format(&alpha_pixels, 1, 1, .alpha);
     const background = Surface.from_pixels(&back_pixels, 1, 1);
 
-    quartz.blend_pixel(0, 0, rgb(220, 120, 40), 128);
+    alpha_surface.blend_pixel(0, 0, rgb(220, 120, 40), 128);
 
-    try testing.expectEqual(@as(u8, 128), pixel_alpha(quartz_pixels[0]));
+    try testing.expectEqual(@as(u8, 128), pixel_alpha(alpha_pixels[0]));
 
-    background.blit(0, 0, &quartz, quartz.bounds());
+    background.blit(0, 0, &alpha_surface, alpha_surface.bounds());
 
     try testing.expectEqual(rgb(120, 80, 50), back_pixels[0]);
 

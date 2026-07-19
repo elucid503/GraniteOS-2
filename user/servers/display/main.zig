@@ -13,7 +13,7 @@ const sys = lib.sys;
 
 const manager_module = @import("manager.zig");
 const damage_module = @import("damage.zig");
-const quartz_effect = @import("quartz.zig");
+const parallel = @import("parallel.zig");
 const render = @import("render.zig");
 const surfaces_module = @import("surfaces.zig");
 
@@ -78,7 +78,6 @@ var back: draw.Surface = undefined;
 
 var manager = Manager{};
 var surfaces = surfaces_module.Store(manager_module.max_windows){};
-var quartz_renderer = quartz_effect.Renderer{};
 
 // Per-client event rings, keyed by the badge the name service minted for the client.
 
@@ -121,16 +120,6 @@ var drag_id: u32 = 0;
 var drag_dx: i32 = 0;
 var drag_dy: i32 = 0;
 
-// Last position that was actually glass-composited while dragging (not every pointer sample).
-var drag_last_painted: Rect = Rect.empty;
-var drag_moved_since_paint = false;
-var last_drag_composite_ms: u64 = 0;
-
-// Cap glass rebuilds only for large Quartz windows while dragging. Small glass surfaces stay
-// per-sample (they were never the problem). Effects stay full-quality on each painted frame.
-const drag_composite_interval_ms: u64 = 32;
-// Roughly ≥ Files/default large windows; calculator/about/timer stay per-sample.
-const drag_coalesce_min_pixels: u64 = 380_000;
 const title_double_click_interval_ms: u64 = 400;
 
 var last_title_click_id: u32 = 0;
@@ -326,8 +315,6 @@ fn load_compositor_theme() void {
     theme.chrome = chrome.chrome;
     theme.border = chrome.border;
 
-    quartz_renderer.invalidate();
-
 }
 
 fn chrome_colors() render.Chrome {
@@ -446,23 +433,14 @@ fn map_scanout() !void {
 
 fn build_back_buffer() !void {
 
-    // Release both display-sized regions before reallocating so contiguous frames can coalesce.
-    quartz_renderer.release();
-
     if (back_base != 0) sys.unmap(cap.self_space, back_base) catch {};
     if (back_region != 0) sys.close(back_region) catch {};
 
-    const bytes = surfaces_module.surface_bytes(screen_width, screen_height, .xrgb) orelse return error.Invalid;
+    const bytes = surfaces_module.surface_bytes(screen_width, screen_height) orelse return error.Invalid;
 
     back_region = try sys.create(.region, bytes, cap.memory);
     back_base = try sys.map(cap.self_space, back_region, 0, sys.read | sys.write);
     back = draw.Surface.from_base(back_base, screen_width, screen_height, screen_width * 4);
-
-    if (!lib.prefs.force_quartz_disabled) {
-
-        quartz_renderer.resize(screen_width, screen_height) catch quartz_renderer.release();
-
-    }
 
 }
 
@@ -616,11 +594,7 @@ fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
     if (width > surfaces_module.max_side or height > surfaces_module.max_side) return -7;
 
     const previous_focus = manager.focus;
-    const flags = if (lib.prefs.force_quartz_disabled)
-        in.data[2] & ~proto.window.flag_quartz
-    else
-        in.data[2];
-    const window = manager.create(badge, width, height, flags, title) orelse return -3;
+    const window = manager.create(badge, width, height, in.data[2], title) orelse return -3;
     const slot = slot_of(window);
 
     resize_damage[slot] = Rect.empty;
@@ -1194,7 +1168,6 @@ fn handle_pointer_move() void {
         const window = manager.by_id(drag_id) orelse {
 
             drag_id = 0;
-            drag_moved_since_paint = false;
 
             return;
 
@@ -1204,16 +1177,7 @@ fn handle_pointer_move() void {
 
         if (manager.move(drag_id, pointer_x - drag_dx, pointer_y - drag_dy) != null) {
 
-            // Large glass surfaces coalesce; everything else damags every sample so light apps stay snappy.
-            if (drag_should_coalesce(window)) {
-
-                drag_moved_since_paint = true;
-
-            } else {
-
-                add_movement_damage(window, before, window.frame());
-
-            }
+            add_movement_damage(window, before, window.frame());
 
         }
 
@@ -1296,9 +1260,6 @@ fn handle_button_down(event: events.Event) void {
             drag_id = window.id;
             drag_dx = pointer_x - window.x;
             drag_dy = pointer_y - window.y;
-            drag_last_painted = window.frame();
-            drag_moved_since_paint = false;
-            last_drag_composite_ms = lib.time.now_ms();
 
         },
 
@@ -1355,20 +1316,7 @@ fn handle_button_up(event: events.Event) void {
 
     if (drag_id != 0) {
 
-        // Final glass pass for the resting place (may have been rate-limited mid-drag).
-        if (drag_moved_since_paint) {
-
-            if (manager.by_id(drag_id)) |window| {
-
-                if (drag_should_coalesce(window)) enqueue_drag_paint(window.frame());
-
-            }
-
-        }
-
         drag_id = 0;
-        drag_moved_since_paint = false;
-        drag_last_painted = Rect.empty;
 
         return;
 
@@ -1591,12 +1539,6 @@ fn add_damage(rect: Rect) void {
 
     if (clipped.is_empty()) return;
 
-    // Invalidate glass caches with a halo; the paint list stays tight and expands once in composite().
-    const halo = quartz_halo(clipped);
-
-    if (halo > 0) quartz_renderer.invalidate_region(clipped.inset(-halo).intersect(screen_bounds()))
-    else quartz_renderer.invalidate_region(clipped);
-
     damage.add(clipped);
 
 }
@@ -1615,17 +1557,9 @@ fn add_overlay_damage(rect: Rect) void {
 
 fn add_window_damage(window: *const Window, rect: Rect) void {
 
-    const clipped = rect.intersect(screen_bounds());
+    _ = window;
 
-    if (clipped.is_empty()) return;
-
-    // Cache invalidation needs the morph halo; the dirty rect stays tight and expands once when painted.
-    const halo = quartz_halo_above(clipped, window);
-
-    if (halo > 0) quartz_renderer.invalidate_region(clipped.inset(-halo).intersect(screen_bounds()))
-    else quartz_renderer.invalidate_region(clipped);
-
-    damage.add(clipped);
+    add_damage(rect);
 
 }
 
@@ -1643,120 +1577,6 @@ fn add_movement_damage(window: *const Window, before: Rect, after: Rect) void {
 
     add_window_damage(window, before);
     add_window_damage(window, after);
-
-}
-
-fn quartz_halo(rect: Rect) i32 {
-
-    return quartz_halo_above(rect, null);
-
-}
-
-fn window_needs_glass(window: *const Window) bool {
-
-    return lib.prefs.quartz_enabled() and quartz_renderer.ready() and window.flags & proto.window.flag_quartz != 0;
-
-}
-
-fn drag_should_coalesce(window: *const Window) bool {
-
-    if (!window_needs_glass(window)) return false;
-
-    const frame = window.frame();
-    const area = @as(u64, @intCast(@max(0, frame.w))) * @as(u64, @intCast(@max(0, frame.h)));
-
-    return area >= drag_coalesce_min_pixels;
-
-}
-
-fn enqueue_drag_paint(current: Rect) void {
-
-    const previous = if (drag_last_painted.is_empty()) current else drag_last_painted;
-    const covered = previous.cover(current).intersect(screen_bounds());
-
-    if (covered.is_empty()) return;
-
-    // Geometry only — composite() applies a single frost halo when painting.
-    const density: u8 = @intFromEnum(lib.prefs.quartz_level);
-    const halo = quartz_effect.damage_halo(density);
-
-    quartz_renderer.invalidate_region(covered.inset(-halo).intersect(screen_bounds()));
-    damage.add(covered);
-    drag_last_painted = current;
-    drag_moved_since_paint = false;
-    last_drag_composite_ms = lib.time.now_ms();
-
-}
-
-fn quartz_halo_above(rect: Rect, source: ?*const Window) i32 {
-
-    if (!quartz_renderer.ready() or !lib.prefs.quartz_enabled()) return 0;
-
-    const max_layers: i32 = 3;
-    var first: usize = 0;
-
-    if (source) |changed| {
-
-        while (first < manager.count) : (first += 1) {
-
-            if (manager.stacked(first).id == changed.id) {
-
-                first += 1;
-
-                break;
-
-            }
-
-        }
-
-    }
-
-    var index = first;
-
-    while (index < manager.count) : (index += 1) {
-
-        const window = manager.stacked(index);
-
-        if (window.flags & proto.window.flag_minimized != 0) continue;
-        if (window.flags & proto.window.flag_quartz != 0) continue;
-        if (!covers(window.content(), rect)) continue;
-        if (!surfaces.covers(slot_of(window), window.content(), rect)) continue;
-
-        first = index + 1;
-
-    }
-
-    var affected = rect;
-    var layers: i32 = 0;
-    var halo: i32 = 0;
-    const density: u8 = @intFromEnum(lib.prefs.quartz_level);
-
-    index = first;
-
-    while (index < manager.count) : (index += 1) {
-
-        const window = manager.stacked(index);
-
-        if (window.flags & proto.window.flag_minimized != 0) continue;
-
-        var layer_halo: i32 = 0;
-
-        if (window.flags & proto.window.flag_quartz != 0 and !window.content().intersect(affected).is_empty()) layer_halo = quartz_effect.damage_halo(density);
-        if (window.decorated() and !window.title_bar().intersect(affected).is_empty()) layer_halo = @max(layer_halo, quartz_effect.header_damage_halo(density));
-
-        if (layer_halo == 0) continue;
-
-        layers += 1;
-        // Take the max halo once — summing per stacked layer ballooned paint regions to 100+ px.
-        halo = @max(halo, layer_halo);
-        affected = affected.inset(-layer_halo).intersect(screen_bounds());
-
-        // Bounds filter propagation through stacked Quartz surfaces without unbounded overdraw.
-        if (layers == max_layers) break;
-
-    }
-
-    return halo;
 
 }
 
@@ -2066,48 +1886,17 @@ fn blend_snapshot(anim: *const WindowAnim, rect: Rect, alpha: u8, clip: Rect) vo
 
 fn composite() !void {
 
-    // Fold coalesced *glass* drag geometry into the damage list (opaque drags already damag every sample).
-    if (drag_id != 0 and drag_moved_since_paint) {
-
-        if (manager.by_id(drag_id)) |window| {
-
-            if (drag_should_coalesce(window)) {
-
-                const now = lib.time.now_ms();
-                const due = now -% last_drag_composite_ms >= drag_composite_interval_ms;
-
-                // Rate-limit pure large-glass drag frames so one Files-sized window cannot pin the server.
-                // Unrelated damage still forces an immediate pass and takes the drag with it.
-                if (due or damage.len != 0) enqueue_drag_paint(window.frame());
-
-            } else {
-
-                drag_moved_since_paint = false;
-
-            }
-
-        }
-
-    }
-
     if (damage.len == 0) return;
 
     const pending = damage;
     damage.clear();
-
-    quartz_renderer.set_density(@intFromEnum(lib.prefs.quartz_level));
 
     // Client pixels may have been written in other processes; publish once before reading any surface.
     draw.fence();
 
     for (pending.rects[0..pending.len]) |region| {
 
-        // One frost/morph margin for sampling — applied here only (not stacked with add_*).
-        const density: u8 = @intFromEnum(lib.prefs.quartz_level);
-        const paint_region = if (lib.prefs.quartz_enabled() and quartz_renderer.ready())
-            region.inset(-quartz_effect.damage_halo(density)).intersect(screen_bounds())
-        else
-            region.intersect(screen_bounds());
+        const paint_region = region.intersect(screen_bounds());
         var first: usize = 0;
         var covered = false;
 
@@ -2120,7 +1909,6 @@ fn composite() !void {
             const candidate = manager.stacked(search);
 
             if (candidate.flags & proto.window.flag_minimized != 0) continue;
-            if (candidate.flags & proto.window.flag_quartz != 0) continue;
             if (window_hidden(candidate)) continue;
             if (!covers(candidate.content(), paint_region)) continue;
             if (!surfaces.covers(slot_of(candidate), candidate.content(), paint_region)) continue;
@@ -2162,7 +1950,7 @@ fn composite() !void {
         // Copy the finished band into uncached scanout. Large regions share independent row bands
         // across the compositor helper pool; small damage stays on this thread.
 
-        quartz_effect.blit_scanout(&fb, &back, region);
+        parallel.blit_scanout(&fb, &back, region);
 
     }
 
@@ -2191,7 +1979,9 @@ fn covers(outer: Rect, inner: Rect) bool {
 
 fn window_format(window: *const Window) draw.Format {
 
-    return if (window.flags & proto.window.flag_quartz != 0) .alpha else .xrgb;
+    _ = window;
+
+    return .xrgb;
 
 }
 
@@ -2205,27 +1995,7 @@ fn draw_window(window: *Window, clip: Rect) void {
         const face: ?*const draw.text.Face = if (title_font) |*f| f else null;
         const focused = manager.focus == window.id;
         const colors = chrome_colors();
-        const tint = if (focused) theme.title_focused else theme.title_blurred;
-        const opacity: u8 = switch (lib.prefs.quartz_level) {
-
-            .off => 0,
-            .light => lib.quartz.material_opacity(.clear),
-            .medium => lib.quartz.material_opacity(.regular),
-            .dark => lib.quartz.material_opacity(.prominent),
-
-        };
-
-        const joined = window.flags & proto.window.flag_quartz != 0;
-
-        if (!quartz_renderer.composite_header(&back, window.title_bar(), clip, window.id, tint, opacity, render.corner_radius, joined)) {
-
-            render.draw_title_bar(&view, window, focused, colors, face);
-
-        } else {
-
-            render.draw_title_bar_overlay(&view, window, colors, face);
-
-        }
+        render.draw_title_bar(&view, window, focused, colors, face);
 
     }
 
@@ -2233,11 +2003,7 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     const surface = surfaces.surface_of(slot) orelse return;
 
-    if (!lib.prefs.quartz_enabled() or window.flags & proto.window.flag_quartz == 0 or !quartz_renderer.composite(&back, &surface, window.content(), clip, window.id)) {
-
-        render.blit_content(&back, window, &surface, clip, theme.border);
-
-    }
+    render.blit_content(&back, window, &surface, clip, theme.border);
 
     if (window.decorated()) {
 

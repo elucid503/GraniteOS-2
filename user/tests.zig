@@ -15,7 +15,6 @@ test {
     _ = @import("lib").draw.vector;
     _ = @import("lib").ui;
     _ = @import("lib").ui.chart;
-    _ = @import("lib").quartz;
     _ = @import("lib").icons;
     _ = @import("lib").time;
     _ = @import("lib").localtime;
@@ -24,7 +23,7 @@ test {
     _ = @import("servers/naming/main.zig");
     _ = @import("servers/display/manager.zig");
     _ = @import("servers/display/render.zig");
-    _ = @import("servers/display/quartz.zig");
+    _ = @import("servers/display/parallel.zig");
     _ = @import("servers/display/surfaces.zig");
     _ = @import("servers/filesystem/format.zig");
 

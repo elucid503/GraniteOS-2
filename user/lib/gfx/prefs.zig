@@ -60,42 +60,6 @@ pub const Chrome = struct {
 pub var active_theme: ThemeId = .mono;
 pub var tz_offset_minutes: i32 = 0;
 
-pub const QuartzLevel = enum(u8) {
-
-    off = 0,
-    light = 1,
-    medium = 2,
-    dark = 3,
-
-};
-
-pub const quartz_level_count: usize = 4;
-
-pub const quartz_level_names = [_][]const u8{
-
-    "Off",
-    "Light",
-    "Medium",
-    "Dark",
-
-};
-
-pub const force_quartz_disabled = build_options.force_quartz_disabled;
-
-pub var quartz_level: QuartzLevel = if (force_quartz_disabled) .off else .medium;
-
-pub fn quartz_enabled() bool {
-
-    return !force_quartz_disabled and quartz_level != .off;
-
-}
-
-pub fn set_quartz_level(level: QuartzLevel) void {
-
-    quartz_level = if (force_quartz_disabled) .off else level;
-
-}
-
 /// Display unit for weather temperatures (stored in Celsius from the API).
 pub const TempUnit = enum(u8) {
 
@@ -360,12 +324,11 @@ pub fn save() void {
 
     var buffer: [160]u8 = undefined;
     const stamp = loaded_generation +% 1;
-    const text = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\ntemp={d}\nquartz={d}\nstamp={d}\n", .{
+    const text = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\ntemp={d}\nstamp={d}\n", .{
 
         @intFromEnum(active_theme),
         tz_offset_minutes,
         @intFromEnum(temp_unit),
-        @intFromEnum(quartz_level),
         stamp,
 
     }) catch return;
@@ -401,7 +364,6 @@ pub fn changed_event() events.Event {
 
     const bits: u64 =
         @as(u64, @intFromEnum(active_theme)) |
-        (@as(u64, @intFromEnum(quartz_level)) << 8) |
         (@as(u64, @intFromEnum(temp_unit)) << 16);
 
     return .{
@@ -426,11 +388,9 @@ pub fn apply_event(event: events.Event) bool {
 
     const bits: u64 = @bitCast(event.value);
     const theme_value: u8 = @truncate(bits & 0xff);
-    const quartz_value: u8 = @truncate((bits >> 8) & 0xff);
     const temp_value: u8 = @truncate((bits >> 16) & 0xff);
 
     if (theme_value < theme_count) apply_theme(@enumFromInt(theme_value));
-    if (quartz_value < quartz_level_count) set_quartz_level(@enumFromInt(quartz_value));
     if (temp_value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(temp_value);
 
     tz_offset_minutes = event.x;
@@ -752,28 +712,6 @@ fn parse_config(text: []const u8) void {
             const value = std.fmt.parseInt(u8, line[5..], 10) catch continue;
 
             if (value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(value);
-
-        } else if (std.mem.startsWith(u8, line, "quartz=")) {
-
-            const value = std.fmt.parseInt(u8, line[7..], 10) catch continue;
-
-            if (value < quartz_level_count) set_quartz_level(@enumFromInt(value));
-
-        } else if (std.mem.startsWith(u8, line, "quartz_pct=")) {
-
-            // Migrate continuous 0..=100 back onto the discrete scale.
-            const value = std.fmt.parseInt(u8, line[11..], 10) catch continue;
-
-            const level: QuartzLevel = if (value == 0)
-                .off
-            else if (value <= 33)
-                .light
-            else if (value <= 66)
-                .medium
-            else
-                .dark;
-
-            set_quartz_level(level);
 
         }
 

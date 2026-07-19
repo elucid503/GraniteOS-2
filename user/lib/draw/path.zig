@@ -1,27 +1,25 @@
-// 26.6 fixed-point path tape for the analytic rasterizer; curves flatten at raster time.
+// Floating-point path tape for the analytic rasterizer; coordinates are pixels, curves flatten at raster time.
 
 const std = @import("std");
 
-/// Subpixel units per pixel.
-pub const one: i32 = 64;
+/// Bridge whole-pixel integers into path space.
+pub fn from_px(px: i32) f32 {
 
-pub fn from_px(px: i32) i32 {
-
-    return px * one;
+    return @floatFromInt(px);
 
 }
 
-/// Round a 26.6 coordinate to whole pixels.
-pub fn to_px(fx: i32) i32 {
+/// Round a path coordinate to the nearest whole pixel, halves toward +infinity.
+pub fn to_px(value: f32) i32 {
 
-    return @divFloor(fx + one / 2, one);
+    return @intFromFloat(@floor(value + 0.5));
 
 }
 
 pub const Point = struct {
 
-    x: i32,
-    y: i32,
+    x: f32,
+    y: f32,
 
 };
 
@@ -84,7 +82,7 @@ pub const Path = struct {
 
     }
 
-    pub fn move_to(self: *Path, x: i32, y: i32) void {
+    pub fn move_to(self: *Path, x: f32, y: f32) void {
 
         if (self.open) self.close();
 
@@ -98,7 +96,7 @@ pub const Path = struct {
 
     }
 
-    pub fn line_to(self: *Path, x: i32, y: i32) void {
+    pub fn line_to(self: *Path, x: f32, y: f32) void {
 
         const p = Point{ .x = x, .y = y };
 
@@ -107,14 +105,14 @@ pub const Path = struct {
 
     }
 
-    pub fn quad_to(self: *Path, cx: i32, cy: i32, x: i32, y: i32) void {
+    pub fn quad_to(self: *Path, cx: f32, cy: f32, x: f32, y: f32) void {
 
         self.push(.quad, &.{ .{ .x = cx, .y = cy }, .{ .x = x, .y = y } });
         self.current = .{ .x = x, .y = y };
 
     }
 
-    pub fn cubic_to(self: *Path, c1x: i32, c1y: i32, c2x: i32, c2y: i32, x: i32, y: i32) void {
+    pub fn cubic_to(self: *Path, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) void {
 
         self.push(.cubic, &.{ .{ .x = c1x, .y = c1y }, .{ .x = c2x, .y = c2y }, .{ .x = x, .y = y } });
         self.current = .{ .x = x, .y = y };
@@ -132,9 +130,9 @@ pub const Path = struct {
 
     }
 
-    // Shape helpers. All take 26.6 coordinates; use from_px for whole pixels.
+    // Shape helpers. All take pixel coordinates; use from_px to lift whole-pixel integers.
 
-    pub fn add_rect(self: *Path, x: i32, y: i32, w: i32, h: i32) void {
+    pub fn add_rect(self: *Path, x: f32, y: f32, w: f32, h: f32) void {
 
         if (w <= 0 or h <= 0) return;
 
@@ -147,11 +145,11 @@ pub const Path = struct {
     }
 
     /// Rounded rectangle; the radius clamps to half the shorter side. Quarter circles are cubic arcs.
-    pub fn add_round_rect(self: *Path, x: i32, y: i32, w: i32, h: i32, radius_in: i32) void {
+    pub fn add_round_rect(self: *Path, x: f32, y: f32, w: f32, h: f32, radius_in: f32) void {
 
         if (w <= 0 or h <= 0) return;
 
-        const radius = @max(0, @min(radius_in, @min(@divTrunc(w, 2), @divTrunc(h, 2))));
+        const radius = @max(0, @min(radius_in, @min(w / 2, h / 2)));
 
         if (radius == 0) return self.add_rect(x, y, w, h);
 
@@ -171,11 +169,11 @@ pub const Path = struct {
     }
 
     /// Counter-clockwise round rect paired with add_round_rect to cut a border ring in one fill.
-    pub fn add_round_rect_reversed(self: *Path, x: i32, y: i32, w: i32, h: i32, radius_in: i32) void {
+    pub fn add_round_rect_reversed(self: *Path, x: f32, y: f32, w: f32, h: f32, radius_in: f32) void {
 
         if (w <= 0 or h <= 0) return;
 
-        const radius = @max(0, @min(radius_in, @min(@divTrunc(w, 2), @divTrunc(h, 2))));
+        const radius = @max(0, @min(radius_in, @min(w / 2, h / 2)));
         const k = kappa(radius);
 
         self.move_to(x + w - radius, y);
@@ -199,7 +197,7 @@ pub const Path = struct {
 
     }
 
-    pub fn add_circle(self: *Path, cx: i32, cy: i32, radius: i32) void {
+    pub fn add_circle(self: *Path, cx: f32, cy: f32, radius: f32) void {
 
         if (radius <= 0) return;
 
@@ -215,7 +213,7 @@ pub const Path = struct {
     }
 
     /// Ring between two radii (a donut): the inner contour winds the other way and cuts the hole.
-    pub fn add_ring(self: *Path, cx: i32, cy: i32, outer: i32, inner: i32) void {
+    pub fn add_ring(self: *Path, cx: f32, cy: f32, outer: f32, inner: f32) void {
 
         if (outer <= 0) return;
 
@@ -237,7 +235,7 @@ pub const Path = struct {
     }
 
     /// Arc polyline clockwise from twelve o'clock; ~4° steps keep chords within a subpixel.
-    pub fn arc_to(self: *Path, cx: i32, cy: i32, radius: i32, start_deg: i32, sweep_deg: i32) void {
+    pub fn arc_to(self: *Path, cx: f32, cy: f32, radius: f32, start_deg: i32, sweep_deg: i32) void {
 
         if (radius <= 0 or sweep_deg == 0) return;
 
@@ -265,7 +263,7 @@ pub const Path = struct {
     }
 
     /// A filled pie wedge: center, then the arc, closed. Angles clockwise from twelve o'clock.
-    pub fn add_wedge(self: *Path, cx: i32, cy: i32, radius: i32, start_deg: i32, sweep_deg: i32) void {
+    pub fn add_wedge(self: *Path, cx: f32, cy: f32, radius: f32, start_deg: i32, sweep_deg: i32) void {
 
         if (radius <= 0 or sweep_deg <= 0) return;
 
@@ -279,61 +277,26 @@ pub const Path = struct {
 
 };
 
-// Integer-exact cubic arc kappa: radius * 36195 / 65536 (≈0.5523).
+// Control-point offset that makes a cubic match a quarter circle.
+const kappa_ratio: f32 = 0.552284749830793;
 
-fn kappa(radius: i32) i32 {
+fn kappa(radius: f32) f32 {
 
-    return @intCast(@divTrunc(@as(i64, radius) * 36195, 65536));
+    return radius * kappa_ratio;
 
 }
 
-/// Point on a circle at `deg` clockwise from twelve o'clock, in the caller's 26.6 space.
-pub fn polar(cx: i32, cy: i32, radius: i32, deg: i32) Point {
+/// Point on a circle at `deg` clockwise from twelve o'clock, in the caller's pixel space.
+pub fn polar(cx: f32, cy: f32, radius: f32, deg: i32) Point {
 
-    const s = sin_deg(deg);
-    const c = cos_deg(deg);
+    const radians = @as(f32, @floatFromInt(deg)) * std.math.pi / 180.0;
 
     return .{
 
-        .x = cx + @as(i32, @intCast(@divTrunc(@as(i64, radius) * s, sin_one))),
-        .y = cy - @as(i32, @intCast(@divTrunc(@as(i64, radius) * c, sin_one))),
+        .x = cx + radius * @sin(radians),
+        .y = cy - radius * @cos(radians),
 
     };
-
-}
-
-// Integer sine: quarter-wave table scaled to 1 << 14, indexed per degree.
-
-pub const sin_one: i32 = 1 << 14;
-
-const quarter_sin = [_]i16{
-    0, 286, 572, 857, 1143, 1428, 1713, 1997, 2280, 2563,
-    2845, 3126, 3406, 3686, 3964, 4240, 4516, 4790, 5063, 5334,
-    5604, 5872, 6138, 6402, 6664, 6924, 7182, 7438, 7692, 7943,
-    8192, 8438, 8682, 8923, 9162, 9397, 9630, 9860, 10087, 10311,
-    10531, 10749, 10963, 11174, 11381, 11585, 11786, 11982, 12176, 12365,
-    12551, 12733, 12911, 13085, 13255, 13421, 13583, 13741, 13894, 14044,
-    14189, 14330, 14466, 14598, 14726, 14849, 14968, 15082, 15191, 15296,
-    15396, 15491, 15582, 15668, 15749, 15826, 15897, 15964, 16026, 16083,
-    16135, 16182, 16225, 16262, 16294, 16322, 16344, 16362, 16374, 16382,
-    16384,
-};
-
-pub fn sin_deg(deg: i32) i32 {
-
-    const wrapped: u32 = @intCast(@mod(deg, 360));
-
-    if (wrapped <= 90) return quarter_sin[wrapped];
-    if (wrapped <= 180) return quarter_sin[180 - wrapped];
-    if (wrapped <= 270) return -@as(i32, quarter_sin[wrapped - 180]);
-
-    return -@as(i32, quarter_sin[360 - wrapped]);
-
-}
-
-pub fn cos_deg(deg: i32) i32 {
-
-    return sin_deg(deg + 90);
 
 }
 
@@ -344,8 +307,8 @@ test "path records verbs and closes contours" {
     var path = Path{};
 
     path.move_to(0, 0);
-    path.line_to(64, 0);
-    path.quad_to(64, 64, 0, 64);
+    path.line_to(1, 0);
+    path.quad_to(1, 1, 0, 1);
     path.close();
 
     try testing.expectEqual(@as(usize, 4), path.verb_count);
@@ -359,39 +322,40 @@ test "round rect degrades to a rect at radius zero" {
 
     var path = Path{};
 
-    path.add_round_rect(0, 0, 640, 640, 0);
+    path.add_round_rect(0, 0, 10, 10, 0);
 
     try testing.expectEqual(Verb.line, path.verbs[1]);
 
     path.reset();
-    path.add_round_rect(0, 0, 640, 640, 128);
+    path.add_round_rect(0, 0, 10, 10, 2);
 
     try testing.expectEqual(Verb.cubic, path.verbs[2]);
 
 }
 
-test "sine table hits the cardinal points" {
+test "polar walks clockwise from twelve o'clock" {
 
-    try testing.expectEqual(@as(i32, 0), sin_deg(0));
-    try testing.expectEqual(sin_one, sin_deg(90));
-    try testing.expectEqual(@as(i32, 0), sin_deg(180));
-    try testing.expectEqual(-sin_one, sin_deg(270));
-    try testing.expectEqual(sin_one, cos_deg(0));
-    try testing.expectEqual(@as(i32, 8192), sin_deg(30));
+    const up = polar(0, 0, 10, 0);
+
+    try testing.expectApproxEqAbs(@as(f32, 0), up.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, -10), up.y, 0.001);
+
+    const right = polar(0, 0, 10, 90);
+
+    try testing.expectApproxEqAbs(@as(f32, 10), right.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0), right.y, 0.001);
+
+    const down = polar(0, 0, 10, 180);
+
+    try testing.expectApproxEqAbs(@as(f32, 10), down.y, 0.001);
 
 }
 
-test "polar walks clockwise from twelve o'clock" {
+test "to_px rounds halves toward positive infinity" {
 
-    const up = polar(0, 0, from_px(10), 0);
-
-    try testing.expectEqual(@as(i32, 0), up.x);
-    try testing.expectEqual(from_px(-10), up.y);
-
-    const right = polar(0, 0, from_px(10), 90);
-
-    try testing.expectEqual(from_px(10), right.x);
-    try testing.expectEqual(@as(i32, 0), right.y);
+    try testing.expectEqual(@as(i32, 3), to_px(2.5));
+    try testing.expectEqual(@as(i32, 2), to_px(2.4));
+    try testing.expectEqual(@as(i32, -2), to_px(-2.5));
 
 }
 
@@ -403,7 +367,7 @@ test "overflow flags instead of writing past the tape" {
 
     while (index < max_verbs + 4) : (index += 1) {
 
-        path.line_to(@intCast(index), 0);
+        path.line_to(@floatFromInt(index), 0);
 
     }
 

@@ -392,13 +392,13 @@ fn fill_round_top_rect_slow(surface: *const Surface, rect: Rect, radius: i32, co
 
 }
 
-fn add_round_top_rect(path: *Path, x: i32, y: i32, w: i32, h: i32, radius: i32) void {
+fn add_round_top_rect(path: *Path, x: f32, y: f32, w: f32, h: f32, radius: f32) void {
 
-    const r = @max(0, @min(radius, @min(@divTrunc(w, 2), h)));
+    const r = @max(0, @min(radius, @min(w / 2, h)));
 
     if (r == 0) return path.add_rect(x, y, w, h);
 
-    const k = @divTrunc(@as(i32, @intCast(@as(i64, r) * 36195)), 65536);
+    const k = r * 0.552284749830793;
 
     path.move_to(x + r, y);
     path.line_to(x + w - r, y);

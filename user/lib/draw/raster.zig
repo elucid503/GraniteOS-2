@@ -14,21 +14,16 @@ const Surface = draw.Surface;
 pub const max_width = 2048;
 pub const max_edges = 4096;
 
-// One pixel of full coverage: 64 subpixels of height times 128 (double the 64-wide area term).
-const full_coverage: i64 = 64 * 128;
-
-
-
 const Edge = struct {
 
-    // Endpoints in 26.6, always y0 < y1; `winding` restores the original direction.
-    x0: i32,
-    y0: i32,
+    // Endpoints in pixels, always y0 < y1; `winding` restores the original direction.
+    x0: f32,
+    y0: f32,
 
-    x1: i32,
-    y1: i32,
+    x1: f32,
+    y1: f32,
 
-    winding: i32,
+    winding: f32,
 
 };
 
@@ -41,8 +36,8 @@ pub const Raster = struct {
     order: [max_edges]u16 = undefined,
     active: [max_edges]u16 = undefined,
 
-    area: [max_width]i32 = [_]i32{0} ** max_width,
-    cover: [max_width]i32 = [_]i32{0} ** max_width,
+    area: [max_width]f32 = [_]f32{0} ** max_width,
+    cover: [max_width]f32 = [_]f32{0} ** max_width,
     alphas: [max_width]u8 = undefined,
 
     /// Fill path with nonzero winding into writer row callbacks; overflowed paths draw nothing.
@@ -67,6 +62,7 @@ pub const Raster = struct {
 
         const x_min = path_mod.from_px(clip.x);
         const x_max = path_mod.from_px(clip.x + clip.w);
+
 
         var point: usize = 0;
         var start = Point{ .x = 0, .y = 0 };
@@ -139,7 +135,7 @@ pub const Raster = struct {
 
     }
 
-    fn add_edge(self: *Raster, a: Point, b: Point, x_min: i32, x_max: i32) void {
+    fn add_edge(self: *Raster, a: Point, b: Point, x_min: f32, x_max: f32) void {
 
         if (a.y == b.y) return;
         if (a.x == b.x and a.y == b.y) return;
@@ -186,15 +182,19 @@ pub const Raster = struct {
 
     const max_depth = 16;
 
+    // Deviation limits in pixels, matching the 16/64 and 20/64 thresholds of the fixed-point raster.
+    const quad_flatness: f32 = 0.25;
+    const cubic_flatness: f32 = 0.3125;
+
     // Quarter-pixel flatness: keeps icon arcs and round-rect corners from faceting at small sizes.
 
-    fn flatten_quad(self: *Raster, a: Point, b: Point, c: Point, x_min: i32, x_max: i32, depth: u8) void {
+    fn flatten_quad(self: *Raster, a: Point, b: Point, c: Point, x_min: f32, x_max: f32, depth: u8) void {
 
         const dev_x = @abs(2 * b.x - a.x - c.x);
         const dev_y = @abs(2 * b.y - a.y - c.y);
 
         // ~1/4 px flatness: keeps small mono stems and icon arcs from faceting without edge blow-up.
-        if (depth >= max_depth or (dev_x <= 16 and dev_y <= 16)) {
+        if (depth >= max_depth or (dev_x <= quad_flatness and dev_y <= quad_flatness)) {
 
             self.add_edge(a, c, x_min, x_max);
 
@@ -211,14 +211,14 @@ pub const Raster = struct {
 
     }
 
-    fn flatten_cubic(self: *Raster, a: Point, b: Point, c: Point, d: Point, x_min: i32, x_max: i32, depth: u8) void {
+    fn flatten_cubic(self: *Raster, a: Point, b: Point, c: Point, d: Point, x_min: f32, x_max: f32, depth: u8) void {
 
         const dev1_x = @abs(3 * b.x - 2 * a.x - d.x);
         const dev1_y = @abs(3 * b.y - 2 * a.y - d.y);
         const dev2_x = @abs(3 * c.x - a.x - 2 * d.x);
         const dev2_y = @abs(3 * c.y - a.y - 2 * d.y);
 
-        if (depth >= max_depth or (@max(dev1_x, dev2_x) <= 20 and @max(dev1_y, dev2_y) <= 20)) {
+        if (depth >= max_depth or (@max(dev1_x, dev2_x) <= cubic_flatness and @max(dev1_y, dev2_y) <= cubic_flatness)) {
 
             self.add_edge(a, d, x_min, x_max);
 
@@ -242,8 +242,8 @@ pub const Raster = struct {
 
     fn sweep(self: *Raster, clip: Rect, writer: anytype) void {
 
-        var min_y: i32 = std.math.maxInt(i32);
-        var max_y: i32 = std.math.minInt(i32);
+        var min_y: f32 = std.math.floatMax(f32);
+        var max_y: f32 = -std.math.floatMax(f32);
 
         for (self.edges[0..self.edge_count], 0..) |edge, index| {
 
@@ -268,20 +268,20 @@ pub const Raster = struct {
 
         std.sort.pdq(u16, self.order[0..self.edge_count], Sorter{ .edges = self.edges[0..self.edge_count] }, Sorter.lessThan);
 
-        var y = @max(clip.y, @divFloor(min_y, 64));
-        const y_end = @min(clip.y + clip.h, @divFloor(max_y + 63, 64));
+        var y = @max(clip.y, @as(i32, @intFromFloat(@floor(min_y))));
+        const y_end = @min(clip.y + clip.h, @as(i32, @intFromFloat(@ceil(max_y))));
 
         var next: usize = 0;
         var active_count: usize = 0;
 
         // Skip edges entirely above the first visible row.
 
-        while (next < self.edge_count and self.edges[self.order[next]].y1 <= y * 64) : (next += 1) {}
+        while (next < self.edge_count and self.edges[self.order[next]].y1 <= @as(f32, @floatFromInt(y))) : (next += 1) {}
 
         while (y < y_end) : (y += 1) {
 
-            const row_top = y * 64;
-            const row_bottom = row_top + 64;
+            const row_top: f32 = @floatFromInt(y);
+            const row_bottom = row_top + 1;
 
             while (next < self.edge_count and self.edges[self.order[next]].y0 < row_bottom) : (next += 1) {
 
@@ -328,7 +328,7 @@ pub const Raster = struct {
 
     // Scatter one edge's intersection with the row band into the area/cover cells.
 
-    fn scatter(self: *Raster, edge: *const Edge, row_top: i32, row_bottom: i32, clip: Rect, min_col: *i32, max_col: *i32) void {
+    fn scatter(self: *Raster, edge: *const Edge, row_top: f32, row_bottom: f32, clip: Rect, min_col: *i32, max_col: *i32) void {
 
         const ya = @max(edge.y0, row_top);
         const yb = @min(edge.y1, row_bottom);
@@ -343,12 +343,12 @@ pub const Raster = struct {
 
         const step: i32 = if (xb >= xa) 1 else -1;
 
-        var col = @divFloor(xa, 64);
-        const last_col = @divFloor(xb, 64);
+        var col: i32 = @intFromFloat(@floor(xa));
+        const last_col: i32 = @intFromFloat(@floor(xb));
 
         while (true) {
 
-            const boundary: i32 = if (step > 0) (col + 1) * 64 else col * 64;
+            const boundary: f32 = @floatFromInt(if (step > 0) col + 1 else col);
 
             var seg_x1 = xb;
             var seg_y1 = yb;
@@ -372,7 +372,7 @@ pub const Raster = struct {
 
     }
 
-    fn deposit(self: *Raster, col_in: i32, x0: i32, y0: i32, x1: i32, y1: i32, winding: i32, clip: Rect, min_col: *i32, max_col: *i32) void {
+    fn deposit(self: *Raster, col_in: i32, x0: f32, y0: f32, x1: f32, y1: f32, winding: f32, clip: Rect, min_col: *i32, max_col: *i32) void {
 
         const dy = y1 - y0;
 
@@ -382,14 +382,16 @@ pub const Raster = struct {
 
         const col = std.math.clamp(col_in - clip.x, 0, @as(i32, @intCast(@min(max_width, @as(usize, @intCast(clip.w))))) - 1);
 
-        const cell_left = (clip.x + col) * 64;
-        const fx0 = std.math.clamp(x0 - cell_left, 0, 64);
-        const fx1 = std.math.clamp(x1 - cell_left, 0, 64);
+        const cell_left: f32 = @floatFromInt(clip.x + col);
+        const fx0 = std.math.clamp(x0 - cell_left, 0, 1);
+        const fx1 = std.math.clamp(x1 - cell_left, 0, 1);
 
         const index: usize = @intCast(col);
 
+        // The cell keeps the area left of the span; cells further right take the full `dy` via the accumulator.
+
         self.cover[index] += winding * dy;
-        self.area[index] += winding * dy * (128 - fx0 - fx1);
+        self.area[index] += winding * dy * (1 - (fx0 + fx1) * 0.5);
 
         min_col.* = @min(min_col.*, col);
         max_col.* = @max(max_col.*, col);
@@ -398,23 +400,20 @@ pub const Raster = struct {
 
     fn resolve(self: *Raster, y: i32, clip: Rect, min_col: i32, max_col: i32, writer: anytype) void {
 
-        var acc: i64 = 0;
+        var acc: f32 = 0;
         var col = min_col;
 
         while (col <= max_col) : (col += 1) {
 
             const index: usize = @intCast(col);
-            const total = acc * 128 + self.area[index];
+            const total = acc + self.area[index];
 
             acc += self.cover[index];
 
             self.area[index] = 0;
             self.cover[index] = 0;
 
-            const magnitude: i64 = @intCast(@abs(total));
-
-            // Linear analytic alpha here; display gamma belongs in SurfaceWriter compositing.
-            self.alphas[index] = @intCast(@min(255, @divTrunc(magnitude * 255, full_coverage)));
+            self.alphas[index] = to_alpha(total);
 
         }
 
@@ -422,9 +421,12 @@ pub const Raster = struct {
 
         var run_end = max_col;
 
-        if (acc != 0) {
+        // A closed contour cancels to ~0 rather than exactly 0 in float, so ignore accumulator dust
+        // instead of smearing a faint run to the clip edge.
 
-            const tail_alpha: u8 = @intCast(@min(255, @divTrunc(@as(i64, @intCast(@abs(acc * 128))) * 255, full_coverage)));
+        if (@abs(acc) > coverage_epsilon) {
+
+            const tail_alpha = to_alpha(acc);
 
             if (tail_alpha != 0) {
 
@@ -450,44 +452,42 @@ pub const Raster = struct {
 
 };
 
+// Linear analytic alpha here; display gamma belongs in SurfaceWriter compositing.
+
+// Half an alpha step: below this the tail accumulator is rounding residue, not real coverage.
+const coverage_epsilon: f32 = 0.5 / 255.0;
+
+fn to_alpha(coverage: f32) u8 {
+
+    return @intFromFloat(@min(255, @abs(coverage) * 255 + 0.5));
+
+}
+
 fn midpoint(a: Point, b: Point) Point {
 
-    return .{ .x = (a.x + b.x) >> 1, .y = (a.y + b.y) >> 1 };
+    return .{ .x = (a.x + b.x) * 0.5, .y = (a.y + b.y) * 0.5 };
 
 }
 
-fn x_at(edge: *const Edge, y: i32) i32 {
+fn x_at(edge: *const Edge, y: f32) f32 {
 
-    const run = @as(i64, edge.x1 - edge.x0);
-    const rise = @as(i64, edge.y1 - edge.y0);
+    const rise = edge.y1 - edge.y0;
 
-    return edge.x0 + @as(i32, @intCast(round_div(run * (y - edge.y0), rise)));
+    if (rise == 0) return edge.x0;
+
+    return edge.x0 + (edge.x1 - edge.x0) * (y - edge.y0) / rise;
 
 }
 
-fn y_between(x0: i32, y0: i32, x1: i32, y1: i32, x: i32) i32 {
+fn y_between(x0: f32, y0: f32, x1: f32, y1: f32, x: f32) f32 {
 
-    const run = @as(i64, x1 - x0);
+    const run = x1 - x0;
 
     if (run == 0) return y1;
 
-    const rise = @as(i64, y1 - y0);
-    const interpolated = y0 + @as(i32, @intCast(round_div(rise * (x - x0), run)));
+    const interpolated = y0 + (y1 - y0) * (x - x0) / run;
 
     return std.math.clamp(interpolated, @min(y0, y1), @max(y0, y1));
-
-}
-
-fn round_div(numerator: i64, denominator: i64) i64 {
-
-    if (denominator == 0) return 0;
-
-    const positive = (numerator >= 0 and denominator > 0) or (numerator < 0 and denominator < 0);
-    const n = if (numerator < 0) -numerator else numerator;
-    const d = if (denominator < 0) -denominator else denominator;
-    const q = @divTrunc(n + @divTrunc(d, 2), d);
-
-    return if (positive) q else -q;
 
 }
 
@@ -619,7 +619,7 @@ test "a half-pixel offset edge blends at half intensity" {
 
     // Left edge at x = 2.5px.
 
-    path.add_rect(path_mod.from_px(2) + 32, path_mod.from_px(0), path_mod.from_px(4), path_mod.from_px(8));
+    path.add_rect(path_mod.from_px(2) + 0.5, path_mod.from_px(0), path_mod.from_px(4), path_mod.from_px(8));
 
     fill(&surface, &path, 0xffffff);
 
@@ -667,6 +667,55 @@ test "clipping pins out-of-view geometry instead of dropping it" {
         try testing.expectEqual(@as(u32, 0xabcdef), pixel);
 
     }
+
+}
+
+test "subpixel edge positions finer than 1/64 px resolve distinctly" {
+
+    // The old 26.6 tape quantised to 1/64 px (0.015625), so these two offsets were identical.
+
+    var near: [64]u32 = [_]u32{0} ** 64;
+    var far: [64]u32 = [_]u32{0} ** 64;
+
+    for ([_]struct { pixels: *[64]u32, offset: f32 }{
+        .{ .pixels = &near, .offset = 0.002 },
+        .{ .pixels = &far, .offset = 0.012 },
+    }) |case| {
+
+        const surface = Surface.from_pixels(case.pixels, 8, 8);
+
+        var path = Path{};
+
+        path.add_rect(2 + case.offset, 0, 4, 8);
+        fill(&surface, &path, 0xffffff);
+
+    }
+
+    const near_edge = draw.blue(near[4 * 8 + 2]);
+    const far_edge = draw.blue(far[4 * 8 + 2]);
+
+    // Both are nearly-full left-edge cells, but the farther offset must cover strictly less.
+
+    try testing.expect(near_edge > far_edge);
+
+}
+
+test "a closed contour leaves no coverage smear past its right edge" {
+
+    var pixels: [16 * 16]u32 = [_]u32{0} ** (16 * 16);
+    const surface = Surface.from_pixels(&pixels, 16, 16);
+
+    var path = Path{};
+
+    // Fractional bounds make the winding accumulator cancel inexactly in float.
+
+    path.add_rect(2.37, 2.11, 5.53, 6.29);
+    fill(&surface, &path, 0xffffff);
+
+    // Everything right of the shape stays untouched.
+
+    try testing.expectEqual(@as(u32, 0), pixels[5 * 16 + 12]);
+    try testing.expectEqual(@as(u32, 0), pixels[5 * 16 + 15]);
 
 }
 

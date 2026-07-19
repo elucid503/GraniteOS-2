@@ -3,7 +3,6 @@
 const std = @import("std");
 
 const draw = @import("../draw/draw.zig");
-const quartz = @import("../gfx/quartz.zig");
 const text_mod = @import("../draw/text.zig");
 const vector = @import("../draw/vector.zig");
 
@@ -836,8 +835,6 @@ pub fn truncate(font: *const Face, s: []const u8, size: u32, max_w: i32) []const
 }
 
 pub fn fill_round_rect(surface: *const Surface, rect: Rect, radius: i32, color: Color) void {
-
-    if (quartz.fill_element(surface, rect, radius, color)) return;
 
     draw.round.fill_round_rect(surface, rect, radius, color);
 

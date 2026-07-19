@@ -139,7 +139,7 @@ pub const Face = struct {
     /// Draw with the line box's top-left at (x, y) in pixels; the compatibility entry point.
     pub fn draw(self: *const Face, surface: *const Surface, x: i32, y: i32, px: u32, text: []const u8, color: draw_mod.Color) void {
 
-        self.draw_fx(surface, path_mod.from_px(x), path_mod.from_px(y + self.ascent_px(px)), px, text, color);
+        self.draw_fx(surface, to_fx(x), to_fx(y + self.ascent_px(px)), px, text, color);
 
     }
 
@@ -153,7 +153,7 @@ pub const Face = struct {
 
         while (next_codepoint(text, &offset)) |codepoint| {
 
-            self.draw_glyph(surface, self.glyph_index(codepoint), path_mod.from_px(pen), baseline, px, color);
+            self.draw_glyph(surface, self.glyph_index(codepoint), to_fx(pen), baseline, px, color);
 
             pen += cell;
 
@@ -165,7 +165,7 @@ pub const Face = struct {
     pub fn draw_fx(self: *const Face, surface: *const Surface, x_fx: i32, baseline_fx: i32, px: u32, text: []const u8, color: draw_mod.Color) void {
 
         var pen = x_fx;
-        const baseline = path_mod.to_px(baseline_fx);
+        const baseline = @divFloor(baseline_fx + 32, 64);
         var offset: usize = 0;
 
         while (next_codepoint(text, &offset)) |codepoint| {
@@ -318,12 +318,12 @@ pub const Face = struct {
     /// Glyph advance in 26.6 units.
     fn advance(self: *const Face, glyph: u16, px: u32) i32 {
 
-        if (self.hmetric_count == 0 or self.hmtx.len < 4) return path_mod.from_px(@intCast(px));
+        if (self.hmetric_count == 0 or self.hmtx.len < 4) return to_fx(@intCast(px));
 
         const metric_index = @min(glyph, self.hmetric_count - 1);
         const offset = @as(usize, metric_index) * 4;
 
-        if (offset + 2 > self.hmtx.len) return path_mod.from_px(@intCast(px));
+        if (offset + 2 > self.hmtx.len) return to_fx(@intCast(px));
 
         return scale_fx(read_u16(self.hmtx, offset), px, self.units_per_em);
 
@@ -357,7 +357,7 @@ pub const Face = struct {
 
         var path = Path{};
 
-        self.build_glyph_path(&path, glyph, pen_fx, path_mod.from_px(baseline), px, 0) catch return;
+        self.build_glyph_path(&path, glyph, pen_fx, to_fx(baseline), px, 0) catch return;
 
         raster.fill(surface, &path, color);
 
@@ -658,7 +658,7 @@ fn emit_contour(path: *Path, xs: []const i32, ys: []const i32, on: []const bool)
 
     }
 
-    path.move_to(start_x, start_y);
+    path.move_to(fx(start_x), fx(start_y));
 
     var processed: usize = 0;
 
@@ -668,7 +668,7 @@ fn emit_contour(path: *Path, xs: []const i32, ys: []const i32, on: []const bool)
 
         if (on[i]) {
 
-            path.line_to(xs[i], ys[i]);
+            path.line_to(fx(xs[i]), fx(ys[i]));
 
             index += 1;
             processed += 1;
@@ -684,21 +684,21 @@ fn emit_contour(path: *Path, xs: []const i32, ys: []const i32, on: []const bool)
             const mid_x = (xs[i] + xs[next]) >> 1;
             const mid_y = (ys[i] + ys[next]) >> 1;
 
-            path.quad_to(xs[i], ys[i], mid_x, mid_y);
+            path.quad_to(fx(xs[i]), fx(ys[i]), fx(mid_x), fx(mid_y));
 
             index += 1;
             processed += 1;
 
         } else if (processed + 1 < count) {
 
-            path.quad_to(xs[i], ys[i], xs[next], ys[next]);
+            path.quad_to(fx(xs[i]), fx(ys[i]), fx(xs[next]), fx(ys[next]));
 
             index += 2;
             processed += 2;
 
         } else {
 
-            path.quad_to(xs[i], ys[i], start_x, start_y);
+            path.quad_to(fx(xs[i]), fx(ys[i]), fx(start_x), fx(start_y));
 
             index += 1;
             processed += 1;
@@ -815,10 +815,10 @@ fn rasterize_into(face: *const Face, slot: usize, glyph: u16, px: u32, phase: u3
 
     }
 
-    var min_x: i32 = std.math.maxInt(i32);
-    var max_x: i32 = std.math.minInt(i32);
-    var min_y: i32 = std.math.maxInt(i32);
-    var max_y: i32 = std.math.minInt(i32);
+    var min_x: f32 = std.math.floatMax(f32);
+    var max_x: f32 = -std.math.floatMax(f32);
+    var min_y: f32 = std.math.floatMax(f32);
+    var max_y: f32 = -std.math.floatMax(f32);
 
     for (path.points[0..path.point_count]) |point| {
 
@@ -829,10 +829,10 @@ fn rasterize_into(face: *const Face, slot: usize, glyph: u16, px: u32, phase: u3
 
     }
 
-    const x0 = @divFloor(min_x, 64);
-    const y0 = @divFloor(min_y, 64);
-    const w: i32 = @divFloor(max_x + 63, 64) - x0 + 1;
-    const h: i32 = @divFloor(max_y + 63, 64) - y0 + 1;
+    const x0: i32 = @intFromFloat(@floor(min_x));
+    const y0: i32 = @intFromFloat(@floor(min_y));
+    const w: i32 = @as(i32, @intFromFloat(@ceil(max_x))) - x0 + 1;
+    const h: i32 = @as(i32, @intFromFloat(@ceil(max_y))) - y0 + 1;
 
     if (w <= 0 or h <= 0) {
 
@@ -969,6 +969,19 @@ fn scale_px(value: anytype, px: u32, units: u16) i32 {
     if (units == 0) return 0;
 
     return @intCast(round_div(@as(i64, @intCast(value)) * px, units));
+
+}
+
+// Glyph outlines stay 26.6 internally for the subpixel phase cache; the path tape takes pixels.
+fn fx(value: i32) f32 {
+
+    return @as(f32, @floatFromInt(value)) / 64.0;
+
+}
+
+fn to_fx(px: i32) i32 {
+
+    return px * 64;
 
 }
 

@@ -9,7 +9,6 @@ const events = lib.events;
 const gfx = lib.gfx;
 const ipc = lib.ipc;
 const proto = lib.proto;
-const quartz = lib.quartz;
 const sys = lib.sys;
 const ui = lib.ui;
 
@@ -306,7 +305,7 @@ fn run() !void {
     window_list = try lib.wm.List.init(&connection, cap.memory);
     try window_list.subscribe();
 
-    bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel | proto.window.flag_quartz, "taskbar");
+    bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel, "taskbar");
 
     app_count = lib.wm.load_apps(&bundle, apps[0..]);
     build_categories();
@@ -626,12 +625,12 @@ fn repaint_prefs() void {
     rebuild_items();
     paint_bar();
 
-    refresh_quartz_popups();
+    refresh_popups();
 
 }
 
-/// Refresh minimized popup surfaces so restoring one cannot show stale material.
-fn refresh_quartz_popups() void {
+/// Repaint popup surfaces after a theme change so a restored popup cannot show stale colors.
+fn refresh_popups() void {
 
     if (menu != null) {
 
@@ -1351,7 +1350,7 @@ fn ensure_menu() !void {
     menu_row_limit = menu_rows_for_screen(screen.height);
 
     const height = menu_height();
-    var menu_window = try connection.create_window(menu_width(), height, proto.window.flag_undecorated | proto.window.flag_quartz, "menu");
+    var menu_window = try connection.create_window(menu_width(), height, proto.window.flag_undecorated, "menu");
 
     menu_window.surface.fill(ui.theme.window_bg);
 
@@ -1431,7 +1430,7 @@ fn ensure_pin_menu() !void {
 
     if (pin_menu != null) return;
 
-    var window = try connection.create_window(pin_menu_width(), pin_menu_height(), proto.window.flag_undecorated | proto.window.flag_quartz, "pin-menu");
+    var window = try connection.create_window(pin_menu_width(), pin_menu_height(), proto.window.flag_undecorated, "pin-menu");
 
     window.surface.fill(ui.theme.surface);
 
@@ -1527,7 +1526,7 @@ fn notification_popup_origin(screen_w: u32, screen_h: u32, popup_w: u32, popup_h
 
 }
 
-// Size-classed quartz buffers misalign the effect plane on shrink; recreate instead of resize.
+// Size-classed buffers misalign on shrink; recreate instead of resize.
 fn ensure_notification_popup() !void {
 
     const width = notification_popup_width();
@@ -1544,7 +1543,7 @@ fn ensure_notification_popup() !void {
 
     }
 
-    const window = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_quartz, "notifications");
+    const window = try connection.create_window(width, height, proto.window.flag_undecorated, "notifications");
     try lib.wm.minimize(&connection, window.id);
     notification_popup = window;
 
@@ -1554,7 +1553,7 @@ fn ensure_notification_toast() !void {
 
     if (notification_toast != null) return;
 
-    const window = try connection.create_window(notification_popup_width(), notification_toast_h, proto.window.flag_undecorated | proto.window.flag_quartz, "notification");
+    const window = try connection.create_window(notification_popup_width(), notification_toast_h, proto.window.flag_undecorated, "notification");
     try lib.wm.minimize(&connection, window.id);
     notification_toast = window;
 
@@ -1830,17 +1829,8 @@ fn paint_pin_menu_content() void {
     const window = pin_menu orelse return;
     const surface = &window.surface;
 
-    if (!lib.prefs.quartz_enabled()) {
-
-        surface.fill(ui.theme.surface);
-        pin_menu_widget.paint(surface, &font);
-
-        return;
-
-    }
-
-    panel(surface, surface.bounds(), ui.theme.surface);
-    pin_menu_widget.paint_content(surface, &font);
+    surface.fill(ui.theme.surface);
+    pin_menu_widget.paint(surface, &font);
 
 }
 
@@ -1953,7 +1943,7 @@ fn ensure_weather_popup() !void {
 
     }
 
-    var window = try connection.create_window(calendar_width(), weather_height(), proto.window.flag_undecorated | proto.window.flag_quartz, "weather");
+    var window = try connection.create_window(calendar_width(), weather_height(), proto.window.flag_undecorated, "weather");
 
     window.surface.fill(ui.theme.surface);
 
@@ -1972,7 +1962,7 @@ fn ensure_calendar() !void {
 
     }
 
-    var window = try connection.create_window(calendar_width(), calendar_height(), proto.window.flag_undecorated | proto.window.flag_quartz, "calendar");
+    var window = try connection.create_window(calendar_width(), calendar_height(), proto.window.flag_undecorated, "calendar");
 
     window.surface.fill(ui.theme.surface);
 
@@ -2841,17 +2831,7 @@ fn paint_clock_only() void {
     const width: i32 = @intCast(surface.width);
     const rect = Rect{ .x = width - tray_width() - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
 
-    if (!lib.prefs.quartz_enabled()) {
-
-        surface.fill_rect(rect, ui.theme.surface_alt);
-
-    } else {
-
-        const clipped = surface.clipped(rect);
-
-        panel(&clipped, surface.bounds(), ui.theme.surface_alt);
-
-    }
+    surface.fill_rect(rect, ui.theme.surface_alt);
 
     paint_clock(surface, width);
 
@@ -3155,45 +3135,17 @@ fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, content: []co
 
 fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
 
-    if (!lib.prefs.quartz_enabled()) {
-
-        lib.draw.round.fill_round_rect(surface, rect, dock_radius(), color);
-        ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
-
-        return;
-
-    }
-
-    var appearance = quartz.style(lib.quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), color, ui.theme.accent);
-
-    appearance.radius = dock_radius();
-
-    quartz.clear(surface);
-    quartz.panel(surface, rect, appearance);
+    lib.draw.round.fill_round_rect(surface, rect, dock_radius(), color);
+    ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
 
 }
 
-// Full-bleed panels clip the quartz soft-shadow into bottom corner cutouts; omit it.
 fn notification_panel(surface: *const gfx.Surface) void {
 
     const rect = surface.bounds();
 
-    if (!lib.prefs.quartz_enabled()) {
-
-        lib.draw.round.fill_round_rect(surface, rect, dock_radius(), ui.theme.surface);
-        ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
-
-        return;
-
-    }
-
-    var appearance = quartz.style(lib.quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), ui.theme.surface, ui.theme.accent);
-
-    appearance.radius = dock_radius();
-    appearance.shadow = lib.draw.transparent;
-
-    quartz.clear(surface);
-    quartz.panel(surface, rect, appearance);
+    lib.draw.round.fill_round_rect(surface, rect, dock_radius(), ui.theme.surface);
+    ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
 
 }
 

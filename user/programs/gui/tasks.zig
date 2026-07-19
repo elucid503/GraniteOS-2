@@ -67,7 +67,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
     apps_len = lib.wm.load_apps(&bundle, &apps);
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(680, 500, lib.proto.window.flag_quartz, "Task Manager");
+    window = try connection.create_window(680, 500, 0, "Task Manager");
 
     refresh();
     paint();
@@ -359,7 +359,7 @@ fn paint() void {
     focus_rect = gfx.Rect.empty;
     end_rect = gfx.Rect.empty;
 
-    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
+    surface.fill(ui.theme.window_bg);
     font.draw(surface, pad, 16, 22, "Active Processes", ui.theme.text);
 
     if (!have_snapshot) {

@@ -59,7 +59,7 @@ pub fn line(surface: *const Surface, rect: Rect, samples: []const u32, max_in: u
 
         points[index] = .{
 
-            .x = path_mod.from_px(inner.x) + @as(i32, @intCast(@divTrunc(@as(i64, @intCast(index)) * inner.w * 64, @as(i64, @intCast(last))))),
+            .x = path_mod.from_px(inner.x) + path_mod.from_px(inner.w) * @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(last)),
             .y = plot_y_fx(inner, sample, max),
 
         };
@@ -101,11 +101,11 @@ pub fn line(surface: *const Surface, rect: Rect, samples: []const u32, max_in: u
 
 }
 
-fn plot_y_fx(inner: Rect, value: u32, max: i64) i32 {
+fn plot_y_fx(inner: Rect, value: u32, max: i64) f32 {
 
     const clamped: i64 = @min(@as(i64, value), max);
 
-    return path_mod.from_px(inner.y + inner.h) - @as(i32, @intCast(@divTrunc(clamped * inner.h * 64, max)));
+    return path_mod.from_px(inner.y + inner.h) - path_mod.from_px(inner.h) * @as(f32, @floatFromInt(clamped)) / @as(f32, @floatFromInt(max));
 
 }
 
@@ -198,15 +198,15 @@ fn catmull_segment(points: []const Point, index: usize) struct { Point, Point, P
 
     const c1 = Point{
 
-        .x = p1.x + @divTrunc(p2.x - p0.x, 6),
-        .y = p1.y + @divTrunc(p2.y - p0.y, 6),
+        .x = p1.x + (p2.x - p0.x) / 6,
+        .y = p1.y + (p2.y - p0.y) / 6,
 
     };
 
     const c2 = Point{
 
-        .x = p2.x - @divTrunc(p3.x - p1.x, 6),
-        .y = p2.y - @divTrunc(p3.y - p1.y, 6),
+        .x = p2.x - (p3.x - p1.x) / 6,
+        .y = p2.y - (p3.y - p1.y) / 6,
 
     };
 
@@ -216,26 +216,15 @@ fn catmull_segment(points: []const Point, index: usize) struct { Point, Point, P
 
 fn eval_cubic(a: Point, b: Point, c: Point, d: Point, t: usize, steps: usize) Point {
 
-    const s: i64 = @intCast(t);
-    const mt: i64 = @intCast(steps - t);
-    const denom: i64 = @intCast(steps * steps * steps);
+    const s = @as(f32, @floatFromInt(t)) / @as(f32, @floatFromInt(steps));
+    const mt = 1 - s;
 
     return .{
 
-        .x = @intCast(round_div(mt * mt * mt * @as(i64, a.x) + 3 * mt * mt * s * @as(i64, b.x) + 3 * mt * s * s * @as(i64, c.x) + s * s * s * @as(i64, d.x), denom)),
-        .y = @intCast(round_div(mt * mt * mt * @as(i64, a.y) + 3 * mt * mt * s * @as(i64, b.y) + 3 * mt * s * s * @as(i64, c.y) + s * s * s * @as(i64, d.y), denom)),
+        .x = mt * mt * mt * a.x + 3 * mt * mt * s * b.x + 3 * mt * s * s * c.x + s * s * s * d.x,
+        .y = mt * mt * mt * a.y + 3 * mt * mt * s * b.y + 3 * mt * s * s * c.y + s * s * s * d.y,
 
     };
-
-}
-
-fn round_div(numerator: i64, denominator: i64) i64 {
-
-    const half = @divTrunc(denominator, 2);
-
-    if (numerator >= 0) return @divTrunc(numerator + half, denominator);
-
-    return @divTrunc(numerator - half, denominator);
 
 }
 

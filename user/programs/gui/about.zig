@@ -8,7 +8,6 @@ const cap = lib.cap;
 const events = lib.events;
 const gfx = lib.gfx;
 const proto = lib.proto;
-const quartz = lib.quartz;
 const sys = lib.sys;
 const sysinfo = lib.sysinfo;
 const ui = lib.ui;
@@ -72,7 +71,7 @@ fn run() !void {
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
-    window = try connection.create_window(440, 320, proto.window.flag_quartz, "About GraniteOS 2");
+    window = try connection.create_window(440, 320, 0, "About GraniteOS 2");
 
     if (lib.fs.Client.connect(cap.memory)) |opened| {
 
@@ -278,7 +277,7 @@ fn paint(repaint_all: bool) void {
 
 fn paint_background(surface: *const gfx.Surface) void {
 
-    quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
+    surface.fill(ui.theme.window_bg);
 
 }
 

@@ -7,10 +7,13 @@ const path_mod = @import("path.zig");
 const Path = path_mod.Path;
 const Point = path_mod.Point;
 
-/// Append one stroked segment (26.6 coordinates, 26.6 width) with round caps.
-pub fn segment(path: *Path, x0: i32, y0: i32, x1: i32, y1: i32, width: i32) void {
+// Degenerate widths still need a visible hairline; matches the old 1/64-pixel floor.
+const min_half: f32 = 1.0 / 64.0;
 
-    const half = @max(1, @divTrunc(width, 2));
+/// Append one stroked segment (pixel coordinates and width) with round caps.
+pub fn segment(path: *Path, x0: f32, y0: f32, x1: f32, y1: f32, width: f32) void {
+
+    const half = @max(min_half, width * 0.5);
 
     segment_body(path, x0, y0, x1, y1, half);
 
@@ -19,13 +22,13 @@ pub fn segment(path: *Path, x0: i32, y0: i32, x1: i32, y1: i32, width: i32) void
 
 }
 
-fn segment_body(path: *Path, x0: i32, y0: i32, x1: i32, y1: i32, half: i32) void {
+fn segment_body(path: *Path, x0: f32, y0: f32, x1: f32, y1: f32, half: f32) void {
 
-    const dx = @as(i64, x1 - x0);
-    const dy = @as(i64, y1 - y0);
-    const length_sq = dx * dx + dy * dy;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const length = @sqrt(dx * dx + dy * dy);
 
-    if (length_sq == 0) {
+    if (length == 0) {
 
         path.add_circle(x0, y0, half);
 
@@ -33,12 +36,10 @@ fn segment_body(path: *Path, x0: i32, y0: i32, x1: i32, y1: i32, half: i32) void
 
     }
 
-    const length: i64 = @intCast(std.math.sqrt(@as(u64, @intCast(length_sq))));
-
     // Unit normal scaled to half the width.
 
-    const nx: i32 = @intCast(@divTrunc(-dy * half, length));
-    const ny: i32 = @intCast(@divTrunc(dx * half, length));
+    const nx = -dy * half / length;
+    const ny = dx * half / length;
 
     // Match add_circle winding so cap/body overlap does not cancel sub-2px icon strokes.
 
@@ -51,11 +52,11 @@ fn segment_body(path: *Path, x0: i32, y0: i32, x1: i32, y1: i32, half: i32) void
 }
 
 /// Append a stroked open polyline with round joins.
-pub fn polyline(path: *Path, points: []const Point, width: i32) void {
+pub fn polyline(path: *Path, points: []const Point, width: f32) void {
 
     if (points.len == 0) return;
 
-    const half = @max(1, @divTrunc(width, 2));
+    const half = @max(min_half, width * 0.5);
 
     if (points.len == 1) {
 
@@ -82,11 +83,11 @@ pub fn polyline(path: *Path, points: []const Point, width: i32) void {
 }
 
 /// Dense open polyline with round end caps only (no per-vertex join disks). For pre-smoothed polylines.
-pub fn chain(path: *Path, points: []const Point, width: i32) void {
+pub fn chain(path: *Path, points: []const Point, width: f32) void {
 
     if (points.len == 0) return;
 
-    const half = @max(1, @divTrunc(width, 2));
+    const half = @max(min_half, width * 0.5);
 
     if (points.len == 1) {
 
@@ -110,28 +111,28 @@ pub fn chain(path: *Path, points: []const Point, width: i32) void {
 }
 
 /// Append a stroked closed polygon outline.
-pub fn polygon(path: *Path, points: []const Point, width: i32) void {
+pub fn polygon(path: *Path, points: []const Point, width: f32) void {
 
     if (points.len < 2) return polyline(path, points, width);
 
     polyline(path, points, width);
-    segment_body(path, points[points.len - 1].x, points[points.len - 1].y, points[0].x, points[0].y, @max(1, @divTrunc(width, 2)));
+    segment_body(path, points[points.len - 1].x, points[points.len - 1].y, points[0].x, points[0].y, @max(min_half, width * 0.5));
 
 }
 
 /// Append a rectangle border of `thickness`, drawn just inside the rect: an outer/inner ring fill.
-pub fn rect_border(path: *Path, x: i32, y: i32, w: i32, h: i32, thickness: i32) void {
+pub fn rect_border(path: *Path, x: f32, y: f32, w: f32, h: f32, thickness: f32) void {
 
     round_rect_border(path, x, y, w, h, 0, thickness);
 
 }
 
 /// Append a rounded-rectangle border of `thickness`, drawn just inside the rect.
-pub fn round_rect_border(path: *Path, x: i32, y: i32, w: i32, h: i32, radius: i32, thickness: i32) void {
+pub fn round_rect_border(path: *Path, x: f32, y: f32, w: f32, h: f32, radius: f32, thickness: f32) void {
 
     if (w <= 0 or h <= 0 or thickness <= 0) return;
 
-    const t = @min(thickness, @min(@divTrunc(w, 2), @divTrunc(h, 2)));
+    const t = @min(thickness, @min(w / 2, h / 2));
 
     path.add_round_rect(x, y, w, h, radius);
     path.add_round_rect_reversed(x + t, y + t, w - 2 * t, h - 2 * t, @max(0, radius - t));
@@ -139,18 +140,18 @@ pub fn round_rect_border(path: *Path, x: i32, y: i32, w: i32, h: i32, radius: i3
 }
 
 /// Append a circle outline of `thickness` centered on the radius.
-pub fn circle_border(path: *Path, cx: i32, cy: i32, radius: i32, thickness: i32) void {
+pub fn circle_border(path: *Path, cx: f32, cy: f32, radius: f32, thickness: f32) void {
 
     if (radius <= 0 or thickness <= 0) return;
 
-    const half = @max(1, @divTrunc(thickness, 2));
+    const half = @max(min_half, thickness * 0.5);
 
     path.add_ring(cx, cy, radius + half, @max(0, radius - half));
 
 }
 
 /// Append an arc stroke (clockwise from twelve o'clock) of `thickness`: the progress-ring primitive.
-pub fn arc(path: *Path, cx: i32, cy: i32, radius: i32, start_deg: i32, sweep_deg: i32, thickness: i32) void {
+pub fn arc(path: *Path, cx: f32, cy: f32, radius: f32, start_deg: i32, sweep_deg: i32, thickness: f32) void {
 
     if (radius <= 0 or sweep_deg == 0) return;
 

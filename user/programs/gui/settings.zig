@@ -28,7 +28,6 @@ const unit_btn_h: i32 = 36;
 const swatch_id_base: u32 = 100;
 const unit_celsius_id: u32 = 200;
 const unit_fahrenheit_id: u32 = 201;
-const quartz_id_base: u32 = 300;
 
 var font: lib.draw.text.Face = undefined;
 var page: ui.Page = .{ .font = &font };
@@ -52,7 +51,7 @@ fn run() !void {
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(520, 430, lib.proto.window.flag_quartz, "Settings");
+    window = try connection.create_window(520, 430, 0, "Settings");
 
     paint();
 
@@ -131,22 +130,6 @@ fn click(x: i32, y: i32) void {
 
     }
 
-    if (hit >= quartz_id_base and hit < quartz_id_base + lib.prefs.quartz_level_count) {
-
-        if (lib.prefs.force_quartz_disabled) return;
-
-        const index = hit - quartz_id_base;
-        const next: lib.prefs.QuartzLevel = @enumFromInt(@as(u8, @intCast(index)));
-
-        if (lib.prefs.quartz_level == next) return;
-
-        lib.prefs.set_quartz_level(next);
-        lib.prefs.save();
-        lib.prefs.broadcast_change(&connection);
-        paint();
-
-    }
-
 }
 
 fn paint() void {
@@ -155,7 +138,7 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
+    surface.fill(ui.theme.window_bg);
 
     page.begin(width, height, .{
 
@@ -182,60 +165,12 @@ fn paint() void {
     });
 
     paint_theme_section(content);
-    paint_quartz_section(content);
     paint_temp_section(content);
 
     page.end();
     page.paint(surface);
 
     window.present_all() catch {};
-
-}
-
-fn paint_quartz_section(parent: i16) void {
-
-    const section = page.box(parent, .{
-
-        .direction = .column,
-        .gap = 14,
-
-    });
-
-    _ = page.label(section, "Quartz", .{
-
-        .size = 14,
-        .color = ui.theme.text,
-
-    });
-
-    if (lib.prefs.force_quartz_disabled) {
-
-        _ = page.label(section, "Disabled for web builds", .{
-
-            .size = 13,
-            .color = ui.theme.text_faint,
-
-        });
-
-        return;
-
-    }
-
-    const row = page.box(section, .{
-
-        .direction = .row,
-        .gap = 8,
-
-    });
-
-    for (lib.prefs.quartz_level_names, 0..) |name, index| {
-
-        const selected = @intFromEnum(lib.prefs.quartz_level) == index;
-        const id = quartz_id_base + @as(u32, @intCast(index));
-
-        paint_choice_button(row, id, name, selected);
-
-    }
 
 }
 
@@ -390,19 +325,7 @@ fn update_cursor(x: i32, y: i32) void {
 
     }
 
-    if (hit >= quartz_id_base and hit < quartz_id_base + lib.prefs.quartz_level_count) {
 
-        if (lib.prefs.force_quartz_disabled) {
-
-            lib.cursor.set(&connection, .pointer);
-            return;
-
-        }
-
-        lib.cursor.set(&connection, .clicker);
-        return;
-
-    }
 
     lib.cursor.set(&connection, .pointer);
 

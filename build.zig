@@ -18,7 +18,6 @@ pub fn build(b: *std.Build) void {
     const disk = b.option(u64, "disk", "Disk size in MiB for the persistent QEMU disk") orelse default_disk_mib;
     const debug_syscall_trace = b.option(bool, "debug-syscall-trace", "Record the last syscall verb/args in globals for panic diagnosis") orelse false;
     const net = b.option(bool, "net", "Attach virtio-net (QEMU user-mode networking, host reachable at 10.0.2.2) to the QEMU run steps") orelse true;
-    const web = b.option(bool, "web", "Build for browser-hosted QEMU") orelse false;
 
     if (disk == 0) @panic("-Ddisk must be at least 1 MiB");
     if (disk > std.math.maxInt(u64) / bytes_per_mib) @panic("-Ddisk is too large");
@@ -49,7 +48,6 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(bool, "test", test_build);
     options.addOption(bool, "debug_syscall_trace", debug_syscall_trace);
-    options.addOption(bool, "force_quartz_disabled", web);
 
     // No RTC and no NTP-capable datagram sockets exist yet, so the taskbar clock seeds its wall-clock
     // offset from the build machine's real time (see user/lib/localtime.zig) - accurate as long as the
