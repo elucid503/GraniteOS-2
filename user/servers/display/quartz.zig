@@ -154,13 +154,16 @@ const Buffer = struct {
 
 };
 
-// Multi-core glass pipeline: helpers drain independent row/column units while the compositor thread
-// works the same queue. Optics stay identical; large Files-style windows scale across cores.
+// Multi-core compositor pipeline: helpers drain independent row/column units while the compositor
+// thread works the same queue. Window ordering stays on the compositor thread; pixel-local effects
+// and the final scanout copy scale across cores.
 
 const max_helpers = 3;
 const worker_stack_pages = 16;
 const page_size = 4096;
 const parallel_min_units = 32;
+const scanout_rows_per_unit: i32 = 8;
+const parallel_scanout_min_pixels: u64 = 64 * 1024;
 
 const JobKind = enum(u8) {
 
@@ -170,6 +173,7 @@ const JobKind = enum(u8) {
     downsample,
     resolve,
     header,
+    scanout,
 
 };
 
@@ -191,6 +195,7 @@ const ParallelJob = struct {
 
     renderer: ?*Renderer = null,
     back: ?*const Surface = null,
+    scanout: ?*const Surface = null,
     foreground: ?*const Surface = null,
     content: Rect = Rect.empty,
     visible: Rect = Rect.empty,
@@ -251,10 +256,20 @@ fn ensure_pool() void {
 
         };
 
-        sys.close(stack) catch {};
         helpers[helper_count] = .{ .wake = wake, .thread = thread };
+        sys.start(thread) catch {
+
+            helpers[helper_count] = .{};
+            sys.close(thread) catch {};
+            sys.unmap(cap.self_space, base) catch {};
+            sys.close(stack) catch {};
+            sys.close(wake) catch {};
+            break;
+
+        };
+
+        sys.close(stack) catch {};
         helper_count += 1;
-        sys.start(thread) catch {};
 
     }
 
@@ -298,9 +313,19 @@ fn parallel_run(kind: JobKind, units: u32) void {
 
     if (units == 0) return;
 
+    if (units < parallel_min_units) {
+
+        var index: u32 = 0;
+
+        while (index < units) : (index += 1) process_unit(kind, index);
+
+        return;
+
+    }
+
     ensure_pool();
 
-    if (helper_count == 0 or units < parallel_min_units) {
+    if (helper_count == 0) {
 
         var index: u32 = 0;
 
@@ -403,7 +428,48 @@ fn process_unit(kind: JobKind, index: u32) void {
 
         },
 
+        .scanout => {
+
+            const destination = parallel_job.scanout orelse return;
+            const source = parallel_job.back orelse return;
+            const y = parallel_job.rect.y + @as(i32, @intCast(index)) * scanout_rows_per_unit;
+            const rows = @min(scanout_rows_per_unit, parallel_job.rect.y + parallel_job.rect.h - y);
+            const band = Rect{ .x = parallel_job.rect.x, .y = y, .w = parallel_job.rect.w, .h = rows };
+
+            destination.blit(band.x, band.y, source, band);
+
+        },
+
     }
+
+}
+
+/// Copy a screen-space damage rectangle from the cached back buffer into scanout. Large bands share
+/// the row work with the compositor helpers; small updates avoid the notification/barrier overhead.
+pub fn blit_scanout(destination: *const Surface, source: *const Surface, rect: Rect) void {
+
+    const visible = rect.intersect(destination.bounds()).intersect(source.bounds());
+
+    if (visible.is_empty()) return;
+
+    const pixels = @as(u64, @intCast(visible.w)) * @as(u64, @intCast(visible.h));
+
+    if (pixels < parallel_scanout_min_pixels) {
+
+        destination.blit(visible.x, visible.y, source, visible);
+        return;
+
+    }
+
+    parallel_job.scanout = destination;
+    parallel_job.back = source;
+    parallel_job.rect = visible;
+
+    const rows: u32 = @intCast(visible.h);
+    const rows_per_unit: u32 = @intCast(scanout_rows_per_unit);
+    const units = (rows + rows_per_unit - 1) / rows_per_unit;
+
+    parallel_run(.scanout, units);
 
 }
 
@@ -1580,6 +1646,42 @@ test "Quartz displacement treats surface bounds as clear space" {
 test "Quartz damage halo covers morph chroma and frost" {
 
     try std.testing.expect(damage_halo(3) >= max_refraction + blur_radius(3));
+
+}
+
+test "compositor scanout job copies only its damage band" {
+
+    var source_pixels = [_]Color{
+
+        1,  2,  3,  4,
+        5,  6,  7,  8,
+        9,  10, 11, 12,
+        13, 14, 15, 16,
+
+    };
+    var destination_pixels = [_]Color{0} ** source_pixels.len;
+    const source = Surface.from_pixels(&source_pixels, 4, 4);
+    const destination = Surface.from_pixels(&destination_pixels, 4, 4);
+
+    parallel_job = .{
+
+        .back = &source,
+        .scanout = &destination,
+        .rect = .{ .x = 1, .y = 1, .w = 2, .h = 2 },
+
+    };
+    defer parallel_job = .{};
+
+    process_unit(.scanout, 0);
+
+    try std.testing.expectEqualSlices(Color, &.{
+
+        0, 0,  0,  0,
+        0, 6,  7,  0,
+        0, 10, 11, 0,
+        0, 0,  0,  0,
+
+    }, &destination_pixels);
 
 }
 

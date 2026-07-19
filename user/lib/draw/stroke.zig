@@ -81,6 +81,34 @@ pub fn polyline(path: *Path, points: []const Point, width: i32) void {
 
 }
 
+/// Dense open polyline with round end caps only (no per-vertex join disks). For pre-smoothed polylines.
+pub fn chain(path: *Path, points: []const Point, width: i32) void {
+
+    if (points.len == 0) return;
+
+    const half = @max(1, @divTrunc(width, 2));
+
+    if (points.len == 1) {
+
+        path.add_circle(points[0].x, points[0].y, half);
+
+        return;
+
+    }
+
+    var index: usize = 0;
+
+    while (index + 1 < points.len) : (index += 1) {
+
+        segment_body(path, points[index].x, points[index].y, points[index + 1].x, points[index + 1].y, half);
+
+    }
+
+    path.add_circle(points[0].x, points[0].y, half);
+    path.add_circle(points[points.len - 1].x, points[points.len - 1].y, half);
+
+}
+
 /// Append a stroked closed polygon outline.
 pub fn polygon(path: *Path, points: []const Point, width: i32) void {
 

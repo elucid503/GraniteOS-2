@@ -17,6 +17,9 @@ const Surface = draw.Surface;
 
 const max_samples = 256;
 
+// Densified Catmull-Rom samples for the stroke (chain uses end caps only, so this can be dense).
+const max_dense = 384;
+
 /// Line chart of samples (oldest left) scaled to max with a light area fill under the stroke.
 pub fn line(surface: *const Surface, rect: Rect, samples: []const u32, max_in: u32, color: Color) void {
 
@@ -63,26 +66,37 @@ pub fn line(surface: *const Surface, rect: Rect, samples: []const u32, max_in: u
 
     }
 
-    // Area fill: the polyline closed down to the baseline, then the stroke on top.
+    // Area fill: Catmull-Rom cubics closed down to the baseline, then the stroke on top.
 
     const clipped = surface.clipped(inner);
+    const baseline = path_mod.from_px(inner.y + inner.h);
 
     shape.reset();
-    shape.move_to(points[0].x, path_mod.from_px(inner.y + inner.h));
-
-    for (points[0..count]) |p| {
-
-        shape.line_to(p.x, p.y);
-
-    }
-
-    shape.line_to(points[last].x, path_mod.from_px(inner.y + inner.h));
+    shape.move_to(points[0].x, baseline);
+    shape.line_to(points[0].x, points[0].y);
+    append_smooth_curve(&shape, points[0..count]);
+    shape.line_to(points[last].x, baseline);
     shape.close();
 
     raster.fill(&clipped, &shape, draw.mix(ui.theme.surface, color, 48));
 
+    var dense: [max_dense]Point = undefined;
+    const dense_count = densify_smooth(points[0..count], dense[0..]);
+    const width = path_mod.from_px(2);
+
     shape.reset();
-    stroke.polyline(&shape, points[0..count], path_mod.from_px(2));
+
+    // Chain (end caps only) when densified; full join disks when the stroke is still sparse.
+    if (dense_count > count) {
+
+        stroke.chain(&shape, dense[0..dense_count], width);
+
+    } else {
+
+        stroke.polyline(&shape, dense[0..dense_count], width);
+
+    }
+
     raster.fill(&clipped, &shape, color);
 
 }
@@ -92,6 +106,136 @@ fn plot_y_fx(inner: Rect, value: u32, max: i64) i32 {
     const clamped: i64 = @min(@as(i64, value), max);
 
     return path_mod.from_px(inner.y + inner.h) - @as(i32, @intCast(@divTrunc(clamped * inner.h * 64, max)));
+
+}
+
+/// Append Catmull-Rom segments as cubics from `points[0]` (already current) through the rest.
+fn append_smooth_curve(path: *Path, points: []const Point) void {
+
+    if (points.len < 2) return;
+
+    if (points.len == 2) {
+
+        path.line_to(points[1].x, points[1].y);
+
+        return;
+
+    }
+
+    var index: usize = 0;
+
+    while (index + 1 < points.len) : (index += 1) {
+
+        const c1, const c2, const end = catmull_segment(points, index);
+
+        path.cubic_to(c1.x, c1.y, c2.x, c2.y, end.x, end.y);
+
+    }
+
+}
+
+/// Densify Catmull-Rom through `src` into `dst`; returns the written count.
+fn densify_smooth(src: []const Point, dst: []Point) usize {
+
+    if (src.len == 0 or dst.len == 0) return 0;
+
+    if (src.len == 1 or dst.len == 1) {
+
+        dst[0] = src[0];
+
+        return 1;
+
+    }
+
+    if (src.len == 2) {
+
+        dst[0] = src[0];
+        dst[1] = src[1];
+
+        return 2;
+
+    }
+
+    const segments = src.len - 1;
+    const steps = @max(@as(usize, 1), @min(@as(usize, 8), (dst.len - 1) / segments));
+
+    var out: usize = 0;
+
+    dst[out] = src[0];
+    out += 1;
+
+    var index: usize = 0;
+
+    while (index < segments) : (index += 1) {
+
+        const c1, const c2, const end = catmull_segment(src, index);
+        const start = src[index];
+
+        var step: usize = 1;
+
+        while (step <= steps) : (step += 1) {
+
+            if (out >= dst.len) return out;
+
+            dst[out] = if (step == steps) end else eval_cubic(start, c1, c2, end, step, steps);
+            out += 1;
+
+        }
+
+    }
+
+    return out;
+
+}
+
+/// Cubic control points and end for the Catmull-Rom span from `points[index]` to `points[index + 1]`.
+fn catmull_segment(points: []const Point, index: usize) struct { Point, Point, Point } {
+
+    const p0 = points[if (index == 0) 0 else index - 1];
+    const p1 = points[index];
+    const p2 = points[index + 1];
+    const p3 = points[if (index + 2 < points.len) index + 2 else index + 1];
+
+    const c1 = Point{
+
+        .x = p1.x + @divTrunc(p2.x - p0.x, 6),
+        .y = p1.y + @divTrunc(p2.y - p0.y, 6),
+
+    };
+
+    const c2 = Point{
+
+        .x = p2.x - @divTrunc(p3.x - p1.x, 6),
+        .y = p2.y - @divTrunc(p3.y - p1.y, 6),
+
+    };
+
+    return .{ c1, c2, p2 };
+
+}
+
+fn eval_cubic(a: Point, b: Point, c: Point, d: Point, t: usize, steps: usize) Point {
+
+    const s: i64 = @intCast(t);
+    const mt: i64 = @intCast(steps - t);
+    const denom: i64 = @intCast(steps * steps * steps);
+
+    return .{
+
+        .x = @intCast(round_div(mt * mt * mt * @as(i64, a.x) + 3 * mt * mt * s * @as(i64, b.x) + 3 * mt * s * s * @as(i64, c.x) + s * s * s * @as(i64, d.x), denom)),
+        .y = @intCast(round_div(mt * mt * mt * @as(i64, a.y) + 3 * mt * mt * s * @as(i64, b.y) + 3 * mt * s * s * @as(i64, c.y) + s * s * s * @as(i64, d.y), denom)),
+
+    };
+
+}
+
+fn round_div(numerator: i64, denominator: i64) i64 {
+
+    const half = @divTrunc(denominator, 2);
+
+    if (numerator >= 0) return @divTrunc(numerator + half, denominator);
+
+    return @divTrunc(numerator - half, denominator);
 
 }
 
@@ -270,6 +414,50 @@ pub fn meter(surface: *const Surface, rect: Rect, fraction_num: u64, fraction_de
 }
 
 const testing = std.testing;
+
+test "densify_smooth keeps endpoints and interpolates interior samples" {
+
+    const src = [_]Point{
+
+        .{ .x = 0, .y = 0 },
+        .{ .x = 64, .y = 128 },
+        .{ .x = 128, .y = 0 },
+        .{ .x = 192, .y = 64 },
+
+    };
+
+    var dense: [64]Point = undefined;
+    const count = densify_smooth(&src, dense[0..]);
+
+    try testing.expect(count > src.len);
+    try testing.expectEqual(src[0].x, dense[0].x);
+    try testing.expectEqual(src[0].y, dense[0].y);
+    try testing.expectEqual(src[src.len - 1].x, dense[count - 1].x);
+    try testing.expectEqual(src[src.len - 1].y, dense[count - 1].y);
+
+}
+
+test "line paints a smooth stroke without overflowing the path tape" {
+
+    var pixels: [120 * 40]u32 = [_]u32{0} ** (120 * 40);
+    const surface = Surface.from_pixels(&pixels, 120, 40);
+
+    const samples = [_]u32{ 1, 8, 3, 9, 2, 7, 4, 6, 5, 10 };
+
+    line(&surface, .{ .x = 0, .y = 0, .w = 120, .h = 40 }, &samples, 10, 0xffffff);
+
+    // Interior of the chart should not be entirely blank after fill + stroke.
+    var painted: usize = 0;
+
+    for (pixels) |px| {
+
+        if (px != 0) painted += 1;
+
+    }
+
+    try testing.expect(painted > 100);
+
+}
 
 test "pie fills complementary wedges without gaps at the center ring" {
 

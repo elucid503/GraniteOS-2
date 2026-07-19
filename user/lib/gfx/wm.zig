@@ -176,6 +176,18 @@ pub fn restore(connection: *window.Connection, id: u64) Error!void {
 
 }
 
+/// Tell the compositor where a window's taskbar indicator sits, so minimize can jump toward it.
+pub fn minimize_hint(connection: *window.Connection, id: u64, local_x: i32) Error!void {
+
+    _ = try ipc.request(connection.endpoint, proto.window.minimize_hint, &.{
+
+        id,
+        @intCast(@max(0, local_x)),
+
+    }, &.{});
+
+}
+
 pub fn activate_title(connection: *window.Connection, title: []const u8) Error!void {
 
     const title_words = window.pack_title(title);
@@ -249,7 +261,7 @@ pub fn icon_by_name(name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "paint")) return icons.paint;
     if (std.mem.eql(u8, name, "image")) return icons.image;
     if (std.mem.eql(u8, name, "music")) return icons.music;
-
+    if (std.mem.eql(u8, name, "weather")) return icons.weather_app;
     return icons.apps;
 
 }

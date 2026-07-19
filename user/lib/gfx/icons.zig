@@ -81,6 +81,13 @@ pub const clock =
     \\</svg>
 ;
 
+pub const bell =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M6 17 L18 17 L16 14 L16 10 Q16 5 12 5 Q8 5 8 10 L8 14 Z"/>
+    \\<path d="M10 19 Q12 21 14 19"/>
+    \\</svg>
+;
+
 pub const cpu =
     \\<svg viewBox="0 0 24 24">
     \\<rect x="7" y="7" width="10" height="10" rx="1"/>
@@ -259,5 +266,85 @@ pub const weather_storm =
     \\<svg viewBox="0 0 24 24">
     \\<path d="M7 12 Q5 12 5 9.5 Q5 7 8 7 Q8.5 4.5 12 4.5 Q16 4.5 16.5 7.5 Q19 7.5 19 10 Q19 12.5 16.5 12.5 Z"/>
     \\<polyline points="12 13 10 17 13 17 11 21"/>
+    \\</svg>
+;
+
+// Weather app: launcher mark plus condition-detail glyphs for the tile grid.
+
+pub const weather_app =
+    \\<svg viewBox="0 0 24 24">
+    \\<circle cx="15.5" cy="8" r="3.2"/>
+    \\<line x1="15.5" y1="2" x2="15.5" y2="3.4"/>
+    \\<line x1="20.4" y1="3.6" x2="19.4" y2="4.6"/>
+    \\<line x1="21.5" y1="8" x2="20.1" y2="8"/>
+    \\<path d="M5.5 19.5 Q3 19.5 3 16.8 Q3 14.2 6 14.2 Q6.5 11 10.2 11 Q13.8 11 14.3 14.6 Q16.8 14.6 16.8 17 Q16.8 19.5 14.4 19.5 Z"/>
+    \\</svg>
+;
+
+pub const wind =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M3 8.5 L13.5 8.5 Q16.2 8.5 16.2 6.2 Q16.2 4.2 14.2 4.2"/>
+    \\<path d="M3 12.5 L18.2 12.5 Q21 12.5 21 15 Q21 17.4 18.6 17.4"/>
+    \\<path d="M3 16.5 L10.2 16.5 Q12.4 16.5 12.4 18.4 Q12.4 20.2 10.6 20.2"/>
+    \\</svg>
+;
+
+pub const droplet =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M12 3 Q17.5 10 17.5 14.3 Q17.5 19.5 12 19.5 Q6.5 19.5 6.5 14.3 Q6.5 10 12 3 Z"/>
+    \\<path d="M9.5 14 Q9.5 16.5 11.5 17"/>
+    \\</svg>
+;
+
+pub const gauge =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M4 17 Q4 8.5 12 8.5 Q20 8.5 20 17"/>
+    \\<line x1="12" y1="17" x2="16.2" y2="12"/>
+    \\<circle cx="12" cy="17" r="1.6"/>
+    \\</svg>
+;
+
+pub const thermometer =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M10 4.5 Q10 2.5 12 2.5 Q14 2.5 14 4.5 L14 13 Q16.5 14.4 16.5 17.2 Q16.5 21 12 21 Q7.5 21 7.5 17.2 Q7.5 14.4 10 13 Z"/>
+    \\<line x1="12" y1="9" x2="12" y2="16.5"/>
+    \\</svg>
+;
+
+pub const umbrella =
+    \\<svg viewBox="0 0 24 24">
+    \\<path d="M3.5 12 Q4.5 4.5 12 4.5 Q19.5 4.5 20.5 12 Z"/>
+    \\<line x1="12" y1="3" x2="12" y2="4.5"/>
+    \\<path d="M12 12 L12 18.5 Q12 20.5 10.2 20.5 Q8.5 20.5 8.5 19"/>
+    \\</svg>
+;
+
+pub const sunrise =
+    \\<svg viewBox="0 0 24 24">
+    \\<line x1="3" y1="18" x2="21" y2="18"/>
+    \\<path d="M7.5 18 Q7.5 13.5 12 13.5 Q16.5 13.5 16.5 18"/>
+    \\<line x1="12" y1="10.5" x2="12" y2="5.5"/>
+    \\<path d="M9.5 8 L12 5.5 L14.5 8"/>
+    \\</svg>
+;
+
+pub const sunset =
+    \\<svg viewBox="0 0 24 24">
+    \\<line x1="3" y1="18" x2="21" y2="18"/>
+    \\<path d="M7.5 18 Q7.5 13.5 12 13.5 Q16.5 13.5 16.5 18"/>
+    \\<line x1="12" y1="5.5" x2="12" y2="10.5"/>
+    \\<path d="M9.5 8 L12 10.5 L14.5 8"/>
+    \\</svg>
+;
+
+pub const uv =
+    \\<svg viewBox="0 0 24 24">
+    \\<circle cx="12" cy="9" r="3.4"/>
+    \\<line x1="12" y1="2.2" x2="12" y2="4"/>
+    \\<line x1="6.4" y1="4.4" x2="7.7" y2="5.7"/>
+    \\<line x1="17.6" y1="4.4" x2="16.3" y2="5.7"/>
+    \\<line x1="5" y1="9" x2="7" y2="9"/>
+    \\<line x1="17" y1="9" x2="19" y2="9"/>
+    \\<path d="M4.5 18.5 Q8.2 16 12 18.5 Q15.8 21 19.5 18.5"/>
     \\</svg>
 ;

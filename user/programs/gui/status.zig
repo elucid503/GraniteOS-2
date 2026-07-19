@@ -34,6 +34,7 @@ const used_section_gap: i32 = 28;
 const used_label_chart_gap: i32 = 20;
 const max_pie_entries = 5;
 const gantt_label_w: i32 = 56;
+const pressure_notice_cooldown_ms: u64 = 10 * 60 * 1000;
 
 fn pie_color(index: usize) gfx.Color {
 
@@ -205,6 +206,7 @@ var memory_history = History{};
 var ready: cap.Handle = 0;
 var tick: u32 = 0;
 var running: u32 = 1;
+var last_pressure_notice_ms: u64 = 0;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -298,7 +300,12 @@ fn run() !void {
 
         }
 
-        if (@atomicRmw(u32, &tick, .Xchg, 0, .acquire) != 0) dirty = true;
+        if (@atomicRmw(u32, &tick, .Xchg, 0, .acquire) != 0) {
+
+            maybe_notify_pressure();
+            dirty = true;
+
+        }
 
         if (dirty) paint();
 
@@ -399,6 +406,45 @@ fn busy_cores(snapshot: sysinfo.CpuSnapshot) u32 {
     }
 
     return busy;
+
+}
+
+fn maybe_notify_pressure() void {
+
+    lock.acquire();
+
+    const cpu_high = if (have_cpu and cpu_snapshot.core_count != 0)
+        busy_cores(cpu_snapshot) * 100 / cpu_snapshot.core_count >= 90
+    else
+        false;
+    const memory_high = if (have_memory and memory_snapshot.total_frames != 0)
+        (memory_snapshot.total_frames - memory_snapshot.free_frames) * 100 / memory_snapshot.total_frames >= 90
+    else
+        false;
+
+    lock.release();
+
+    if (!cpu_high and !memory_high) return;
+
+    const now = lib.time.now_ms();
+
+    if (last_pressure_notice_ms != 0 and now -% last_pressure_notice_ms < pressure_notice_cooldown_ms) return;
+
+    last_pressure_notice_ms = now;
+
+    if (cpu_high and memory_high) {
+
+        lib.notify.post("System pressure", "CPU and memory use are both above 90%.");
+
+    } else if (cpu_high) {
+
+        lib.notify.post("High CPU load", "CPU use is above 90%.");
+
+    } else {
+
+        lib.notify.post("High memory use", "Memory use is above 90%.");
+
+    }
 
 }
 

@@ -211,6 +211,7 @@ pub const window = struct {
     pub const activate_title: u16 = 16; // request: title in words 1-3                    reply: status
     pub const close_title: u16 = 17; // request: title in words 1-3                       reply: status
     pub const place_relative: u16 = 18; // request: window id, anchor id, local (x<<32)|y reply: status
+    pub const minimize_hint: u16 = 19; // request: window id, taskbar-local indicator center x   reply: status
 
     pub const flag_undecorated: u64 = 1; // no title bar or border
     pub const flag_fullscreen: u64 = 2; // sized to the screen, tracks mode changes

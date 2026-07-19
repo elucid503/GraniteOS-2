@@ -193,6 +193,7 @@ fn advance_clocks() void {
             cd_remaining_ms = 0;
             cd_running = false;
             cd_finished = true;
+            lib.notify.post("Timer", "Your countdown is complete.");
 
         }
 

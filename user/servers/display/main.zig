@@ -131,6 +131,10 @@ var last_drag_composite_ms: u64 = 0;
 const drag_composite_interval_ms: u64 = 32;
 // Roughly ≥ Files/default large windows; calculator/about/timer stay per-sample.
 const drag_coalesce_min_pixels: u64 = 380_000;
+const title_double_click_interval_ms: u64 = 400;
+
+var last_title_click_id: u32 = 0;
+var last_title_click_ms: u64 = 0;
 
 // Interactive resize draws a rubber-band outline while the grip is held.
 
@@ -151,6 +155,49 @@ const ListWatch = struct {
 };
 
 var list_watch = ListWatch{};
+
+// Window open/close/minimize animations: short snapshot overlays composited above the scene.
+
+const anim_open_ms: u64 = 140;
+const anim_close_ms: u64 = 120;
+const anim_minimize_ms: u64 = 170;
+const anim_tick_ms: u64 = 8;
+
+// Open/close endpoints scale about the frame center to ~93%.
+const anim_scale_milli: i32 = 930;
+const max_window_anims = 4;
+
+const WindowAnim = struct {
+
+    active: bool = false,
+
+    // Nonzero while a fade-in suppresses the live window until the overlay lands.
+    hidden_id: u32 = 0,
+
+    region: Handle = 0,
+    base: usize = 0,
+    snapshot: draw.Surface = undefined,
+
+    from: Rect = Rect.empty,
+    to: Rect = Rect.empty,
+
+    // Opacity endpoints in 0..=1000; equal endpoints give a pure geometry morph.
+    alpha_from: i32 = 0,
+    alpha_to: i32 = 0,
+    accelerate: bool = false,
+
+    start_ms: u64 = 0,
+    duration_ms: u64 = 0,
+
+};
+
+var window_anims: [max_window_anims]WindowAnim = [_]WindowAnim{.{}} ** max_window_anims;
+
+// Decorated app windows stay hidden between create and first present, then fade in.
+var awaiting_present: [manager_module.max_windows]bool = [_]bool{false} ** manager_module.max_windows;
+
+// Taskbar-local indicator center x per window slot (-1 = no hint yet).
+var minimize_hints: [manager_module.max_windows]i32 = [_]i32{-1} ** manager_module.max_windows;
 
 pub fn main(_: []const []const u8) u8 {
 
@@ -189,6 +236,25 @@ fn run() !void {
     var in = Message.zeroed;
 
     while (true) {
+
+        if (window_anims_active()) {
+
+            while (true) {
+
+                in = Message.zeroed;
+                const queued_badge = sys.receive_poll(cap.stdin, &in) catch break;
+
+                process_message(queued_badge, &in);
+
+            }
+
+            tick_window_anims();
+            composite() catch {};
+            lib.time.sleep_ms(anim_tick_ms);
+
+            continue;
+
+        }
 
         const badge = sys.receive(cap.stdin, &in) catch continue;
 
@@ -492,6 +558,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.window.activate_title => activate_title(in),
         proto.window.close_title => close_title(in),
         proto.window.place_relative => place_relative(badge, in),
+        proto.window.minimize_hint => set_minimize_hint(in),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
 
@@ -549,6 +616,8 @@ fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
     const slot = slot_of(window);
 
     resize_damage[slot] = Rect.empty;
+    awaiting_present[slot] = window.is_taskbar_listed();
+    minimize_hints[slot] = -1;
 
     _ = surfaces.allocate(slot, window.width, window.height, window_format(window)) catch {
 
@@ -579,6 +648,13 @@ fn present(badge: u64, in: *const Message) i64 {
     const content = window.content();
 
     surfaces.commit(slot);
+
+    if (awaiting_present[slot]) {
+
+        awaiting_present[slot] = false;
+        animate_reveal(window, false);
+
+    }
 
     if (!resize_damage[slot].is_empty()) {
 
@@ -623,6 +699,14 @@ fn destroy_window(badge: u64, id: u64) i64 {
     const window = owned_window(badge, id) orelse return -7;
     const slot = slot_of(window);
 
+    // A window mid-reveal (or never presented) is absent from back, so there is nothing to fade out.
+    const visible = !window_hidden(window) and window.flags & proto.window.flag_minimized == 0;
+
+    cancel_window_anim(window.id);
+    awaiting_present[slot] = false;
+
+    if (visible and window.is_taskbar_listed()) animate_close(window.frame());
+
     release_grabs(window.id);
     surfaces.release(slot);
     resize_damage[slot] = Rect.empty;
@@ -646,6 +730,9 @@ fn destroy_owner_windows(owner: u64) void {
         const window = &manager.windows[index];
 
         if (!window.used or window.owner != owner) continue;
+
+        cancel_window_anim(window.id);
+        awaiting_present[index] = false;
 
         release_grabs(window.id);
 
@@ -772,7 +859,13 @@ fn activate_window(id: u64) i64 {
 
     if (window.flags & proto.window.flag_minimized != 0) {
 
-        if (manager.restore(window.id)) |restored| add_damage(restored);
+        if (manager.restore(window.id)) |restored| {
+
+            add_damage(restored);
+
+            if (window.is_taskbar_listed()) animate_reveal(window, true);
+
+        }
 
     }
 
@@ -834,11 +927,26 @@ fn place_relative(badge: u64, in: *const Message) i64 {
 
 }
 
+fn set_minimize_hint(in: *const Message) i64 {
+
+    const window = manager.by_id(id_of(in.data[1]) orelse return -7) orelse return -7;
+
+    minimize_hints[slot_of(window)] = @intCast(@min(in.data[2], std.math.maxInt(i32)));
+
+    return 0;
+
+}
+
 fn minimize_window(id: u64) i64 {
 
     const window = manager.by_id(id_of(id) orelse return -7) orelse return -7;
+    const visible = !window_hidden(window);
+
+    cancel_window_anim(window.id);
 
     if (manager.minimize(window.id)) |hidden| {
+
+        if (visible and window.is_taskbar_listed()) animate_minimize(window, hidden);
 
         add_damage(hidden);
         publish_list();
@@ -860,6 +968,8 @@ fn restore_window(id: u64) i64 {
         add_damage(shown);
         publish_list();
         notify_focus(previous, window.id);
+
+        if (window.is_taskbar_listed()) animate_reveal(window, true);
 
     }
 
@@ -1138,6 +1248,19 @@ fn handle_button_down(event: events.Event) void {
         },
 
         .title => {
+
+            const now = lib.time.now_ms();
+
+            if (last_title_click_id == window.id and now -% last_title_click_ms <= title_double_click_interval_ms) {
+
+                last_title_click_id = 0;
+                apply_toggle_maximize(window);
+                return;
+
+            }
+
+            last_title_click_id = window.id;
+            last_title_click_ms = now;
 
             if (window.is_maximized()) {
 
@@ -1643,6 +1766,296 @@ fn screen_bounds() Rect {
 
 }
 
+// Window animation machinery: fade+scale a snapshot of the window's composited pixels, so
+// chrome, glass and content all animate together and no client cooperation is needed.
+
+fn window_anims_active() bool {
+
+    for (&window_anims) |*anim| if (anim.active) return true;
+
+    return false;
+
+}
+
+fn window_hidden(window: *Window) bool {
+
+    if (awaiting_present[slot_of(window)]) return true;
+
+    for (&window_anims) |*anim| {
+
+        if (anim.active and anim.hidden_id == window.id) return true;
+
+    }
+
+    return false;
+
+}
+
+fn free_anim_slot() ?*WindowAnim {
+
+    for (&window_anims) |*anim| if (!anim.active) return anim;
+
+    return null;
+
+}
+
+fn capture_snapshot(anim: *WindowAnim, rect: Rect) bool {
+
+    const width: u32 = @intCast(rect.w);
+    const height: u32 = @intCast(rect.h);
+
+    const region = sys.create(.region, @as(usize, width) * height * 4, cap.memory) catch return false;
+
+    const base = sys.map(cap.self_space, region, 0, sys.read | sys.write) catch {
+
+        sys.close(region) catch {};
+
+        return false;
+
+    };
+
+    anim.region = region;
+    anim.base = base;
+    anim.snapshot = draw.Surface.from_base(base, width, height, width * 4);
+
+    anim.snapshot.blit(0, 0, &back, rect);
+
+    return true;
+
+}
+
+/// Animate a snapshot of `capture` (already composited in `back`) between `from` and `to`.
+fn start_window_anim(capture: Rect, from: Rect, to: Rect, alpha_from: i32, alpha_to: i32, accelerate: bool, duration: u64, hidden_id: u32) void {
+
+    const anim = free_anim_slot() orelse return;
+
+    if (!capture_snapshot(anim, capture)) return;
+
+    anim.active = true;
+    anim.hidden_id = hidden_id;
+
+    anim.from = from;
+    anim.to = to;
+
+    anim.alpha_from = alpha_from;
+    anim.alpha_to = alpha_to;
+    anim.accelerate = accelerate;
+
+    anim.start_ms = lib.time.now_ms();
+    anim.duration_ms = duration;
+
+    add_damage(from.cover(to));
+
+}
+
+fn scaled_about_center(rect: Rect, milli: i32) Rect {
+
+    const width = @max(1, @divTrunc(rect.w * milli, lib.anim.unit));
+    const height = @max(1, @divTrunc(rect.h * milli, lib.anim.unit));
+
+    return .{
+
+        .x = rect.x + @divTrunc(rect.w - width, 2),
+        .y = rect.y + @divTrunc(rect.h - height, 2),
+
+        .w = width,
+        .h = height,
+
+    };
+
+}
+
+/// A small chip over the window's taskbar indicator (or the taskbar center without a hint).
+fn minimize_target(window: *Window, frame: Rect) Rect {
+
+    var dock: ?Rect = null;
+
+    for (&manager.windows) |*panel_window| {
+
+        if (!panel_window.used or !panel_window.is_panel()) continue;
+
+        const panel = panel_window.frame();
+
+        if (dock == null or panel.y > dock.?.y) dock = panel;
+
+    }
+
+    const width = @max(40, @divTrunc(frame.w, 4));
+    const height = @max(24, @divTrunc(frame.h, 4));
+
+    var center_x = frame.x + @divTrunc(frame.w, 2);
+    var center_y: i32 = @intCast(screen_height);
+
+    if (dock) |bar| {
+
+        const hint = minimize_hints[slot_of(window)];
+
+        center_x = if (hint >= 0) bar.x + hint else center_x;
+        center_x = std.math.clamp(center_x, bar.x, bar.x + bar.w);
+        center_y = bar.y + @divTrunc(bar.h, 2);
+
+    }
+
+    return .{
+
+        .x = center_x - @divTrunc(width, 2),
+        .y = center_y - @divTrunc(height, 2),
+
+        .w = width,
+        .h = height,
+
+    };
+
+}
+
+/// Fade a window in, either from a slight center scale (open) or from the taskbar (restore).
+fn animate_reveal(window: *Window, from_minimized: bool) void {
+
+    const frame = window.frame().intersect(screen_bounds());
+
+    if (frame.is_empty()) return;
+
+    const from = if (from_minimized) minimize_target(window, frame) else scaled_about_center(frame, anim_scale_milli);
+    const duration: u64 = if (from_minimized) anim_minimize_ms else anim_open_ms;
+
+    // The suppressed window is absent from back, so a direct draw captures chrome, glass and content in place.
+    add_damage(frame);
+    draw_window(window, frame);
+    start_window_anim(frame, from, frame, 0, lib.anim.unit, false, duration, window.id);
+
+}
+
+fn animate_close(frame_raw: Rect) void {
+
+    const frame = frame_raw.intersect(screen_bounds());
+
+    if (frame.is_empty()) return;
+
+    start_window_anim(frame, frame, scaled_about_center(frame, anim_scale_milli), lib.anim.unit, 0, true, anim_close_ms, 0);
+
+}
+
+fn animate_minimize(window: *Window, frame_raw: Rect) void {
+
+    const frame = frame_raw.intersect(screen_bounds());
+
+    if (frame.is_empty()) return;
+
+    start_window_anim(frame, frame, minimize_target(window, frame), lib.anim.unit, 0, true, anim_minimize_ms, 0);
+
+}
+
+fn tick_window_anims() void {
+
+    const now = lib.time.now_ms();
+
+    for (&window_anims) |*anim| {
+
+        if (!anim.active) continue;
+
+        add_damage(anim.from.cover(anim.to));
+
+        if (now -% anim.start_ms >= anim.duration_ms) finish_window_anim(anim);
+
+    }
+
+}
+
+fn finish_window_anim(anim: *WindowAnim) void {
+
+    if (anim.hidden_id != 0) {
+
+        // The reveal may have moved or resized mid-flight; damage where the live window actually is.
+        if (manager.by_id(anim.hidden_id)) |window| add_damage(window.frame());
+
+    }
+
+    if (anim.base != 0) sys.unmap(cap.self_space, anim.base) catch {};
+    if (anim.region != 0) sys.close(anim.region) catch {};
+
+    anim.* = .{};
+
+}
+
+fn cancel_window_anim(id: u32) void {
+
+    for (&window_anims) |*anim| {
+
+        if (anim.active and anim.hidden_id == id) {
+
+            add_damage(anim.from.cover(anim.to));
+            finish_window_anim(anim);
+
+        }
+
+    }
+
+}
+
+fn draw_window_anim_overlays(clip: Rect) void {
+
+    const now = lib.time.now_ms();
+
+    for (&window_anims) |*anim| {
+
+        if (!anim.active) continue;
+
+        const linear = lib.anim.progress(now -% anim.start_ms, anim.duration_ms);
+        const eased = if (anim.accelerate) lib.anim.ease_in(linear) else lib.anim.ease_out(linear);
+
+        const rect = Rect{
+
+            .x = lib.anim.lerp(anim.from.x, anim.to.x, eased),
+            .y = lib.anim.lerp(anim.from.y, anim.to.y, eased),
+
+            .w = lib.anim.lerp(anim.from.w, anim.to.w, eased),
+            .h = lib.anim.lerp(anim.from.h, anim.to.h, eased),
+
+        };
+
+        const alpha_milli = lib.anim.lerp(anim.alpha_from, anim.alpha_to, eased);
+        const alpha: u8 = @intCast(std.math.clamp(@divTrunc(alpha_milli * 255, lib.anim.unit), 0, 255));
+
+        blend_snapshot(anim, rect, alpha, clip);
+
+    }
+
+}
+
+// ponytail: per-pixel nearest-neighbor sampling; row-batched blending if overlay cost ever shows.
+fn blend_snapshot(anim: *const WindowAnim, rect: Rect, alpha: u8, clip: Rect) void {
+
+    if (alpha == 0 or rect.w <= 0 or rect.h <= 0) return;
+
+    const dst = rect.intersect(clip).intersect(screen_bounds());
+
+    if (dst.is_empty()) return;
+
+    const snap = &anim.snapshot;
+    const src_w: i32 = @intCast(snap.width);
+    const src_h: i32 = @intCast(snap.height);
+
+    var y = dst.y;
+
+    while (y < dst.y + dst.h) : (y += 1) {
+
+        const sy = std.math.clamp(@divTrunc((y - rect.y) * src_h, rect.h), 0, src_h - 1);
+        const row = @as(u32, @intCast(sy)) * snap.stride;
+
+        var x = dst.x;
+
+        while (x < dst.x + dst.w) : (x += 1) {
+
+            const sx = std.math.clamp(@divTrunc((x - rect.x) * src_w, rect.w), 0, src_w - 1);
+
+            back.blend_pixel(x, y, snap.pixels[row + @as(u32, @intCast(sx))], alpha);
+
+        }
+
+    }
+
+}
+
 fn composite() !void {
 
     // Fold coalesced *glass* drag geometry into the damage list (opaque drags already damag every sample).
@@ -1700,6 +2113,7 @@ fn composite() !void {
 
             if (candidate.flags & proto.window.flag_minimized != 0) continue;
             if (candidate.flags & proto.window.flag_quartz != 0) continue;
+            if (window_hidden(candidate)) continue;
             if (!covers(candidate.content(), paint_region)) continue;
             if (!surfaces.covers(slot_of(candidate), candidate.content(), paint_region)) continue;
 
@@ -1718,6 +2132,7 @@ fn composite() !void {
             const window = manager.stacked(index);
 
             if (window.flags & proto.window.flag_minimized != 0) continue;
+            if (window_hidden(window)) continue;
             if (window.frame().intersect(paint_region).is_empty()) continue;
 
             draw_window(window, paint_region);
@@ -1734,9 +2149,12 @@ fn composite() !void {
 
         }
 
-        // One pass into the uncached scanout: only the damaged band's rows move.
+        draw_window_anim_overlays(paint_region);
 
-        fb.blit(region.x, region.y, &back, region);
+        // Copy the finished band into uncached scanout. Large regions share independent row bands
+        // across the compositor helper pool; small damage stays on this thread.
+
+        quartz_effect.blit_scanout(&fb, &back, region);
 
     }
 

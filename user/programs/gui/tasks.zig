@@ -360,7 +360,7 @@ fn paint() void {
     end_rect = gfx.Rect.empty;
 
     lib.quartz.fill_window(surface, ui.theme.window_bg, @intFromEnum(lib.prefs.quartz_level));
-    font.draw(surface, pad, 16, 22, "Task Manager", ui.theme.text);
+    font.draw(surface, pad, 16, 22, "Active Processes", ui.theme.text);
 
     if (!have_snapshot) {
 

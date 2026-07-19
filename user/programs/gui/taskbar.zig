@@ -50,7 +50,13 @@ fn launcher_width() i32 {
 
 fn clock_width() i32 {
 
-    return 100;
+    return 68;
+
+}
+
+fn tray_width() i32 {
+
+    return 34;
 
 }
 
@@ -185,6 +191,21 @@ var calendar: ?lib.window.Window = null;
 var weather_popup: ?lib.window.Window = null;
 var calendar_open = false;
 
+const max_notifications = 5;
+const notification_row_height: i32 = 54;
+const notification_header_h: i32 = 44;
+const notification_pad: i32 = 10;
+const notification_toast_h: u32 = 68;
+
+var notification_popup: ?lib.window.Window = null;
+var notification_toast: ?lib.window.Window = null;
+var notifications_open = false;
+var notification_count: usize = 0;
+var notifications: [max_notifications]lib.notify.Entry = undefined;
+var notification_regions = ui.HitRegions{};
+var toast_visible = false;
+var toast_deadline_ms: u64 = 0;
+
 const WeatherState = struct {
 
     ready: bool = false,
@@ -245,6 +266,7 @@ var menu_regions = ui.HitRegions{};
 
 const launcher_id: u32 = 1;
 const clock_id: u32 = 2;
+const notification_id: u32 = 3;
 const overflow_id: u32 = 99;
 const window_id_base: u32 = 100;
 const category_id_base: u32 = 1000;
@@ -317,6 +339,10 @@ fn run() !void {
 
         if (list_due) refresh_windows();
 
+        if (clock_due) poll_notifications();
+
+        if (toast_visible and lib.time.now_ms() >= toast_deadline_ms) hide_notification_toast();
+
         if (list_due) {
 
             paint_bar();
@@ -369,6 +395,29 @@ fn refresh_windows() void {
 
     window_count = window_list.refresh(windows[0..]);
     rebuild_items();
+    send_minimize_hints();
+
+}
+
+/// Point each window's minimize animation at its indicator (overflowed items share the overflow chip).
+fn send_minimize_hints() void {
+
+    const layout = button_layout();
+
+    if (layout.width <= 0) return;
+
+    for (items[0..item_count], 0..) |item, index| {
+
+        if (!item.is_window) continue;
+
+        const x = if (index < layout.visible)
+            layout.start + @as(i32, @intCast(index)) * (layout.width + button_gap())
+        else
+            layout.overflow_x;
+
+        lib.wm.minimize_hint(&connection, windows[item.window_index].id, x + @divTrunc(layout.width, 2)) catch {};
+
+    }
 
 }
 
@@ -414,15 +463,32 @@ fn app_index_for_program(program: []const u8) ?usize {
 
 }
 
-/// Merge open windows with pinned idle apps into one indicator list.
+/// Merge open windows with pinned idle apps into one indicator list. The compositor reports its
+/// list in z-order, which changes every time a window is focused; taskbar order is instead stable
+/// by window id so a click never shuffles its indicator left.
 fn rebuild_items() void {
 
     item_count = 0;
 
-    for (windows[0..window_count], 0..) |info, window_index| {
+    var consumed = [_]bool{false} ** proto.window.max_windows;
+
+    while (true) {
+
+        var next: ?usize = null;
+
+        for (windows[0..window_count], 0..) |info, window_index| {
+
+            if (consumed[window_index]) continue;
+            if (next == null or info.id < windows[next.?].id) next = window_index;
+
+        }
+
+        const window_index = next orelse break;
+        consumed[window_index] = true;
 
         if (item_count >= items.len) break;
 
+        const info = windows[window_index];
         const title = info.title[0..@min(@as(usize, @intCast(info.title_len)), proto.window.max_title)];
         const app_index = app_index_for_title(title);
         const pinned = if (app_index) |index| is_pinned_program(apps[index].program) else false;
@@ -493,6 +559,18 @@ fn handle(event: events.Event) void {
     if (pin_menu) |pin_menu_window| {
 
         if (event.window == pin_menu_window.id) return handle_pin_menu(event);
+
+    }
+
+    if (notification_popup) |notification_window| {
+
+        if (event.window == notification_window.id) return handle_notification_popup(event);
+
+    }
+
+    if (notification_toast) |toast_window| {
+
+        if (event.window == toast_window.id) return handle_notification_toast(event);
 
     }
 
@@ -569,6 +647,20 @@ fn refresh_quartz_popups() void {
 
     }
 
+    if (notification_popup != null) {
+
+        paint_notification_popup();
+        if (notifications_open) if (notification_popup) |window| window.present_all() catch {};
+
+    }
+
+    if (notification_toast != null and toast_visible) {
+
+        paint_notification_toast();
+        if (notification_toast) |window| window.present_all() catch {};
+
+    }
+
     if (weather_popup != null) {
 
         paint_weather_content();
@@ -587,13 +679,30 @@ fn refresh_quartz_popups() void {
 
 fn clock_hover_rect(clock_rect: Rect) Rect {
 
-    const hover_w: i32 = 76;
+    const hover_w: i32 = 66;
 
     return .{
 
         .x = clock_rect.x + @divTrunc(clock_rect.w - hover_w, 2),
         .y = 4,
         .w = hover_w,
+        .h = bar_height() - 8,
+
+    };
+
+}
+
+// Right inset keeps the tray control clear of the dock corner; hover uses the same inset.
+fn tray_hover_rect(tray_rect: Rect) Rect {
+
+    const left_pad: i32 = 2;
+    const right_pad: i32 = 8;
+
+    return .{
+
+        .x = tray_rect.x + left_pad,
+        .y = 4,
+        .w = tray_rect.w - left_pad - right_pad,
         .h = bar_height() - 8,
 
     };
@@ -622,12 +731,22 @@ fn handle_bar(event: events.Event) void {
 
                 if (id == clock_id) {
 
+                    close_notifications();
                     toggle_calendar();
                     return;
 
                 }
 
+                if (id == notification_id) {
+
+                    close_calendar();
+                    toggle_notifications();
+                    return;
+
+                }
+
                 close_calendar();
+                close_notifications();
 
                 if (id >= window_id_base) activate_item(id - window_id_base);
 
@@ -1126,17 +1245,13 @@ const slide_distance: i32 = 28;
 /// Ease-out cubic progress in 0..=1000 for `elapsed` of `duration`.
 fn slide_progress(elapsed: u64, duration: u64) i32 {
 
-    if (elapsed >= duration) return 1000;
-
-    const inv = 1000 - @as(i32, @intCast(@divTrunc(elapsed * 1000, duration)));
-
-    return 1000 - @divTrunc(inv * inv * inv, 1_000_000);
+    return lib.anim.ease_out(lib.anim.progress(elapsed, duration));
 
 }
 
 fn slide_offset(progress: i32) i32 {
 
-    return slide_distance - @divTrunc(slide_distance * progress, 1000);
+    return lib.anim.lerp(slide_distance, 0, progress);
 
 }
 
@@ -1252,6 +1367,7 @@ fn open_menu() void {
 
     close_pin_menu();
     close_calendar();
+    close_notifications();
 
     // Covers a prefs_changed dropped while closed, so the menu opens with the current material.
     _ = lib.prefs.refresh_if_changed();
@@ -1336,6 +1452,7 @@ fn open_pin_menu(index: usize, local_x: i32) void {
 
     close_menu();
     close_calendar();
+    close_notifications();
 
     // Covers a prefs_changed dropped while closed, so the popup opens with the current material.
     _ = lib.prefs.refresh_if_changed();
@@ -1380,6 +1497,331 @@ fn close_pin_menu() void {
     if (pin_menu) |window| lib.wm.minimize(&connection, window.id) catch {};
 
     pin_menu_open = false;
+
+}
+
+// Notifications: taskbar-owned history plus an animated bottom-right toast for new records.
+
+fn notification_popup_width() u32 {
+
+    return 340;
+
+}
+
+fn notification_popup_height() u32 {
+
+    if (notification_count == 0) return @intCast(notification_header_h + 20 + notification_pad);
+
+    return @intCast(notification_header_h + @as(i32, @intCast(notification_count)) * notification_row_height + notification_pad);
+
+}
+
+fn notification_popup_origin(screen_w: u32, screen_h: u32, popup_w: u32, popup_h: u32) struct { x: i32, y: i32 } {
+
+    return .{
+
+        .x = @max(0, @as(i32, @intCast(screen_w)) - @as(i32, @intCast(popup_w)) - dock_margin()),
+        .y = @max(0, @as(i32, @intCast(screen_h)) - bar_height() - dock_margin() - @as(i32, @intCast(popup_h)) - 8),
+
+    };
+
+}
+
+// Size-classed quartz buffers misalign the effect plane on shrink; recreate instead of resize.
+fn ensure_notification_popup() !void {
+
+    const width = notification_popup_width();
+    const height = notification_popup_height();
+
+    if (notification_popup) |*window| {
+
+        if (window.surface.width == width and window.surface.height == height) return;
+
+        if (notifications_open) lib.wm.minimize(&connection, window.id) catch {};
+
+        window.destroy();
+        notification_popup = null;
+
+    }
+
+    const window = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_quartz, "notifications");
+    try lib.wm.minimize(&connection, window.id);
+    notification_popup = window;
+
+}
+
+fn ensure_notification_toast() !void {
+
+    if (notification_toast != null) return;
+
+    const window = try connection.create_window(notification_popup_width(), notification_toast_h, proto.window.flag_undecorated | proto.window.flag_quartz, "notification");
+    try lib.wm.minimize(&connection, window.id);
+    notification_toast = window;
+
+}
+
+fn poll_notifications() void {
+
+    const entry = lib.notify.take() orelse return;
+
+    if (notification_count == notifications.len) {
+
+        for (1..notifications.len) |index| notifications[index - 1] = notifications[index];
+        notification_count -= 1;
+
+    }
+
+    notifications[notification_count] = entry;
+    notification_count += 1;
+
+    paint_bar();
+
+    if (notifications_open) refresh_notification_popup();
+
+    show_notification_toast();
+
+}
+
+fn toggle_notifications() void {
+
+    if (notifications_open) close_notifications() else open_notifications();
+
+}
+
+fn open_notifications() void {
+
+    close_pin_menu();
+    close_calendar();
+
+    ensure_notification_popup() catch return;
+
+    const window = notification_popup orelse return;
+
+    notifications_open = true;
+    paint_notification_popup();
+    gfx.fence();
+
+    if (lib.wm.screen_info(&connection)) |screen| {
+
+        const origin = notification_popup_origin(screen.width, screen.height, window.surface.width, window.surface.height);
+
+        reveal_slide_up(&window, origin.x, origin.y);
+
+    } else |_| {
+
+        lib.wm.restore(&connection, window.id) catch {};
+        window.present_all() catch {};
+
+    }
+
+    paint_bar();
+
+}
+
+fn close_notifications() void {
+
+    if (!notifications_open) return;
+
+    if (notification_popup) |window| lib.wm.minimize(&connection, window.id) catch {};
+    notifications_open = false;
+    paint_bar();
+
+}
+
+fn dismiss_notification(index: usize) void {
+
+    if (index >= notification_count) return;
+
+    var write: usize = index;
+
+    while (write + 1 < notification_count) : (write += 1) notifications[write] = notifications[write + 1];
+
+    notification_count -= 1;
+    refresh_notification_popup();
+    paint_bar();
+
+}
+
+fn clear_notifications() void {
+
+    notification_count = 0;
+    refresh_notification_popup();
+    paint_bar();
+
+}
+
+fn refresh_notification_popup() void {
+
+    ensure_notification_popup() catch {};
+    paint_notification_popup();
+
+    if (!notifications_open) return;
+
+    const window = notification_popup orelse return;
+
+    if (lib.wm.screen_info(&connection)) |screen| {
+
+        const origin = notification_popup_origin(screen.width, screen.height, window.surface.width, window.surface.height);
+
+        lib.wm.move_window(&connection, window.id, origin.x, origin.y) catch {};
+
+    } else |_| {}
+
+    lib.wm.restore(&connection, window.id) catch {};
+    window.present_all() catch {};
+
+}
+
+fn paint_notification_popup() void {
+
+    const window = notification_popup orelse return;
+    const surface = &window.surface;
+
+    notification_panel(surface);
+    notification_regions.reset();
+
+    draw_text(surface, 14, 12, 15, "Notifications", ui.theme.text);
+
+    if (notification_count != 0) {
+
+        const clear = Rect{ .x = @as(i32, @intCast(surface.width)) - 58, .y = 10, .w = 46, .h = 24 };
+        notification_regions.add(1000, clear);
+        ui.fill_round_rect(surface, clear, 5, if (notification_regions.hovered(1000)) ui.theme.hover else ui.theme.surface_alt);
+        text_center(surface, clear, 11, "Clear", ui.theme.text_dim);
+
+    } else {
+
+        draw_text(surface, 14, 40, 13, "You're all caught up.", ui.theme.text_dim);
+        return;
+
+    }
+
+    var row: usize = 0;
+
+    while (row < notification_count) : (row += 1) {
+
+        const index = notification_count - 1 - row;
+        const gap: i32 = 4;
+        const rect = Rect{
+
+            .x = notification_pad,
+            .y = notification_header_h + @as(i32, @intCast(row)) * notification_row_height,
+            .w = @as(i32, @intCast(surface.width)) - notification_pad * 2,
+            .h = notification_row_height - gap,
+
+        };
+        const entry = notifications[index];
+
+        notification_regions.add(@intCast(index + 1), rect);
+        ui.fill_round_rect(surface, rect, 6, if (notification_regions.hovered(@intCast(index + 1))) ui.theme.hover else ui.theme.surface_alt);
+        draw_text(surface, rect.x + 12, rect.y + 10, 13, entry.title[0..entry.title_len], ui.theme.text);
+        text_in(surface, .{ .x = rect.x + 12, .y = rect.y + 28, .w = rect.w - 24, .h = 18 }, 0, 11, entry.body[0..entry.body_len], ui.theme.text_dim);
+
+    }
+
+}
+
+fn handle_notification_popup(event: events.Event) void {
+
+    switch (event.kind) {
+
+        events.kind_button_down => if (event.code == events.button_left) {
+
+            const id = notification_regions.hit(event.x, event.y);
+            if (id == 1000) clear_notifications() else if (id != 0) dismiss_notification(@intCast(id - 1));
+
+        },
+
+        events.kind_pointer_move => {
+
+            if (notification_regions.pointer_move(event.x, event.y)) {
+
+                paint_notification_popup();
+                if (notification_popup) |window| window.present_all() catch {};
+
+            }
+
+            lib.cursor.set(&connection, if (notification_regions.hovered_id() != 0) .clicker else .pointer);
+
+        },
+
+        events.kind_window_blur => close_notifications(),
+
+        else => {},
+
+    }
+
+}
+
+fn paint_notification_toast() void {
+
+    const window = notification_toast orelse return;
+    const surface = &window.surface;
+
+    notification_panel(surface);
+
+    const entry = if (notification_count != 0) notifications[notification_count - 1] else return;
+
+    const icon_size: i32 = 22;
+    const top_pad: i32 = 14;
+    const icon_y = top_pad + 4;
+    const title_y = top_pad;
+    const body_y = top_pad + 20;
+
+    lib.draw.vector.icon_in(surface, .{ .x = 16, .y = icon_y, .w = icon_size, .h = icon_size }, lib.icons.bell, ui.theme.accent);
+    draw_text(surface, 50, title_y, 14, entry.title[0..entry.title_len], ui.theme.text);
+    text_in(surface, .{ .x = 50, .y = body_y, .w = @as(i32, @intCast(surface.width)) - 66, .h = 20 }, 0, 12, entry.body[0..entry.body_len], ui.theme.text_dim);
+
+}
+
+fn show_notification_toast() void {
+
+    ensure_notification_toast() catch return;
+
+    const window = notification_toast orelse return;
+    const screen = lib.wm.screen_info(&connection) catch return;
+    const x = @max(0, @as(i32, @intCast(screen.width)) - @as(i32, @intCast(window.surface.width)) - dock_margin());
+    const y = @max(0, @as(i32, @intCast(screen.height)) - bar_height() - dock_margin() - @as(i32, @intCast(window.surface.height)) - 8);
+
+    paint_notification_toast();
+    gfx.fence();
+    reveal_slide_up(&window, x, y);
+
+    toast_visible = true;
+    toast_deadline_ms = lib.time.now_ms() + 5_000;
+
+}
+
+fn hide_notification_toast() void {
+
+    const window = notification_toast orelse return;
+    const screen = lib.wm.screen_info(&connection) catch return;
+    const x = @max(0, @as(i32, @intCast(screen.width)) - @as(i32, @intCast(window.surface.width)) - dock_margin());
+    const y = @max(0, @as(i32, @intCast(screen.height)) - bar_height() - dock_margin() - @as(i32, @intCast(window.surface.height)) - 8);
+    const start = lib.time.now_ms();
+
+    while (true) {
+
+        const progress = slide_progress(lib.time.now_ms() -% start, slide_duration_ms);
+        lib.wm.move_window(&connection, window.id, x, y + slide_distance - slide_offset(progress)) catch {};
+
+        if (progress >= 1000) break;
+
+        lib.time.sleep_ms(8);
+
+    }
+
+    lib.wm.minimize(&connection, window.id) catch {};
+    toast_visible = false;
+
+}
+
+fn handle_notification_toast(event: events.Event) void {
+
+    if (event.kind != events.kind_button_down or event.code != events.button_left) return;
+
+    if (toast_visible) hide_notification_toast();
+    open_notifications();
 
 }
 
@@ -1599,6 +2041,12 @@ fn close_calendar() void {
 fn handle_weather_popup(event: events.Event) void {
 
     switch (event.kind) {
+
+        events.kind_button_down => if (event.code == events.button_left) {
+
+            request_weather_refresh();
+
+        },
 
         events.kind_pointer_move => update_calendar_cursor(event.x, event.y),
 
@@ -2132,7 +2580,7 @@ const ButtonLayout = struct {
 fn button_layout() ButtonLayout {
 
     const start = launcher_width() + button_gap();
-    const end = @as(i32, @intCast(bar.surface.width)) - clock_width() - button_gap();
+    const end = @as(i32, @intCast(bar.surface.width)) - clock_width() - tray_width() - button_gap() * 2;
     const available = end - start;
 
     if (item_count == 0 or available <= 0) {
@@ -2315,7 +2763,33 @@ fn paint_bar_content(surface: *const gfx.Surface) void {
 
     }
 
-    const clock_rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
+    const tray_rect = Rect{ .x = width - tray_width(), .y = 0, .w = tray_width(), .h = bar_height() };
+    const tray_hover = tray_hover_rect(tray_rect);
+    const bell_size: i32 = 18;
+    const bell_x = tray_hover.x + @divTrunc(tray_hover.w - bell_size, 2);
+    const bell_y = tray_hover.y + @divTrunc(tray_hover.h - bell_size, 2);
+
+    bar_regions.add(notification_id, tray_hover);
+
+    if (notifications_open) {
+
+        ui.fill_round_rect(surface, tray_hover, 5, ui.theme.accent_dim);
+
+    } else if (bar_regions.hovered(notification_id)) {
+
+        ui.fill_round_rect(surface, tray_hover, 5, ui.theme.hover);
+
+    }
+
+    lib.draw.vector.icon_in(surface, .{ .x = bell_x, .y = bell_y, .w = bell_size, .h = bell_size }, lib.icons.bell, ui.theme.text);
+
+    if (notification_count != 0) {
+
+        ui.fill_round_rect(surface, .{ .x = bell_x + bell_size - 4, .y = bell_y - 2, .w = 6, .h = 6 }, 6, ui.theme.accent);
+
+    }
+
+    const clock_rect = Rect{ .x = width - tray_width() - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
 
     bar_regions.add(clock_id, clock_hover_rect(clock_rect));
     paint_clock(surface, width);
@@ -2324,7 +2798,7 @@ fn paint_bar_content(surface: *const gfx.Surface) void {
 
 fn paint_clock(surface: *const gfx.Surface, width: i32) void {
 
-    const rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
+    const rect = Rect{ .x = width - tray_width() - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
     const hover = clock_hover_rect(rect);
 
     if (calendar_open) {
@@ -2365,7 +2839,7 @@ fn paint_clock_only() void {
 
     const surface = &bar.surface;
     const width: i32 = @intCast(surface.width);
-    const rect = Rect{ .x = width - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
+    const rect = Rect{ .x = width - tray_width() - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
 
     if (!lib.prefs.quartz_enabled()) {
 
@@ -2693,6 +3167,30 @@ fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
     var appearance = quartz.style(lib.quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), color, ui.theme.accent);
 
     appearance.radius = dock_radius();
+
+    quartz.clear(surface);
+    quartz.panel(surface, rect, appearance);
+
+}
+
+// Full-bleed panels clip the quartz soft-shadow into bottom corner cutouts; omit it.
+fn notification_panel(surface: *const gfx.Surface) void {
+
+    const rect = surface.bounds();
+
+    if (!lib.prefs.quartz_enabled()) {
+
+        lib.draw.round.fill_round_rect(surface, rect, dock_radius(), ui.theme.surface);
+        ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
+
+        return;
+
+    }
+
+    var appearance = quartz.style(lib.quartz.kind_from_level(@intFromEnum(lib.prefs.quartz_level)), ui.theme.surface, ui.theme.accent);
+
+    appearance.radius = dock_radius();
+    appearance.shadow = lib.draw.transparent;
 
     quartz.clear(surface);
     quartz.panel(surface, rect, appearance);
