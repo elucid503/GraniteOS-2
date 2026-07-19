@@ -1,6 +1,7 @@
 // Desktop preferences: theme palettes and a small config file on disk.
 
 const std = @import("std");
+const build_options = @import("build_options");
 
 const cap = @import("../cap/cap.zig");
 const gfx = @import("../draw/draw.zig");
@@ -79,11 +80,19 @@ pub const quartz_level_names = [_][]const u8{
 
 };
 
-pub var quartz_level: QuartzLevel = .medium;
+pub const force_quartz_disabled = build_options.force_quartz_disabled;
+
+pub var quartz_level: QuartzLevel = if (force_quartz_disabled) .off else .medium;
 
 pub fn quartz_enabled() bool {
 
-    return quartz_level != .off;
+    return !force_quartz_disabled and quartz_level != .off;
+
+}
+
+pub fn set_quartz_level(level: QuartzLevel) void {
+
+    quartz_level = if (force_quartz_disabled) .off else level;
 
 }
 
@@ -421,7 +430,7 @@ pub fn apply_event(event: events.Event) bool {
     const temp_value: u8 = @truncate((bits >> 16) & 0xff);
 
     if (theme_value < theme_count) apply_theme(@enumFromInt(theme_value));
-    if (quartz_value < quartz_level_count) quartz_level = @enumFromInt(quartz_value);
+    if (quartz_value < quartz_level_count) set_quartz_level(@enumFromInt(quartz_value));
     if (temp_value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(temp_value);
 
     tz_offset_minutes = event.x;
@@ -748,14 +757,14 @@ fn parse_config(text: []const u8) void {
 
             const value = std.fmt.parseInt(u8, line[7..], 10) catch continue;
 
-            if (value < quartz_level_count) quartz_level = @enumFromInt(value);
+            if (value < quartz_level_count) set_quartz_level(@enumFromInt(value));
 
         } else if (std.mem.startsWith(u8, line, "quartz_pct=")) {
 
             // Migrate continuous 0..=100 back onto the discrete scale.
             const value = std.fmt.parseInt(u8, line[11..], 10) catch continue;
 
-            quartz_level = if (value == 0)
+            const level: QuartzLevel = if (value == 0)
                 .off
             else if (value <= 33)
                 .light
@@ -763,6 +772,8 @@ fn parse_config(text: []const u8) void {
                 .medium
             else
                 .dark;
+
+            set_quartz_level(level);
 
         }
 

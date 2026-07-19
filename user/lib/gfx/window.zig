@@ -1,6 +1,7 @@
 // Client side of the Window interface (07-userspace-ddd.md Section 10.7)
 
 const std = @import("std");
+const build_options = @import("build_options");
 
 const cap = @import("../cap/cap.zig");
 const ipc = @import("../ipc/ipc.zig");
@@ -140,11 +141,15 @@ pub const Connection = struct {
     pub fn create_window(self: *Connection, width: u32, height: u32, flags: u64, title: []const u8) Error!Window {
 
         const packed_title = pack_title(title);
+        const effective_flags = if (build_options.force_quartz_disabled)
+            flags & ~proto.window.flag_quartz
+        else
+            flags;
 
         const reply = try ipc.request(self.endpoint, proto.window.create, &.{
 
             pack_pair(width, height),
-            flags,
+            effective_flags,
             packed_title[0],
             packed_title[1],
             packed_title[2],
@@ -153,7 +158,7 @@ pub const Connection = struct {
 
         if (reply.handle_count < 1) return error.Invalid;
 
-        var window = try Window.from_reply(self, reply.data[1], flags, &reply);
+        var window = try Window.from_reply(self, reply.data[1], effective_flags, &reply);
 
         register(&window);
 

@@ -458,7 +458,11 @@ fn build_back_buffer() !void {
     back_base = try sys.map(cap.self_space, back_region, 0, sys.read | sys.write);
     back = draw.Surface.from_base(back_base, screen_width, screen_height, screen_width * 4);
 
-    quartz_renderer.resize(screen_width, screen_height) catch quartz_renderer.release();
+    if (!lib.prefs.force_quartz_disabled) {
+
+        quartz_renderer.resize(screen_width, screen_height) catch quartz_renderer.release();
+
+    }
 
 }
 
@@ -612,7 +616,11 @@ fn create_window(badge: u64, in: *const Message, out: *Message) i64 {
     if (width > surfaces_module.max_side or height > surfaces_module.max_side) return -7;
 
     const previous_focus = manager.focus;
-    const window = manager.create(badge, width, height, in.data[2], title) orelse return -3;
+    const flags = if (lib.prefs.force_quartz_disabled)
+        in.data[2] & ~proto.window.flag_quartz
+    else
+        in.data[2];
+    const window = manager.create(badge, width, height, flags, title) orelse return -3;
     const slot = slot_of(window);
 
     resize_damage[slot] = Rect.empty;

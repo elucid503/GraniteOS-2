@@ -133,12 +133,14 @@ fn click(x: i32, y: i32) void {
 
     if (hit >= quartz_id_base and hit < quartz_id_base + lib.prefs.quartz_level_count) {
 
+        if (lib.prefs.force_quartz_disabled) return;
+
         const index = hit - quartz_id_base;
         const next: lib.prefs.QuartzLevel = @enumFromInt(@as(u8, @intCast(index)));
 
         if (lib.prefs.quartz_level == next) return;
 
-        lib.prefs.quartz_level = next;
+        lib.prefs.set_quartz_level(next);
         lib.prefs.save();
         lib.prefs.broadcast_change(&connection);
         paint();
@@ -205,6 +207,19 @@ fn paint_quartz_section(parent: i16) void {
         .color = ui.theme.text,
 
     });
+
+    if (lib.prefs.force_quartz_disabled) {
+
+        _ = page.label(section, "Disabled for web builds", .{
+
+            .size = 13,
+            .color = ui.theme.text_faint,
+
+        });
+
+        return;
+
+    }
 
     const row = page.box(section, .{
 
@@ -376,6 +391,13 @@ fn update_cursor(x: i32, y: i32) void {
     }
 
     if (hit >= quartz_id_base and hit < quartz_id_base + lib.prefs.quartz_level_count) {
+
+        if (lib.prefs.force_quartz_disabled) {
+
+            lib.cursor.set(&connection, .pointer);
+            return;
+
+        }
 
         lib.cursor.set(&connection, .clicker);
         return;
