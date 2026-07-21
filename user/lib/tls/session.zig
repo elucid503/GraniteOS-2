@@ -59,13 +59,7 @@ pub const Session = struct {
     authority: Handle,
 
     /// TCP + TLS handshake into `out` (stable address). Allocates four large buffers via Heap.
-    pub fn connect_host(
-        out: *Session,
-        authority: Handle,
-        heap: *mem.Heap,
-        host: []const u8,
-        port: u16,
-    ) Error!void {
+    pub fn connect_host(out: *Session, authority: Handle, heap: *mem.Heap, host: []const u8, port: u16) Error!void {
 
         pull_rng_and_time();
         try roots.ensure_init(heap.allocator(), time.wall_sec());
@@ -80,8 +74,8 @@ pub const Session = struct {
 
     pub fn send_all(self: *Session, bytes: []const u8) Error!void {
 
-        // Client.writer encrypts into client.output (bridge.writer); that buffer
-        // must also be flushed or ciphertext never hits TCP (std.http.Client does both).
+        // Client.writer encrypts into client.output (bridge.writer)
+
         self.client.writer.writeAll(bytes) catch return error.WriteFailed;
         self.client.writer.flush() catch return error.WriteFailed;
         self.client.output.flush() catch return error.WriteFailed;
@@ -91,6 +85,7 @@ pub const Session = struct {
     pub fn recv(self: *Session, out: []u8) Error!usize {
 
         // readSliceShort returns 0 at EOF (ShortError is only ReadFailed).
+
         return self.client.reader.readSliceShort(out) catch return error.ReadFailed;
 
     }
@@ -98,6 +93,7 @@ pub const Session = struct {
     pub fn close(self: *Session) void {
 
         // end() stages close_notify into output; flush so it actually sends.
+
         self.client.end() catch {};
         self.client.output.flush() catch {};
         self.socket.close();
@@ -116,13 +112,7 @@ pub const Session = struct {
 
 };
 
-fn finish_handshake(
-    out: *Session,
-    authority: Handle,
-    heap: *mem.Heap,
-    socket: net.Socket,
-    host: []const u8,
-) Error!void {
+fn finish_handshake(out: *Session, authority: Handle, heap: *mem.Heap, socket: net.Socket, host: []const u8,) Error!void {
 
     const n = Client.min_buffer_len;
 
@@ -156,20 +146,16 @@ fn finish_handshake(
 
     out.bridge = stream_mod.Bridge.init(&out.socket, enc_in, enc_out);
 
-    out.client = Client.init(
-        &out.bridge.reader,
-        &out.bridge.writer,
-        .{
+    out.client = Client.init(&out.bridge.reader, &out.bridge.writer, .{
 
-            .host = .{ .explicit = host },
-            .ca = .{ .bundle = roots.get() },
-            .now_sec = time.wall_sec(),
-            .read_buffer = plain_in,
-            .write_buffer = plain_out,
-            .allow_truncation_attacks = true,
+        .host = .{ .explicit = host },
+        .ca = .{ .bundle = roots.get() },
+        .now_sec = time.wall_sec(),
+        .read_buffer = plain_in,
+        .write_buffer = plain_out,
+        .allow_truncation_attacks = true,
 
-        },
-    ) catch |err| return map_init_error(err);
+    }) catch |err| return map_init_error(err);
 
 }
 
@@ -206,6 +192,7 @@ fn map_init_error(err: anyerror) Error {
 fn pull_rng_and_time() void {
 
     // Best-effort: reseed from virtio-rng and pull NTP offset from netstack.
+
     rng.try_reseed_from_driver();
     time.try_pull_wall_offset();
 
