@@ -14,7 +14,10 @@ fn lucide(comptime stem: []const u8) []const u8 {
 pub const apps = lucide("layout-grid");
 pub const category = lucide("tag");
 pub const folder = lucide("folder");
+pub const folder_plus = lucide("folder-plus");
 pub const file = lucide("file");
+pub const file_up = lucide("file-up");
+pub const file_down = lucide("file-down");
 pub const chart = lucide("trending-up");
 pub const terminal = lucide("terminal");
 pub const network = lucide("globe");
@@ -35,6 +38,9 @@ pub const settings = lucide("settings");
 pub const pointer = lucide("mouse-pointer-2");
 pub const hand = lucide("hand");
 pub const text_cursor = lucide("text-cursor");
+pub const refresh_cw = lucide("refresh-cw");
+pub const log_out = lucide("log-out");
+pub const users = lucide("users");
 
 // Weather (WMO codes from Open-Meteo current_weather.weathercode).
 
@@ -132,7 +138,7 @@ test "every catalog icon strokes into a 20px box without overflowing" {
 
 }
 
-test "weather and cursor icons stroke without overflowing" {
+test "non-catalog icons stroke without overflowing" {
 
     const vector = @import("../draw/vector.zig");
     const path_mod = @import("../draw/path.zig");
@@ -143,6 +149,12 @@ test "weather and cursor icons stroke without overflowing" {
         hand,
         pointer,
         text_cursor,
+        folder_plus,
+        file_up,
+        file_down,
+        refresh_cw,
+        log_out,
+        users,
         weather_clear,
         weather_clear_night,
         weather_partly,

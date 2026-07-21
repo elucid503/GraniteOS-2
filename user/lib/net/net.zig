@@ -5,12 +5,15 @@ const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
 const stream = @import("../io/stream.zig");
 const sys = @import("../syscall/sys.zig");
+const time = @import("../time.zig");
 const netaddr = @import("addr.zig");
 
 const Handle = cap.Handle;
 const Error = sys.Error;
+const RecvError = Error || error{Timeout};
 
 const buffer_size = 65536;
+const default_read_timeout_ms = 30_000;
 
 pub const Socket = struct {
 
@@ -20,6 +23,7 @@ pub const Socket = struct {
 
     base: usize,
     sid: u64,
+    read_timeout_ms: u64 = default_read_timeout_ms,
 
     /// Resolve "netstack". Opens a stream socket and connects it to the given address and port, blocking until the connection is established or fails.
     pub fn connect(authority: Handle, addr: u32, port: u16) Error!Socket {
@@ -174,9 +178,10 @@ pub const Socket = struct {
     }
 
     /// Read up to `out.len` bytes, blocking until data (or the peer's FIN) arrives. Returns 0 only at true EOF.
-    pub fn recv(self: *Socket, out: []u8) Error!usize {
+    pub fn recv(self: *Socket, out: []u8) RecvError!usize {
 
         const amount = @min(out.len, buffer_size);
+        const started = time.now_ms();
 
         while (true) {
 
@@ -184,7 +189,18 @@ pub const Socket = struct {
 
                 error.WouldBlock => {
 
-                    _ = try sys.wait(self.readiness);
+                    if (self.read_timeout_ms == 0) {
+
+                        _ = try sys.wait(self.readiness);
+
+                    } else {
+
+                        if (time.now_ms() -% started >= self.read_timeout_ms) return error.Timeout;
+
+                        time.sleep_ms(10);
+
+                    }
+
                     continue;
 
                 },
@@ -204,6 +220,12 @@ pub const Socket = struct {
             return length;
 
         }
+
+    }
+
+    pub fn set_read_timeout(self: *Socket, timeout_ms: u64) void {
+
+        self.read_timeout_ms = timeout_ms;
 
     }
 
