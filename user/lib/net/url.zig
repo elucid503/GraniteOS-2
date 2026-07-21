@@ -11,6 +11,12 @@ pub const Url = struct {
 
 };
 
+pub fn is_tls(scheme: []const u8) bool {
+
+    return std.mem.eql(u8, scheme, "https");
+
+}
+
 pub fn parse(text: []const u8) ?Url {
 
     const sep = "://";
@@ -18,7 +24,13 @@ pub fn parse(text: []const u8) ?Url {
     const scheme = text[0..scheme_end];
 
     if (scheme.len == 0) return null;
-    if (!std.mem.eql(u8, scheme, "http")) return null; // the only scheme this stack's client speaks
+
+    const default_port: u16 = if (std.mem.eql(u8, scheme, "http"))
+        80
+    else if (std.mem.eql(u8, scheme, "https"))
+        443
+    else
+        return null;
 
     const rest = text[scheme_end + sep.len ..];
 
@@ -31,7 +43,7 @@ pub fn parse(text: []const u8) ?Url {
     if (authority.len == 0) return null;
 
     var host = authority;
-    var port: u16 = 80;
+    var port: u16 = default_port;
 
     if (std.mem.indexOfScalar(u8, authority, ':')) |colon| {
 
@@ -59,6 +71,17 @@ test "parses host, default port and path" {
     try testing.expectEqualStrings("example.com", url.host);
     try testing.expectEqual(@as(u16, 80), url.port);
     try testing.expectEqualStrings("/", url.path);
+
+}
+
+test "parses https default port" {
+
+    const url = parse("https://example.com/a") orelse return error.TestUnexpectedResult;
+
+    try testing.expectEqualStrings("https", url.scheme);
+    try testing.expectEqual(@as(u16, 443), url.port);
+    try testing.expectEqualStrings("/a", url.path);
+    try testing.expect(is_tls(url.scheme));
 
 }
 

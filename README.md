@@ -44,9 +44,11 @@ the Audio app and `play <file.wav>` support PCM WAV files with 8- or 16-bit mono
 or stereo samples at standard VirtIO sample rates. A virtio-net NIC is attached by
 default (disable with `-Dnet=false`); Flint starts the net driver and the netstack
 server, a userspace ARP/IPv4/ICMP/TCP stack reachable at `10.0.2.15` on QEMU's
-user-mode network, and `fetch <ip> <port> [path]` does a real HTTP/1.0 GET over it
-(the host itself is reachable from the guest at `10.0.2.2`; `-netdev`'s
-`hostfwd=tcp::5555-:5555` reaches a guest listener from the host). Type `exit` at
+user-mode network, and `fetch <url>` does a real HTTP/1.0 or HTTPS GET over it
+(e.g. `fetch https://example.com/`; rebuild before HTTPS demos so the wall clock
+from `build_epoch_s` is current). QEMU attaches virtio-rng for TLS entropy. The
+host itself is reachable from the guest at `10.0.2.2`; `-netdev`'s
+`hostfwd=tcp::5555-:5555` reaches a guest listener from the host. Type `exit` at
 the `marble [/] >` prompt to watch the supervisor restart Marble; quit QEMU with
 `Ctrl-A` then `x`.
 `scripts/m6.sh` drives Marble over serial; `scripts/m9.sh` tests the GUI

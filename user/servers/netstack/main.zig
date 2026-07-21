@@ -14,6 +14,7 @@ const icmp = @import("icmp.zig");
 const tcp = @import("tcp.zig");
 const udp = @import("udp.zig");
 const dns = @import("dns.zig");
+const ntp = @import("ntp.zig");
 const link = @import("link.zig");
 
 const Handle = cap.Handle;
@@ -83,6 +84,7 @@ fn run() !void {
 
     tcp.init(&deliver_readiness);
     dns.init(&deliver_readiness);
+    ntp.init();
     arp.set_learned_callback(&tcp.retry_pending_arp);
 
     try lib.stream.register_name("netstack", cap.server.endpoint);
@@ -122,6 +124,7 @@ fn pump() void {
 
     tcp.tick(now);
     dns.tick(now);
+    ntp.tick(now);
 
 }
 
@@ -206,6 +209,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.socket.poll => poll_socket(badge, in, out),
         proto.socket.local_addr => local_addr_socket(badge, in, out),
         proto.socket.resolve => resolve_host(badge, in, out),
+        proto.socket.wall_offset => wall_offset_reply(out),
 
         else => -7,
 
@@ -390,6 +394,14 @@ fn resolve_host(badge: u64, in: *const Message, out: *Message) i64 {
         .no_resources => -3,
 
     };
+
+}
+
+fn wall_offset_reply(out: *Message) i64 {
+
+    out.data[1] = @bitCast(ntp.offset());
+
+    return 0;
 
 }
 

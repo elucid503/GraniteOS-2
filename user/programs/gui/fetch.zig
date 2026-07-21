@@ -13,6 +13,8 @@ const ui = lib.ui;
 
 const Rect = gfx.Rect;
 
+pub const std_options = lib.rng.std_options;
+
 pub const app_meta = .{
 
     .title = "Fetch",
@@ -99,6 +101,7 @@ var error_len: usize = 0;
 var elapsed_ms: u64 = 0;
 
 var request_port: u16 = 0;
+var request_tls: bool = false;
 var request_path: [path_storage_size]u8 = undefined;
 var request_path_len: usize = 0;
 var request_host: [host_storage_size]u8 = undefined;
@@ -425,13 +428,6 @@ fn start_fetch() void {
 
     };
 
-    if (std.mem.startsWith(u8, text, "https://")) {
-
-        fail("https is not supported (http only)");
-        return;
-
-    }
-
     const parsed = lib.url.parse(text) orelse {
 
         fail("invalid url");
@@ -455,6 +451,7 @@ fn start_fetch() void {
     lock.acquire();
 
     request_port = port;
+    request_tls = lib.url.is_tls(parsed.scheme);
 
     request_path_len = @min(parsed.path.len, request_path.len);
     @memcpy(request_path[0..request_path_len], parsed.path[0..request_path_len]);
@@ -499,7 +496,7 @@ fn notify_ui() void {
 
 // --- worker thread ---
 
-const worker_stack_pages = 16;
+const worker_stack_pages = 64; // TLS handshake needs ~32 KiB stack + Session locals
 const page_size = 4096;
 
 fn start_worker() !void {
@@ -536,6 +533,7 @@ fn do_fetch() void {
     lock.acquire();
 
     const port = request_port;
+    const use_tls = request_tls;
 
     var path_local: [path_storage_size]u8 = undefined;
     const path_len = request_path_len;
@@ -551,18 +549,8 @@ fn do_fetch() void {
 
     const start_ms = lib.time.now_ms();
 
-    var socket = lib.net.Socket.connect_host(cap.memory, host_local[0..host_len], port) catch |failure| {
-
-        fail(@errorName(failure));
-        return;
-
-    };
-
-    defer socket.close();
-
-    // Include port in Host header when non-default for name-based virtual hosts.
     var host_header_buffer: [host_storage_size + 8]u8 = undefined;
-    const host_header = if (port == 80)
+    const host_header = if (port == 80 or port == 443)
         host_local[0..host_len]
     else
         std.fmt.bufPrint(&host_header_buffer, "{s}:{d}", .{ host_local[0..host_len], port }) catch host_local[0..host_len];
@@ -580,6 +568,42 @@ fn do_fetch() void {
 
     };
 
+    if (use_tls) {
+
+        var heap = lib.mem.Heap.init(cap.memory);
+        var session: lib.tls.Session = undefined;
+
+        lib.tls.Session.connect_host(&session, cap.memory, &heap, host_local[0..host_len], port) catch |failure| {
+
+            fail(@errorName(failure));
+            return;
+
+        };
+
+        defer session.close();
+
+        session.send_all(request) catch |failure| {
+
+            fail(@errorName(failure));
+            return;
+
+        };
+
+        pump_recv(session_recv, &session, start_ms);
+
+        return;
+
+    }
+
+    var socket = lib.net.Socket.connect_host(cap.memory, host_local[0..host_len], port) catch |failure| {
+
+        fail(@errorName(failure));
+        return;
+
+    };
+
+    defer socket.close();
+
     socket.send_all(request) catch |failure| {
 
         fail(@errorName(failure));
@@ -587,11 +611,35 @@ fn do_fetch() void {
 
     };
 
+    pump_recv(socket_recv, &socket, start_ms);
+
+}
+
+const RecvFn = *const fn (ctx: *anyopaque, buf: []u8) anyerror!usize;
+
+fn socket_recv(ctx: *anyopaque, buf: []u8) anyerror!usize {
+
+    const socket: *lib.net.Socket = @ptrCast(@alignCast(ctx));
+
+    return socket.recv(buf);
+
+}
+
+fn session_recv(ctx: *anyopaque, buf: []u8) anyerror!usize {
+
+    const session: *lib.tls.Session = @ptrCast(@alignCast(ctx));
+
+    return session.recv(buf);
+
+}
+
+fn pump_recv(recv_fn: RecvFn, ctx: *anyopaque, start_ms: u64) void {
+
     var chunk: [recv_chunk]u8 = undefined;
 
     while (true) {
 
-        const length = socket.recv(&chunk) catch |failure| {
+        const length = recv_fn(ctx, &chunk) catch |failure| {
 
             lock.acquire();
             const have_data = response_len > 0;

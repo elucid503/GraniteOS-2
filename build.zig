@@ -463,6 +463,9 @@ fn add_qemu_step(b: *std.Build, kernel: std.Build.LazyPath, initrd: ?std.Build.L
 
     }
 
+    // Virtio-rng for freestanding TLS CSPRNG seeding (device id 4).
+    run.addArgs(&.{ "-device", "virtio-rng-device" });
+
     // GUI boots open a host display window with the serial console on stdio; everything else is headless.
 
     if (step.gui) {

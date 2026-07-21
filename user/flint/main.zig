@@ -44,11 +44,13 @@ var launcher_endpoint: Handle = 0;
 var net_endpoint: Handle = 0;
 var netstack_endpoint: Handle = 0;
 var metrics_endpoint: Handle = 0;
+var rng_endpoint: Handle = 0;
 
 var console_uart: lib.dtb.Uart = undefined;
 var block_device: ?lib.dtb.Device = null;
 var audio_device: ?lib.dtb.Device = null;
 var net_device: ?lib.dtb.Device = null;
+var rng_device: ?lib.dtb.Device = null;
 
 // GUI stack spawns only when DTB reports virtio-gpu plus virtio input.
 
@@ -74,6 +76,7 @@ const audio_id: u64 = 14;
 const net_id: u64 = 15;
 const netstack_id: u64 = 16;
 const metrics_id: u64 = 17;
+const rng_id: u64 = 18;
 
 // The filesystem attaches its block session under this badge; badge 0 stays the shared console/logging session.
 
@@ -133,6 +136,7 @@ fn run(arg: u64) !void {
     net_endpoint = try sys.create(.endpoint, 0, 0);
     netstack_endpoint = try sys.create(.endpoint, 0, 0);
     metrics_endpoint = try sys.create(.endpoint, 0, 0);
+    rng_endpoint = try sys.create(.endpoint, 0, 0);
 
     try spawn_naming();
     try spawn_console();
@@ -154,6 +158,13 @@ fn run(arg: u64) !void {
 
         // The driver registers "audio" itself after a successful bind so a failed init never leaves a dead name that hangs clients forever on attach.
         try spawn_audio();
+
+    }
+
+    if (rng_device != null) {
+
+        try spawn_rng();
+        try lib.stream.register_with(naming_endpoint, "rng", rng_endpoint);
 
     }
 
@@ -217,6 +228,7 @@ fn start_gui() !void {
 const virtio_magic: u32 = 0x7472_6976;
 const device_id_net: u32 = 1;
 const device_id_block: u32 = 2;
+const device_id_rng: u32 = 4;
 const device_id_gpu: u32 = 16;
 const device_id_input: u32 = 18;
 const device_id_sound: u32 = 25;
@@ -240,6 +252,12 @@ fn find_virtio_devices(dtb: usize) void {
             device_id_block => {
 
                 if (block_device == null) block_device = node;
+
+            },
+
+            device_id_rng => {
+
+                if (rng_device == null) rng_device = node;
 
             },
 
@@ -435,6 +453,45 @@ fn spawn_files() !void {
         .data3 = if (block_device != null) 1 else 0,
 
     }, &.{ memory, init_endpoint, report, block });
+
+}
+
+fn spawn_rng() !void {
+
+    const device = rng_device orelse return error.NotFound;
+
+    const image = bundle.find("rng") orelse return error.NotFound;
+    const page = device.base & ~@as(usize, page_size - 1);
+    const window = try sys.create_device_region(page, page_size, cap.flint.devices);
+    const interrupt = try sys.create(.interrupt, device.interrupt_line, cap.flint.interrupts);
+    const memory = try sys.create(.memory_authority, child_budget, cap.flint.memory);
+    const init_endpoint = try sys.create(.endpoint, 0, 0);
+    const report = try sys.copy(supervisor_endpoint, rng_id);
+
+    const grants = [_]Handle{
+
+        rng_endpoint,
+        rng_endpoint,
+        rng_endpoint,
+        naming_endpoint,
+        memory,
+        init_endpoint,
+        report,
+        window,
+        interrupt,
+        cap.flint.dma,
+
+    };
+
+    try spawn_detached(.{
+
+        .image = image,
+        .authority = memory,
+        .args = &.{"rng"},
+        .grants = &grants,
+        .data3 = device.base - page,
+
+    }, &.{ window, interrupt, memory, init_endpoint, report });
 
 }
 

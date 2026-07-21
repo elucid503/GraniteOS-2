@@ -327,6 +327,7 @@ pub const socket = struct {
     pub const local_addr: u16 = 11; // request: sid                                          reply: addr (data[1]), port (data[2])
     pub const detach: u16 = 12; // request: -                                           reply: status (releases every socket this session owns)
     pub const resolve: u16 = 13; // request: sid-less: offset, length of hostname in session buffer   reply: addr (data[1]) | WouldBlock
+    pub const wall_offset: u16 = 14; // request: -   reply: NTP wall offset seconds (data[1] as i64 bits)
 
     pub const kind_stream: u64 = 1;
     pub const kind_dgram: u64 = 2;
@@ -339,6 +340,19 @@ pub const socket = struct {
     pub const accept_ready: u64 = 16;
     pub const err: u64 = 32;
     pub const resolved: u64 = 64;
+
+};
+
+// Virtio-rng entropy driver: attach a buffer, then read random bytes into it.
+
+pub const entropy = struct {
+
+    pub const interface_id: u32 = 0x454e_5452; // "ENTR"
+    pub const version: u32 = 1;
+
+    pub const attach: u16 = 1; // request: capacity, buffer Region   reply: status
+    pub const read: u16 = 2; // request: length   reply: bytes written (data[1])
+    pub const detach: u16 = 3; // request: -   reply: status
 
 };
 

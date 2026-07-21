@@ -80,7 +80,7 @@ const default_descriptions = std.StaticStringMap([]const u8).initComptime(.{
     .{ "rename", "Move a file or directory" },
     .{ "perms", "Set file write permission" },
     .{ "play", "Play a PCM WAV audio file" },
-    .{ "fetch", "Fetch a URL over TCP (HTTP/1.0)" },
+    .{ "fetch", "Fetch HTTP/HTTPS URL over TCP/TLS" },
 
 });
 
