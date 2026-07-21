@@ -9,6 +9,7 @@ const fs = @import("../fs/fs.zig");
 const keymap = @import("../keymap.zig");
 const proto = @import("../ipc/proto.zig");
 
+const handler = @import("../file/handler.zig");
 const ui = @import("ui.zig");
 
 const Face = text_mod.Face;
@@ -26,6 +27,7 @@ pub const Mode = enum {
 pub const Filter = enum {
 
     all,
+    image,
     png,
     wav,
 
@@ -564,8 +566,9 @@ pub const FilePicker = struct {
         return switch (self.filter) {
 
             .all => true,
+            .image => handler.is_kind(name, .image),
             .png => has_extension(name, "png"),
-            .wav => has_extension(name, "wav"),
+            .wav => has_extension(name, "wav") or handler.is_kind(name, .audio),
 
         };
 

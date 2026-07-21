@@ -6,6 +6,7 @@ const build_options = @import("build_options");
 const cap = @import("../cap/cap.zig");
 const gfx = @import("../draw/draw.zig");
 const fs = @import("../fs/fs.zig");
+const handler = @import("../file/handler.zig");
 const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
 const ui = @import("../ui/ui.zig");
@@ -277,7 +278,7 @@ pub fn refresh_if_changed() bool {
     const file = client.open_path(config_path, 0) catch return false;
     defer client.close_file(file) catch {};
 
-    var buffer: [256]u8 = undefined;
+    var buffer: [512]u8 = undefined;
     const read = client.read(file, 0, &buffer) catch return false;
 
     const generation = config_generation(buffer[0..read]);
@@ -300,7 +301,7 @@ pub fn force_reload() bool {
     const file = client.open_path(config_path, 0) catch return false;
     defer client.close_file(file) catch {};
 
-    var buffer: [256]u8 = undefined;
+    var buffer: [512]u8 = undefined;
     const read = client.read(file, 0, &buffer) catch return false;
 
     parse_config(buffer[0..read]);
@@ -322,9 +323,9 @@ pub fn save() void {
     var client = fs.Client.connect(cap.memory) catch return;
     defer client.close();
 
-    var buffer: [160]u8 = undefined;
+    var buffer: [512]u8 = undefined;
     const stamp = loaded_generation +% 1;
-    const text = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\ntemp={d}\nstamp={d}\n", .{
+    const head = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\ntemp={d}\nstamp={d}\n", .{
 
         @intFromEnum(active_theme),
         tz_offset_minutes,
@@ -332,6 +333,9 @@ pub fn save() void {
         stamp,
 
     }) catch return;
+
+    const open_len = handler.write_config(buffer[head.len..]);
+    const text = buffer[0 .. head.len + open_len];
 
     if (client.open_path(config_path, 0)) |file| {
 
@@ -394,6 +398,9 @@ pub fn apply_event(event: events.Event) bool {
     if (temp_value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(temp_value);
 
     tz_offset_minutes = event.x;
+
+    // File associations are not packed in the event; re-read settings.cfg for open.*= lines.
+    _ = force_reload();
 
     return true;
 
@@ -693,6 +700,8 @@ fn config_generation(text: []const u8) u64 {
 
 fn parse_config(text: []const u8) void {
 
+    handler.reset_defaults();
+
     var lines = std.mem.tokenizeScalar(u8, text, '\n');
 
     while (lines.next()) |line| {
@@ -712,6 +721,10 @@ fn parse_config(text: []const u8) void {
             const value = std.fmt.parseInt(u8, line[5..], 10) catch continue;
 
             if (value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(value);
+
+        } else if (std.mem.startsWith(u8, line, "open.")) {
+
+            handler.apply_config_line(line);
 
         }
 

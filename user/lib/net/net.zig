@@ -13,7 +13,8 @@ const Error = sys.Error;
 const RecvError = Error || error{Timeout};
 
 const buffer_size = 65536;
-const default_read_timeout_ms = 30_000;
+// 0 = park on readiness forever (preferred for bulk transfer). Non-zero enables a soft deadline.
+const default_read_timeout_ms: u64 = 0;
 
 pub const Socket = struct {
 
@@ -189,15 +190,21 @@ pub const Socket = struct {
 
                 error.WouldBlock => {
 
+                    if (self.read_timeout_ms != 0 and time.now_ms() -% started >= self.read_timeout_ms) return error.Timeout;
+
+                    // Data may already be buffered with a consumed/missed notify: poll before parking.
+                    const bits = self.poll_bits() catch 0;
+
+                    if (bits & (proto.socket.readable | proto.socket.closed | proto.socket.err) != 0) continue;
+
                     if (self.read_timeout_ms == 0) {
 
                         _ = try sys.wait(self.readiness);
 
                     } else {
 
-                        if (time.now_ms() -% started >= self.read_timeout_ms) return error.Timeout;
-
-                        time.sleep_ms(10);
+                        // Soft deadline: short sleep so Timeout can fire if notify is lost.
+                        time.sleep_ms(1);
 
                     }
 

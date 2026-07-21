@@ -88,14 +88,14 @@ pub fn try_pull_wall_offset() void {
 
     }) catch return;
 
+    defer _ = ipc.request(endpoint, proto.socket.detach, &.{}, &.{}) catch {};
+
     const reply = ipc.request(endpoint, proto.socket.wall_offset, &.{}, &.{}) catch return;
 
     // data[1] holds signed offset via bitcast.
     const offset: i64 = @bitCast(reply.data[1]);
 
     wall_offset_s = offset;
-
-    _ = ipc.request(endpoint, proto.socket.detach, &.{}, &.{}) catch {};
 
 }
 

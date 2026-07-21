@@ -8,6 +8,7 @@ test {
     _ = @import("lib").draw.image;
     _ = @import("lib").draw.path;
     _ = @import("lib").draw.png;
+    _ = @import("lib").handler;
     _ = @import("lib").draw.raster;
     _ = @import("lib").draw.round;
     _ = @import("lib").draw.stroke;

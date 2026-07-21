@@ -78,7 +78,7 @@ var connection: lib.window.Connection = undefined;
 var desktop: lib.window.Window = undefined;
 var context_menu_window: ?lib.window.Window = null;
 
-var wallpaper_image: ?lib.draw.png.Image = null;
+var wallpaper_image: ?lib.draw.image.Buffer = null;
 var wallpaper_theme: ?lib.prefs.ThemeId = null;
 var wallpaper_arena: []u8 = &.{};
 
@@ -860,7 +860,7 @@ fn reload_wallpaper() void {
     var fba = std.heap.FixedBufferAllocator.init(wallpaper_arena);
     const bytes = bundle.find(lib.prefs.wallpaper_bundle_name(theme)) orelse return;
 
-    wallpaper_image = lib.draw.png.decode(fba.allocator(), bytes) catch null;
+    wallpaper_image = lib.draw.image.decode(fba.allocator(), bytes) catch null;
 
 }
 
@@ -880,7 +880,7 @@ fn paint_wallpaper(surface: *const gfx.Surface, rect: ?Rect) void {
 
     if (wallpaper_image) |image| {
 
-        const view = lib.draw.image.Image.from_png(image);
+        const view = lib.draw.image.Image.from_buffer(image);
         const full = surface.bounds();
 
         if (rect) |region| {

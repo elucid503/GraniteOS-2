@@ -273,6 +273,7 @@ var busy: u32 = 0;
 
 var lock: ipc.Lock = .{};
 var running: u32 = 1;
+var worker_alive: u32 = 0;
 var tick: u32 = 0;
 var request_pending: u32 = 0;
 var pending_task: Task = .none;
@@ -347,6 +348,15 @@ fn run() !void {
                 events.kind_window_close => {
 
                     @atomicStore(u32, &running, 0, .release);
+
+                    // Let the worker finish or exit so netstack/FS sessions detach cleanly.
+                    var waits: usize = 0;
+
+                    while (@atomicLoad(u32, &worker_alive, .acquire) != 0 and waits < 500) : (waits += 1) {
+
+                        lib.time.sleep_ms(10);
+
+                    }
 
                     if (files) |*client| client.close();
 
@@ -1102,14 +1112,20 @@ fn start_worker() !void {
 
 fn worker() callconv(.c) noreturn {
 
+    @atomicStore(u32, &worker_alive, 1, .release);
+
     var heap = lib.mem.Heap.init(cap.memory);
 
     while (@atomicLoad(u32, &running, .acquire) != 0) {
 
-        lib.time.sleep_ms(20);
+        if (@atomicRmw(u32, &request_pending, .Xchg, 0, .acquire) == 0) {
+
+            lib.time.sleep_ms(10);
+            continue;
+
+        }
 
         if (@atomicLoad(u32, &running, .acquire) == 0) break;
-        if (@atomicRmw(u32, &request_pending, .Xchg, 0, .acquire) == 0) continue;
 
         const task = pending_task;
 
@@ -1121,6 +1137,7 @@ fn worker() callconv(.c) noreturn {
 
     }
 
+    @atomicStore(u32, &worker_alive, 0, .release);
     lib.start.exit();
 
 }
@@ -1881,18 +1898,29 @@ fn worker_download(heap: *lib.mem.Heap) !void {
 
     }
 
-    var chunk: [16 * 1024]u8 = undefined;
+    // Match FS payload_capacity: fill from the socket before each write to cut IPC round-trips.
+    var chunk: [lib.fs.payload_capacity]u8 = undefined;
 
     while (expected == null or offset < expected.?) {
 
-        const limit = if (expected) |length| @min(chunk.len, @as(usize, @intCast(length - offset))) else chunk.len;
-        const length = try connection_http.recv(chunk[0..limit]);
+        const want = if (expected) |length| @min(chunk.len, @as(usize, @intCast(length - offset))) else chunk.len;
+        var filled: usize = 0;
 
-        if (length == 0) break;
+        while (filled < want) {
 
-        const written = try client.write(file, offset, chunk[0..length]);
+            const length = try connection_http.recv(chunk[filled..want]);
 
-        if (written != length) return error.WriteFailed;
+            if (length == 0) break;
+
+            filled += length;
+
+        }
+
+        if (filled == 0) break;
+
+        const written = try client.write(file, offset, chunk[0..filled]);
+
+        if (written != filled) return error.WriteFailed;
 
         offset += written;
 

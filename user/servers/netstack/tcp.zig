@@ -33,7 +33,7 @@ const flag_rst: u8 = 0x04;
 const flag_ack: u8 = 0x10;
 
 const send_buf_capacity = 16384;
-const recv_buf_capacity = 16384;
+const recv_buf_capacity = 65536;
 const max_connections = 32;
 const max_backlog = 4;
 const mss_cap: u16 = 1024;
@@ -343,9 +343,17 @@ pub fn recv(index: u16, out: []u8) i64 {
 
     if (tcb.err) return -8;
 
+    const free_before = tcb.recv.free_space();
     const n = tcb.recv.read(out);
 
-    if (n > 0) return @intCast(n);
+    if (n > 0) {
+
+        // Peer may be blocked on a zero/small window; advertise newly freed space.
+        maybe_window_update(tcb, free_before);
+
+        return @intCast(n);
+
+    }
 
     if (tcb.fin_received) return 0; // EOF: the peer is done sending and we've drained everything.
 
@@ -1006,6 +1014,29 @@ fn rcv_nxt(tcb: *const Tcb) u32 {
 }
 
 // Segment construction
+
+/// Pure ACK when the app drains enough that the peer may have been window-blocked.
+fn maybe_window_update(tcb: *Tcb, free_before: usize) void {
+
+    switch (tcb.state) {
+
+        .established, .fin_wait_1, .fin_wait_2, .close_wait => {},
+        else => return,
+
+    }
+
+    const free_after = tcb.recv.free_space();
+
+    if (free_after <= free_before) return;
+
+    // Zero-window recovery, or at least one MSS of newly opened space.
+    if (free_before == 0 or free_after - free_before >= mss_cap) {
+
+        build_and_send(tcb, flag_ack, snd_nxt(tcb), &.{});
+
+    }
+
+}
 
 fn build_and_send(tcb: *Tcb, flags: u8, seq: u32, payload: []const u8) void {
 

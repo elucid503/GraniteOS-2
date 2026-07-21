@@ -1,4 +1,4 @@
-// Image Viewer: display PNG files. Opens a staged path from Files (prefs open-path) or prompts with the shared file picker.
+// Image Viewer: display PNG files. Opens a staged path from Files or the shared file picker.
 
 const std = @import("std");
 
@@ -30,7 +30,6 @@ const pad: i32 = 12;
 const radius: i32 = 8;
 const max_path = lib.file_picker.max_path;
 const max_file_bytes = 6 * 1024 * 1024;
-const decode_arena_bytes = 12 * 1024 * 1024;
 
 var font: lib.draw.text.Face = undefined;
 var connection: lib.window.Connection = undefined;
@@ -42,16 +41,11 @@ var picker: lib.file_picker.FilePicker = undefined;
 var path_storage: [max_path]u8 = undefined;
 var file_path: []const u8 = "";
 
-var file_region: cap.Handle = 0;
-var file_base: usize = 0;
-var file_buf: []u8 = &.{};
+// File bytes and decoded pixels share this heap; file storage is freed after decode.
+var decode_heap: lib.mem.Heap = .{ .authority = 0 };
 
-var decode_region: cap.Handle = 0;
-var decode_base: usize = 0;
-var decode_arena: []u8 = &.{};
-
-var image: ?lib.draw.png.Image = null;
-var status: []const u8 = "Open a PNG image";
+var image: ?lib.draw.image.Buffer = null;
+var status: []const u8 = "Open an image";
 var hover: i32 = -1;
 
 pub fn main(_: []const []const u8) u8 {
@@ -74,7 +68,7 @@ fn run() !void {
     _ = lib.draw.round.masks_for(radius);
     _ = lib.draw.round.masks_for(6);
 
-    try alloc_buffers();
+    decode_heap = lib.mem.Heap.init(cap.memory);
 
     if (lib.fs.Client.connect(cap.memory)) |opened| {
 
@@ -203,18 +197,6 @@ fn run() !void {
 
 }
 
-fn alloc_buffers() !void {
-
-    file_region = try sys.create(.region, max_file_bytes, cap.memory);
-    file_base = try sys.map(cap.self_space, file_region, 0, sys.read | sys.write);
-    file_buf = @as([*]u8, @ptrFromInt(file_base))[0..max_file_bytes];
-
-    decode_region = try sys.create(.region, decode_arena_bytes, cap.memory);
-    decode_base = try sys.map(cap.self_space, decode_region, 0, sys.read | sys.write);
-    decode_arena = @as([*]u8, @ptrFromInt(decode_base))[0..decode_arena_bytes];
-
-}
-
 fn load_staged_path() bool {
 
     var buffer: [max_path]u8 = undefined;
@@ -239,7 +221,7 @@ fn open_picker() void {
 
     const start = if (file_path.len != 0) parent_dir(file_path) else "/root/user";
 
-    picker.show_open(handle, &font, .png, start);
+    picker.show_open(handle, &font, .image, start);
 
 }
 
@@ -302,6 +284,17 @@ fn key_down(code: u16) void {
 
 }
 
+fn clear_image() void {
+
+    if (image) |*img| {
+
+        img.deinit(decode_heap.allocator());
+        image = null;
+
+    }
+
+}
+
 fn load_image(path: []const u8) void {
 
     const handle = if (client) |*c| c else {
@@ -316,10 +309,44 @@ fn load_image(path: []const u8) void {
     @memcpy(path_storage[0..length], path[0..length]);
     file_path = path_storage[0..length];
 
+    const file_info = handle.stat(file_path) catch {
+
+        status = "Cannot open file";
+        clear_image();
+        return;
+
+    };
+
+    if (file_info.length == 0) {
+
+        status = "Empty file";
+        clear_image();
+        return;
+
+    }
+
+    if (file_info.length > max_file_bytes) {
+
+        status = "Image file is too large";
+        clear_image();
+        return;
+
+    }
+
+    const file_len: usize = @intCast(file_info.length);
+    const file_bytes = decode_heap.alloc(file_len) catch {
+
+        status = "Out of memory for image buffers";
+        clear_image();
+        return;
+
+    };
+    defer decode_heap.free(file_bytes);
+
     const file = handle.open_path(file_path, 0) catch {
 
         status = "Cannot open file";
-        image = null;
+        clear_image();
         return;
 
     };
@@ -328,12 +355,12 @@ fn load_image(path: []const u8) void {
     var offset: u64 = 0;
     var chunks: usize = 0;
 
-    while (offset < max_file_bytes) {
+    while (offset < file_len) {
 
-        const read = handle.read(file, offset, file_buf[@intCast(offset)..]) catch {
+        const read = handle.read(file, offset, file_bytes[@intCast(offset)..]) catch {
 
             status = "Read failed";
-            image = null;
+            clear_image();
             return;
 
         };
@@ -350,25 +377,33 @@ fn load_image(path: []const u8) void {
     if (offset == 0) {
 
         status = "Empty file";
-        image = null;
+        clear_image();
         return;
 
     }
 
-    if (offset < 8 or !std.mem.eql(u8, file_buf[0..8], &[_]u8{ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a })) {
+    const payload = file_bytes[0..@intCast(offset)];
 
-        status = "Not a PNG file";
-        image = null;
+    if (lib.draw.image.detect(payload) == null) {
+
+        status = "Not a supported image";
+        clear_image();
         return;
 
     }
 
-    // Fresh arena per decode so previous pixel buffers are abandoned cleanly.
-    var fba = std.heap.FixedBufferAllocator.init(decode_arena);
+    clear_image();
 
-    image = lib.draw.png.decode(fba.allocator(), file_buf[0..@intCast(offset)]) catch {
+    image = lib.draw.image.decode(decode_heap.allocator(), payload) catch |err| {
 
-        status = "Not a supported PNG";
+        status = switch (err) {
+
+            error.OutOfMemory => "Image too large to decode",
+            error.Truncated => "Image file is incomplete",
+            error.Unsupported => "Unsupported image encoding",
+            else => "Not a supported image",
+
+        };
         image = null;
         return;
 
@@ -379,7 +414,7 @@ fn load_image(path: []const u8) void {
         if (img.width == 0 or img.height == 0 or img.pixels.len == 0) {
 
             status = "Empty image";
-            image = null;
+            clear_image();
             return;
 
         }
@@ -422,7 +457,7 @@ fn paint() void {
 
     if (image) |img| {
 
-        const view = lib.draw.image.Image.from_png(img);
+        const view = lib.draw.image.Image.from_buffer(img);
         const inner = pane.inset(8);
 
         view.draw_fit(surface, inner);

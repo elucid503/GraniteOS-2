@@ -25,6 +25,7 @@ pub const home = lucide("house");
 pub const arrow_up = lucide("arrow-up");
 pub const search = lucide("search");
 pub const clock = lucide("clock");
+pub const calendar = lucide("calendar");
 pub const bell = lucide("bell");
 pub const cpu = lucide("cpu");
 pub const disk = lucide("hard-drive");
@@ -83,6 +84,7 @@ const catalog = [_]Entry{
     .{ .name = "home", .svg = home },
     .{ .name = "search", .svg = search },
     .{ .name = "clock", .svg = clock },
+    .{ .name = "calendar", .svg = calendar },
     .{ .name = "cpu", .svg = cpu },
     .{ .name = "disk", .svg = disk },
     .{ .name = "memory", .svg = memory },

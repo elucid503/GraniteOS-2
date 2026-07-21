@@ -20,6 +20,7 @@ pub const draw = @import("draw/draw.zig");
 pub const gfx = @import("draw/draw.zig");
 pub const ui = @import("ui/ui.zig");
 pub const file_picker = @import("ui/file_picker.zig");
+pub const handler = @import("file/handler.zig");
 pub const anim = @import("gfx/anim.zig");
 pub const prefs = @import("gfx/prefs.zig");
 pub const notify = @import("gfx/notify.zig");

@@ -138,7 +138,7 @@ var thumb_file: [thumb_file_cap]u8 = undefined;
 var thumb_decode: [thumb_decode_cap]u8 = undefined;
 var thumb_path: [max_path]u8 = undefined;
 var thumb_path_len: usize = 0;
-var thumb_image: ?lib.draw.png.Image = null;
+var thumb_image: ?lib.draw.image.Buffer = null;
 var thumb_valid = false;
 
 const MenuAction = enum {
@@ -1839,16 +1839,9 @@ fn open_file(entry: Entry, index: usize) void {
     var path_buffer: [max_path]u8 = undefined;
     const path = path_at(index, &path_buffer) orelse return;
 
-    if (is_image_name(entry.name[0..entry.name_len])) {
+    if (lib.handler.match(entry.name[0..entry.name_len])) |slot| {
 
-        lib.wm.launch_with_path("viewer", path);
-        return;
-
-    }
-
-    if (lib.file_picker.has_extension(entry.name[0..entry.name_len], "wav")) {
-
-        lib.wm.launch_with_path("audio-gui", path);
+        lib.wm.launch_with_path(slot.app(), path);
         return;
 
     }
@@ -1867,7 +1860,7 @@ fn open_file(entry: Entry, index: usize) void {
 
 fn is_image_name(name: []const u8) bool {
 
-    return lib.file_picker.has_extension(name, "png");
+    return lib.handler.is_kind(name, .image);
 
 }
 
@@ -2626,7 +2619,7 @@ fn paint_grid_cell(surface: *const gfx.Surface, rect: Rect, entry: Entry, index:
 
             if (thumb_image) |img| {
 
-                const view = lib.draw.image.Image.from_png(img);
+                const view = lib.draw.image.Image.from_buffer(img);
                 view.draw_fit(surface, preview_rect.inset(4));
                 drew_image = true;
 
@@ -2740,7 +2733,7 @@ fn paint_side_panel(surface: *const gfx.Surface, width: i32, height: i32) void {
 
             if (thumb_image) |img| {
 
-                const view = lib.draw.image.Image.from_png(img);
+                const view = lib.draw.image.Image.from_buffer(img);
                 view.draw_fit(surface, image_rect.inset(6));
 
             }
@@ -2939,8 +2932,17 @@ fn entry_icon(entry: Entry) []const u8 {
 
     const name = entry.name[0..entry.name_len];
 
-    if (is_image_name(name)) return lib.icons.image;
-    if (lib.file_picker.has_extension(name, "wav")) return lib.icons.music;
+    if (lib.handler.match(name)) |slot| {
+
+        return switch (slot.kind) {
+
+            .image => lib.icons.image,
+            .audio => lib.icons.music,
+            .text => lib.icons.file,
+
+        };
+
+    }
 
     return lib.icons.file;
 
@@ -2986,7 +2988,7 @@ fn ensure_thumb(index: usize, entry: Entry) bool {
 
     var fba = std.heap.FixedBufferAllocator.init(thumb_decode[0..]);
 
-    thumb_image = lib.draw.png.decode(fba.allocator(), thumb_file[0..read]) catch {
+    thumb_image = lib.draw.image.decode(fba.allocator(), thumb_file[0..read]) catch {
 
         thumb_valid = true;
         return false;

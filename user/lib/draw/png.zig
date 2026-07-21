@@ -15,6 +15,12 @@ pub const Error = error{
 
 const signature = [_]u8{ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
 
+pub fn matches(bytes: []const u8) bool {
+
+    return bytes.len >= 8 and std.mem.eql(u8, bytes[0..8], &signature);
+
+}
+
 const color_grey: u8 = 0;
 const color_rgb: u8 = 2;
 const color_grey_a: u8 = 4;

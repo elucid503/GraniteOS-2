@@ -1,10 +1,115 @@
-// Image painting: 1:1 blit and cover/contain scaling onto surfaces.
+// Image provider: decode PNG to XRGB, plus 1:1 blit and cover/contain scaling.
+
+const std = @import("std");
 
 const draw = @import("draw.zig");
+const png = @import("png.zig");
 
 const Color = draw.Color;
 const Rect = draw.Rect;
 const Surface = draw.Surface;
+
+pub const Error = error{
+
+    BadImage,
+    Unsupported,
+    OutOfMemory,
+    Truncated,
+
+};
+
+pub const Format = enum {
+
+    png,
+
+};
+
+/// Owned XRGB pixel buffer from a decoded image file.
+pub const Buffer = struct {
+
+    pixels: []u32,
+    width: u32,
+    height: u32,
+
+    pub fn surface(self: *const Buffer) Surface {
+
+        return Surface.from_pixels(self.pixels.ptr, self.width, self.height);
+
+    }
+
+    pub fn deinit(self: *Buffer, allocator: std.mem.Allocator) void {
+
+        if (self.pixels.len != 0) allocator.free(self.pixels);
+
+        self.* = .{ .pixels = &.{}, .width = 0, .height = 0 };
+
+    }
+
+};
+
+/// Sniff a supported on-disk image format from magic bytes.
+pub fn detect(bytes: []const u8) ?Format {
+
+    if (png.matches(bytes)) return .png;
+
+    return null;
+
+}
+
+/// Decode any supported image format into an owned XRGB buffer.
+pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) Error!Buffer {
+
+    return switch (detect(bytes) orelse return error.Unsupported) {
+
+        .png => map_png(png.decode(allocator, bytes)),
+
+    };
+
+}
+
+/// Read width/height without fully decoding pixels when possible.
+pub fn dimensions(bytes: []const u8) Error!struct { width: u32, height: u32 } {
+
+    return switch (detect(bytes) orelse return error.Unsupported) {
+
+        .png => map_png_dim(png.dimensions(bytes)),
+
+    };
+
+}
+
+fn map_png(result: png.Error!png.Image) Error!Buffer {
+
+    const image = result catch |err| return map_png_err(err);
+
+    return .{
+
+        .pixels = image.pixels,
+        .width = image.width,
+        .height = image.height,
+
+    };
+
+}
+
+fn map_png_dim(result: png.Error!struct { width: u32, height: u32 }) Error!struct { width: u32, height: u32 } {
+
+    return result catch |err| map_png_err(err);
+
+}
+
+fn map_png_err(err: png.Error) Error {
+
+    return switch (err) {
+
+        error.BadPng => error.BadImage,
+        error.Unsupported => error.Unsupported,
+        error.OutOfMemory => error.OutOfMemory,
+        error.Truncated => error.Truncated,
+
+    };
+
+}
 
 pub const Image = struct {
 
@@ -12,15 +117,22 @@ pub const Image = struct {
     width: u32,
     height: u32,
 
-    pub fn from_png(image: anytype) Image {
+    pub fn from_buffer(buffer: anytype) Image {
 
         return .{
 
-            .pixels = image.pixels,
-            .width = image.width,
-            .height = image.height,
+            .pixels = buffer.pixels,
+            .width = buffer.width,
+            .height = buffer.height,
 
         };
+
+    }
+
+    /// Prefer `from_buffer`; kept for call-site compatibility.
+    pub fn from_png(image: anytype) Image {
+
+        return from_buffer(image);
 
     }
 
@@ -214,7 +326,7 @@ pub fn cover_crop(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) Rect {
 
 }
 
-const testing = @import("std").testing;
+const testing = std.testing;
 
 test "cover crop matches aspect without gaps" {
 
@@ -233,5 +345,16 @@ test "cover crop matches aspect without gaps" {
     try testing.expectEqual(@as(i32, 562), wide.h); // 1000 * 900 / 1600
     try testing.expectEqual(@as(i32, 0), wide.x);
     try testing.expectEqual(@as(i32, (1000 - 562) / 2), wide.y);
+
+}
+
+test "image provider detects png only" {
+
+    const png_sig = [_]u8{ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
+    const jpeg_sig = [_]u8{ 0xff, 0xd8, 0xff, 0xe0 };
+
+    try testing.expect(detect(&png_sig) == .png);
+    try testing.expect(detect(&jpeg_sig) == null);
+    try testing.expect(detect(&[_]u8{ 1, 2, 3 }) == null);
 
 }
