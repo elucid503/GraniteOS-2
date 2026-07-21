@@ -79,8 +79,6 @@ fn handle_response(src_ip: u32, src_port: u16, payload: []const u8) void {
     synced = true;
     pending = false;
 
-    lib.log.fmt("Netstack: NTP offset {d}s\n", .{offset_s});
-
 }
 
 fn naive_wall_sec() i64 {

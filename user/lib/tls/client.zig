@@ -1,3 +1,5 @@
+// TAKEN FROM THE ZIG STANDARD LIBRARY AND MODIFIED FOR GRANITEOS - THE CODE STYLE IS NOT CONSISTENT WITH THE REST OF GRANITEOS
+
 const builtin = @import("builtin");
 const native_endian = builtin.cpu.arch.endian();
 
