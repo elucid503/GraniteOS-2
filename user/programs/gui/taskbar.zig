@@ -2610,7 +2610,7 @@ fn weather_condition(code: u32) []const u8 {
 
 }
 
-/// Rough day window (local): 06:00 inclusive … 20:00 exclusive. No sunrise/sunset model yet.
+/// Rough day window (local): 06:00 inclusive ... 20:00 exclusive. No sunrise/sunset model yet.
 fn weather_is_daytime() bool {
 
     const local = lib.localtime.now(lib.prefs.tz_offset_minutes);

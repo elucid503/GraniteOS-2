@@ -3,3 +3,7 @@ zig-out/
 disk.img
 CLAUDE.md
 redux.md
+
+launcher/internal/assets/files
+launcher/go.sum
+launcher/GraniteOS.exe

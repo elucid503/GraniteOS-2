@@ -51,7 +51,7 @@ pub fn Sessions(comptime Extra: type, comptime capacity: usize) type {
 
             if (self.find(badge)) |existing| {
 
-                // Drop protocol state (TCP/DNS waiters, open files, …) before rebinding the buffer.
+                // Drop protocol state (TCP/DNS waiters, open files, ...) before rebinding the buffer.
                 evict(existing);
 
                 self.clock += 1;

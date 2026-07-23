@@ -62,7 +62,7 @@ pub fn days_in_month(year: i64, month: u32) u32 {
 
 }
 
-/// Weekday of a civil date: 0 = Sunday … 6 = Saturday.
+/// Weekday of a civil date: 0 = Sunday ... 6 = Saturday.
 pub fn weekday(year: i64, month: u32, day: u32) u32 {
 
     const days = days_from_civil(year, month, day);

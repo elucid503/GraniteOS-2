@@ -35,7 +35,7 @@ by default; pass `-Dnet=false` to boot without one.
 subsystem as it comes up (memory, interrupts, objects, and the SMP scheduler),
 then hands off to Flint. Flint loads bundled ELF programs for the name service,
 console and block/display drivers, the filesystem server, Marble (the
-interactive shell), and utilities (`echo`, `cat`, `help`, `ls`, `write`, …).
+interactive shell), and utilities (`echo`, `cat`, `help`, `ls`, `write`, ...).
 When a virtio-blk disk is present, programs are also installed on the persistent
 filesystem. If virtio-gpu hardware is present (`zig build qemu-gui`), Flint
 starts the display and input drivers, the compositor, the launcher, and a
@@ -111,7 +111,7 @@ kernel/
   cap/
     handle.zig            Handle {index, generation}
     handle_table.zig      per-process handle table
-  authority/              capability-grant authorities (memory, device, DMA, …)
+  authority/              capability-grant authorities (memory, device, DMA, ...)
   ipc/                    kernel-side message transfer
   sync/                   kernel spinlocks and IPC helpers
   syscall/                syscall dispatch surface
@@ -139,10 +139,10 @@ user/
     ui/                   widgets, charts, and file-picker UI
     shell/                Marble help/about catalog
     mem/                  user-space memory helpers
-  programs/common/        bundled CLI utilities (echo, cat, help, status, …)
-  programs/fs/            filesystem commands (ls, write, mkdir, …)
+  programs/common/        bundled CLI utilities (echo, cat, help, status, ...)
+  programs/fs/            filesystem commands (ls, write, mkdir, ...)
   programs/location/      cwd helper (location)
-  programs/gui/           desktop applications and chrome (welcome, taskbar, …)
+  programs/gui/           desktop applications and chrome (welcome, taskbar, ...)
   drivers/console/        PL011 console driver
   drivers/block/          virtio-blk block driver
   drivers/display/        virtio-gpu display driver
