@@ -32,6 +32,9 @@ comptime {
 const input_bit: u64 = 1 << 0;
 const display_bit: u64 = 1 << 1;
 
+const key_leftmeta: u16 = 125;
+const key_rightmeta: u16 = 126;
+
 const input_ring_capacity: u32 = 512;
 const worker_stack_pages = 16;
 const page_size = 4096;
@@ -541,6 +544,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.window.close_title => close_title(in),
         proto.window.place_relative => place_relative(badge, in),
         proto.window.minimize_hint => set_minimize_hint(in),
+        proto.window.geometry => window_geometry(badge, in.data[1], out),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
 
@@ -919,6 +923,17 @@ fn set_minimize_hint(in: *const Message) i64 {
 
 }
 
+fn window_geometry(badge: u64, id: u64, out: *Message) i64 {
+
+    const window = owned_window(badge, id) orelse return -7;
+
+    out.data[1] = lib.window.pack_pair(@intCast(@max(0, window.x)), @intCast(@max(0, window.y)));
+    out.data[2] = lib.window.pack_pair(window.width, window.height);
+
+    return 0;
+
+}
+
 fn minimize_window(id: u64) i64 {
 
     const window = manager.by_id(id_of(id) orelse return -7) orelse return -7;
@@ -1109,7 +1124,16 @@ fn drain_input() void {
 
                     events.kind_key_down, events.kind_key_up => {
 
-                        if (manager.focused()) |window| forward(window, event);
+                        // Super/Meta is a global chrome shortcut: always deliver to the panel.
+                        if (event.code == key_leftmeta or event.code == key_rightmeta) {
+
+                            if (manager.panel()) |panel| forward(panel, event);
+
+                        } else if (manager.focused()) |window| {
+
+                            forward(window, event);
+
+                        }
 
                     },
 

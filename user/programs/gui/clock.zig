@@ -100,24 +100,26 @@ var running: u32 = 1;
 const worker_stack_pages = 8;
 const page_size = 4096;
 
-pub fn main(_: []const []const u8) u8 {
+pub fn main(args: []const []const u8) u8 {
 
-    run() catch return 1;
+    run(args) catch return 1;
 
     return 0;
 
 }
 
-fn run() !void {
+fn run(args: []const []const u8) !void {
 
     lib.prefs.refresh();
+
+    if (args.len > 0) lib.wm.bind_program(args[0]);
 
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
-    window = try connection.create_window(340, 430, 0, "Clock");
+    window = try lib.wm.open_main(&connection, 340, 430, "Clock");
 
     _ = lib.draw.round.masks_for(6);
 
@@ -135,7 +137,7 @@ fn run() !void {
                 events.kind_window_close => {
 
                     @atomicStore(u32, &running, 0, .release);
-                    window.destroy();
+                    lib.wm.close_main(&connection, &window);
                     return;
 
                 },

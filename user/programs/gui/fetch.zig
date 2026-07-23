@@ -112,17 +112,19 @@ var tick: u32 = 0;
 var running: u32 = 1;
 var request_pending: u32 = 0;
 
-pub fn main(_: []const []const u8) u8 {
+pub fn main(args: []const []const u8) u8 {
 
-    run() catch return 1;
+    run(args) catch return 1;
 
     return 0;
 
 }
 
-fn run() !void {
+fn run(args: []const []const u8) !void {
 
     lib.prefs.refresh();
+
+    if (args.len > 0) lib.wm.bind_program(args[0]);
 
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
@@ -131,7 +133,7 @@ fn run() !void {
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
 
-    window = try connection.create_window(760, 560, 0, "Fetch");
+    window = try lib.wm.open_main(&connection, 760, 560, "Fetch");
 
     url_buffer = ui.EditBuffer.init(&url_storage);
     port_buffer = ui.EditBuffer.init(&port_storage);
@@ -153,7 +155,7 @@ fn run() !void {
                 events.kind_window_close => {
 
                     @atomicStore(u32, &running, 0, .release);
-                    window.destroy();
+                    lib.wm.close_main(&connection, &window);
                     return;
 
                 },

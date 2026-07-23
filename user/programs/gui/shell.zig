@@ -198,17 +198,19 @@ var sessions_lock: ipc.Lock = .{};
 
 var keyboard = lib.keymap.Keyboard{};
 
-pub fn main(_: []const []const u8) u8 {
+pub fn main(args: []const []const u8) u8 {
 
-    run() catch return 1;
+    run(args) catch return 1;
 
     return 0;
 
 }
 
-fn run() !void {
+fn run(args: []const []const u8) !void {
 
     lib.prefs.refresh();
+
+    if (args.len > 0) lib.wm.bind_program(args[0]);
 
     bundle_length = @intCast(lib.start.word(3));
     bundle_offset = @intCast(lib.start.word(4));
@@ -220,7 +222,7 @@ fn run() !void {
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
 
-    window = try connection.create_window(724, 436, 0, "Terminal");
+    window = try lib.wm.open_main(&connection, 724, 436, "Terminal");
 
     resize_grid();
 
@@ -360,7 +362,7 @@ fn handle(event: events.Event) bool {
         events.kind_window_close => {
 
             terminate_marble();
-            window.destroy();
+            lib.wm.close_main(&connection, &window);
             stop_workers();
 
             return true;

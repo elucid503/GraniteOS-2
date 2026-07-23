@@ -300,24 +300,26 @@ var task_shared = false;
 var response_buffer: [response_capacity]u8 = undefined;
 var body_buffer: [2048]u8 = undefined;
 
-pub fn main(_: []const []const u8) u8 {
+pub fn main(args: []const []const u8) u8 {
 
-    run() catch return 1;
+    run(args) catch return 1;
 
     return 0;
 
 }
 
-fn run() !void {
+fn run(args: []const []const u8) !void {
 
     lib.prefs.refresh();
+
+    if (args.len > 0) lib.wm.bind_program(args[0]);
 
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
-    window = try connection.create_window(820, 560, 0, "Sprout CDN");
+    window = try lib.wm.open_main(&connection, 820, 560, "Sprout CDN");
 
     picker.init();
     files = lib.fs.Client.connect(cap.memory) catch null;
@@ -360,7 +362,7 @@ fn run() !void {
 
                     if (files) |*client| client.close();
 
-                    window.destroy();
+                    lib.wm.close_main(&connection, &window);
                     return;
 
                 },

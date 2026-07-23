@@ -670,6 +670,22 @@ pub const Manager = struct {
 
     }
 
+    pub fn panel(self: *Manager) ?*Window {
+
+        var found: ?*Window = null;
+
+        for (&self.windows) |*window| {
+
+            if (!window.used or !window.is_panel()) continue;
+
+            if (found == null or window.y > found.?.y) found = window;
+
+        }
+
+        return found;
+
+    }
+
     pub fn by_title(self: *Manager, title: []const u8) ?*Window {
 
         var cursor = self.count;

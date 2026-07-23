@@ -14,6 +14,8 @@ const key_rightshift = 54;
 const key_leftalt = 56;
 const key_capslock = 58;
 const key_rightctrl = 97;
+const key_leftmeta = 125;
+const key_rightmeta = 126;
 
 const key_up = 103;
 const key_left = 105;
@@ -53,6 +55,8 @@ pub const Keyboard = struct {
             },
 
             key_leftalt => return true,
+
+            key_leftmeta, key_rightmeta => return true,
 
             key_capslock => {
 

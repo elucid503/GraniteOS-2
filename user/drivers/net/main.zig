@@ -151,6 +151,9 @@ var completion: Handle = 0;
 
 var mac: [6]u8 = .{ 0, 0, 0, 0, 0, 0 };
 var status_negotiated = false;
+var link_enabled = true;
+var rx_bytes: u64 = 0;
+var tx_bytes: u64 = 0;
 
 // The one attached client (the netstack): its RX frame ring, TX staging buffer, and RX-ready Notification.
 
@@ -192,6 +195,9 @@ fn run() !void {
 
     try init_device();
     arm_rx();
+
+    // Register only after the device is live so a failed bind never leaves a dead "net" name.
+    try lib.stream.register_name("net", cap.driver.endpoint);
 
     try sys.configure(cap.self_thread, .bound_notification, completion);
 
@@ -332,6 +338,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.net.mac_address => mac_address(out),
         proto.net.transmit => transmit(in.data[1]),
         proto.net.link_status => link_status(out),
+        proto.net.set_enabled => set_enabled(in.data[1]),
 
         else => -7,
 
@@ -393,18 +400,33 @@ fn mac_address(out: *Message) i64 {
 
 fn link_status(out: *Message) i64 {
 
-    if (!status_negotiated) {
+    var physical: u64 = 1;
 
-        out.data[1] = 1;
-        return 0;
+    if (status_negotiated) {
+
+        const low = byte_read(reg_config + 6);
+        const high = byte_read(reg_config + 7);
+        const link_up_bit: u16 = 1;
+
+        physical = if ((@as(u16, high) << 8 | low) & link_up_bit != 0) 1 else 0;
 
     }
 
-    const low = byte_read(reg_config + 6);
-    const high = byte_read(reg_config + 7);
-    const link_up_bit: u16 = 1;
+    // Virtio status can stick at 0 under QEMU user-net while frames still flow; treat seen traffic as up.
+    const up: u64 = if (physical != 0 or rx_bytes > 0 or tx_bytes > 0) 1 else 0;
 
-    out.data[1] = if ((@as(u16, high) << 8 | low) & link_up_bit != 0) 1 else 0;
+    out.data[1] = up;
+    out.data[2] = rx_bytes;
+    out.data[3] = tx_bytes;
+    out.data[4] = if (link_enabled) 1 else 0;
+
+    return 0;
+
+}
+
+fn set_enabled(value: u64) i64 {
+
+    link_enabled = value != 0;
 
     return 0;
 
@@ -412,6 +434,7 @@ fn link_status(out: *Message) i64 {
 
 fn transmit(length: u64) i64 {
 
+    if (!link_enabled) return -7;
     if (client_tx_base == 0) return -7;
     if (length == 0 or length > tx_frame_capacity) return -7;
 
@@ -468,6 +491,8 @@ fn transmit(length: u64) i64 {
             acknowledge_device_status();
             _ = sys.acknowledge(cap.driver.interrupt) catch {};
 
+            tx_bytes +%= len;
+
             return 0;
 
         }
@@ -511,9 +536,15 @@ fn drain_rx() void {
             const frame_len: usize = @intCast(element.len - net_hdr_size);
             const source: [*]const u8 = @ptrFromInt(dma_base + rx_buffers_off + slot * rx_slot_size + net_hdr_size);
 
-            if (client_ring) |ring| {
+            rx_bytes +%= frame_len;
 
-                if (ring.push(source[0..@min(frame_len, lib.netframe.max_frame)])) pushed = true;
+            if (link_enabled) {
+
+                if (client_ring) |ring| {
+
+                    if (ring.push(source[0..@min(frame_len, lib.netframe.max_frame)])) pushed = true;
+
+                }
 
             }
 

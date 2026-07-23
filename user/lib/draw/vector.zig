@@ -730,8 +730,8 @@ fn fill_path_data(path: *Path, transform: *const Transform, d: []const u8) void 
                 const rx = parser.number() orelse break;
                 const ry = parser.number() orelse break;
                 const rotation = parser.number() orelse break;
-                const large = parser.number() orelse break;
-                const sweep = parser.number() orelse break;
+                const large = parser.flag() orelse break;
+                const sweep = parser.flag() orelse break;
                 const end = parser.point(relative, current) orelse break;
 
                 fill_arc(path, transform, current, end, rx, ry, rotation, large != 0, sweep != 0);
@@ -889,8 +889,8 @@ fn stroke_path_data(path: *Path, transform: *const Transform, d: []const u8, wid
                 const rx = parser.number() orelse break;
                 const ry = parser.number() orelse break;
                 const rotation = parser.number() orelse break;
-                const large = parser.number() orelse break;
-                const sweep = parser.number() orelse break;
+                const large = parser.flag() orelse break;
+                const sweep = parser.flag() orelse break;
                 const end = parser.point(relative, current) orelse break;
 
                 stroke_arc(path, transform, current, end, rx, ry, rotation, large != 0, sweep != 0, width);
@@ -1250,6 +1250,27 @@ const PathParser = struct {
 
     }
 
+    /// SVG arc large/sweep flags are single digits and may be glued to the next number (`0115` → 0, 1, 15).
+    fn flag(self: *PathParser) ?f32 {
+
+        self.skip();
+
+        if (self.offset >= self.text.len) return null;
+
+        const c = self.text[self.offset];
+
+        if (c == '0' or c == '1') {
+
+            self.offset += 1;
+
+            return if (c == '1') 1 else 0;
+
+        }
+
+        return self.number();
+
+    }
+
     fn number(self: *PathParser) ?f32 {
 
         self.skip();
@@ -1556,6 +1577,22 @@ test "elliptical arcs from Lucide path data stroke without overflowing" {
 
     try testing.expect(!path.overflowed);
     try testing.expect(path.verb_count > 8);
+
+}
+
+test "compact arc flags like ethernet-port stroke without overflowing" {
+
+    // Flags glued to coordinates (`0115` → large=0, sweep=1, x=15) as Lucide emits.
+    const svg =
+        \\<svg viewBox="0 0 24 24"><path d="M19 17a2 2 0 00-1.765 1.059l-.47.882A2 2 0 0115 20H9a2 2 0 01-1.765-1.059l-.47-.882A2 2 0 005 17H4a2 2 0 01-2-2V6a2 2 0 012-2h16a2 2 0 012 2v9a2 2 0 01-2 2z"/><path d="M6 8v1"/><path d="M10 8v1"/><path d="M14 8v1"/><path d="M18 8v1"/></svg>
+    ;
+
+    var path = Path{};
+
+    build_stroked(&path, .{ .x = 0, .y = 0, .w = 36, .h = 36 }, svg, 0);
+
+    try testing.expect(!path.overflowed);
+    try testing.expect(path.verb_count > 16);
 
     var buffer: [20 * 20]u8 = [_]u8{0} ** (20 * 20);
 

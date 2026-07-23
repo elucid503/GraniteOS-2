@@ -9,6 +9,7 @@ const fs = @import("../fs/fs.zig");
 const handler = @import("../file/handler.zig");
 const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
+const sys = @import("../syscall/sys.zig");
 const ui = @import("../ui/ui.zig");
 const events = @import("events.zig");
 const window = @import("window.zig");
@@ -19,12 +20,14 @@ pub const config_path = "/root/user/settings.cfg";
 pub const open_path_file = "/root/user/.open-path";
 pub const desktop_pins_path = "/root/user/desktop.pins";
 pub const taskbar_pins_path = "/root/user/taskbar.pins";
+pub const window_geom_path = "/root/user/windows.geom";
 
 pub const max_desktop_pins = 24;
 pub const max_pin_path = 128;
 
 pub const max_taskbar_pins = 16;
 pub const max_pin_program = 32; // matches proto.launch.max_length
+pub const max_window_geoms = 32;
 
 pub const ThemeId = enum(u8) {
 
@@ -673,6 +676,270 @@ pub fn save_taskbar_pins(pins: []const TaskbarPin) bool {
     defer client.close_file(file) catch {};
 
     return (client.write(file, 0, buffer[0..length]) catch 0) == length;
+
+}
+
+pub const WindowGeom = struct {
+
+    x: i32 = 0,
+    y: i32 = 0,
+    width: u32 = 0,
+    height: u32 = 0,
+
+};
+
+/// Last-closed geometry for `program`, if any.
+pub fn load_window_geom(program: []const u8) ?WindowGeom {
+
+    if (program.len == 0) return null;
+
+    var client = fs.Client.connect(cap.memory) catch return null;
+    defer client.close();
+
+    const file = client.open_path(window_geom_path, 0) catch return null;
+    defer client.close_file(file) catch {};
+
+    var buffer: [max_window_geoms * (max_pin_program + 32)]u8 = undefined;
+    const read = client.read(file, 0, &buffer) catch return null;
+
+    var start: usize = 0;
+    var index: usize = 0;
+
+    while (index <= read) : (index += 1) {
+
+        const at_end = index == read;
+        const sep = if (at_end) true else buffer[index] == '\n' or buffer[index] == '\r';
+
+        if (!sep) continue;
+
+        const line = buffer[start..index];
+        start = index + 1;
+
+        if (line.len == 0) continue;
+
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const name = line[0..eq];
+        const rest = line[eq + 1 ..];
+
+        if (!std.mem.eql(u8, name, program)) continue;
+
+        var parts = std.mem.splitScalar(u8, rest, ',');
+        const x_text = parts.next() orelse continue;
+        const y_text = parts.next() orelse continue;
+        const w_text = parts.next() orelse continue;
+        const h_text = parts.next() orelse continue;
+
+        const x = std.fmt.parseInt(i32, x_text, 10) catch continue;
+        const y = std.fmt.parseInt(i32, y_text, 10) catch continue;
+        const width = std.fmt.parseInt(u32, w_text, 10) catch continue;
+        const height = std.fmt.parseInt(u32, h_text, 10) catch continue;
+
+        return .{ .x = x, .y = y, .width = width, .height = height };
+
+    }
+
+    return null;
+
+}
+
+const GeomSave = struct {
+
+    program: [max_pin_program]u8 = [_]u8{0} ** max_pin_program,
+    length: u8 = 0,
+    geom: WindowGeom = .{},
+    pending: u32 = 0,
+
+};
+
+var geom_save: GeomSave = .{};
+var geom_save_started: u32 = 0;
+
+/// Queue a non-blocking rewrite of `program`'s saved geometry (last-closed wins).
+pub fn save_window_geom(program: []const u8, geom: WindowGeom) void {
+
+    if (program.len == 0 or geom.width == 0 or geom.height == 0) return;
+
+    const length = @min(program.len, max_pin_program);
+
+    @memcpy(geom_save.program[0..length], program[0..length]);
+    if (length < max_pin_program) @memset(geom_save.program[length..], 0);
+
+    geom_save.length = @intCast(length);
+    geom_save.geom = geom;
+    @atomicStore(u32, &geom_save.pending, 1, .release);
+
+    if (@atomicRmw(u32, &geom_save_started, .Xchg, 1, .acq_rel) == 0) {
+
+        start_geom_worker();
+
+    }
+
+}
+
+fn start_geom_worker() void {
+
+    const stack_pages = 8;
+    const page = 4096;
+
+    const stack = sys.create(.region, stack_pages * page, cap.memory) catch {
+
+        @atomicStore(u32, &geom_save_started, 0, .release);
+        return;
+
+    };
+
+    const base = sys.map(cap.self_space, stack, 0, sys.read | sys.write) catch {
+
+        sys.close(stack) catch {};
+        @atomicStore(u32, &geom_save_started, 0, .release);
+        return;
+
+    };
+
+    const thread = sys.create_thread(@intFromPtr(&geom_worker), base + stack_pages * page) catch {
+
+        sys.unmap(cap.self_space, base) catch {};
+        sys.close(stack) catch {};
+        @atomicStore(u32, &geom_save_started, 0, .release);
+        return;
+
+    };
+
+    sys.close(stack) catch {};
+    sys.start(thread) catch {
+
+        @atomicStore(u32, &geom_save_started, 0, .release);
+
+    };
+
+}
+
+fn geom_worker() callconv(.c) noreturn {
+
+    while (true) {
+
+        while (@atomicLoad(u32, &geom_save.pending, .acquire) == 0) {
+
+            // Park cheaply between rare close events.
+            const time = @import("../time.zig");
+            time.sleep_ms(50);
+
+        }
+
+        @atomicStore(u32, &geom_save.pending, 0, .release);
+
+        const program = geom_save.program[0..geom_save.length];
+        const geom = geom_save.geom;
+
+        write_window_geom(program, geom);
+
+    }
+
+}
+
+fn write_window_geom(program: []const u8, geom: WindowGeom) void {
+
+    var entries: [max_window_geoms]struct {
+
+        name: [max_pin_program]u8 = [_]u8{0} ** max_pin_program,
+        length: u8 = 0,
+        geom: WindowGeom = .{},
+
+    } = undefined;
+    var count: usize = 0;
+
+    var client = fs.Client.connect(cap.memory) catch return;
+    defer client.close();
+
+    if (client.open_path(window_geom_path, 0)) |file| {
+
+        defer client.close_file(file) catch {};
+
+        var buffer: [max_window_geoms * (max_pin_program + 32)]u8 = undefined;
+        const read = client.read(file, 0, &buffer) catch 0;
+
+        var start: usize = 0;
+        var index: usize = 0;
+
+        while (index <= read and count < entries.len) : (index += 1) {
+
+            const at_end = index == read;
+            const sep = if (at_end) true else buffer[index] == '\n' or buffer[index] == '\r';
+
+            if (!sep) continue;
+
+            const line = buffer[start..index];
+            start = index + 1;
+
+            if (line.len == 0) continue;
+
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+            const name = line[0..eq];
+            const rest = line[eq + 1 ..];
+
+            if (std.mem.eql(u8, name, program)) continue;
+
+            var parts = std.mem.splitScalar(u8, rest, ',');
+            const x_text = parts.next() orelse continue;
+            const y_text = parts.next() orelse continue;
+            const w_text = parts.next() orelse continue;
+            const h_text = parts.next() orelse continue;
+
+            const length = @min(name.len, max_pin_program);
+
+            entries[count] = .{};
+            @memcpy(entries[count].name[0..length], name[0..length]);
+            entries[count].length = @intCast(length);
+            entries[count].geom = .{
+
+                .x = std.fmt.parseInt(i32, x_text, 10) catch continue,
+                .y = std.fmt.parseInt(i32, y_text, 10) catch continue,
+                .width = std.fmt.parseInt(u32, w_text, 10) catch continue,
+                .height = std.fmt.parseInt(u32, h_text, 10) catch continue,
+
+            };
+            count += 1;
+
+        }
+
+    } else |_| {}
+
+    if (count < entries.len) {
+
+        const length = @min(program.len, max_pin_program);
+
+        entries[count] = .{};
+        @memcpy(entries[count].name[0..length], program[0..length]);
+        entries[count].length = @intCast(length);
+        entries[count].geom = geom;
+        count += 1;
+
+    }
+
+    var out: [max_window_geoms * (max_pin_program + 32)]u8 = undefined;
+    var length: usize = 0;
+
+    for (entries[0..count]) |entry| {
+
+        const line = std.fmt.bufPrint(out[length..], "{s}={d},{d},{d},{d}\n", .{
+
+            entry.name[0..entry.length],
+            entry.geom.x,
+            entry.geom.y,
+            entry.geom.width,
+            entry.geom.height,
+
+        }) catch break;
+
+        length += line.len;
+
+    }
+
+    const flags = proto.filesystem.open_create | proto.filesystem.open_truncate;
+    const file = client.open_path(window_geom_path, flags) catch return;
+    defer client.close_file(file) catch {};
+
+    _ = client.write(file, 0, out[0..length]) catch {};
 
 }
 

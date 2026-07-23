@@ -59,6 +59,12 @@ fn tray_width() i32 {
 
 }
 
+fn controls_width() i32 {
+
+    return 56;
+
+}
+
 fn calendar_width() u32 {
 
     return 292;
@@ -266,11 +272,71 @@ var menu_regions = ui.HitRegions{};
 const launcher_id: u32 = 1;
 const clock_id: u32 = 2;
 const notification_id: u32 = 3;
+const network_id: u32 = 4;
 const overflow_id: u32 = 99;
 const window_id_base: u32 = 100;
 const category_id_base: u32 = 1000;
 const browse_id_base: u32 = 2000;
 const search_id_base: u32 = 3000;
+
+const key_esc: u16 = 1;
+const key_enter: u16 = 28;
+const key_leftmeta: u16 = 125;
+const key_rightmeta: u16 = 126;
+
+// Controls center (sampled off the UI thread).
+const ControlsStats = struct {
+
+    net_up: bool = false,
+    net_enabled: bool = true,
+    audio_muted: bool = false,
+
+};
+
+var controls: ?lib.window.Window = null;
+var controls_open = false;
+var controls_regions = ui.HitRegions{};
+var controls_stats: ControlsStats = .{};
+var controls_tick: u32 = 0;
+
+const controls_net_toggle_id: u32 = 1;
+const controls_audio_toggle_id: u32 = 2;
+
+// Super-key switcher overlay.
+const max_switcher_results = 24;
+const max_switcher_path = 96;
+
+const SwitcherKind = enum(u8) {
+
+    window,
+    app,
+    file,
+
+};
+
+const SwitcherItem = struct {
+
+    kind: SwitcherKind = .app,
+    label: [48]u8 = [_]u8{0} ** 48,
+    label_len: u8 = 0,
+    path: [max_switcher_path]u8 = [_]u8{0} ** max_switcher_path,
+    path_len: u8 = 0,
+    window_index: u16 = 0,
+    app_index: u16 = 0,
+
+};
+
+var switcher: ?lib.window.Window = null;
+var switcher_open = false;
+var switcher_regions = ui.HitRegions{};
+var switcher_storage: [48]u8 = undefined;
+var switcher_search = ui.EditBuffer{ .bytes = &switcher_storage };
+var switcher_items: [max_switcher_results]SwitcherItem = undefined;
+var switcher_count: usize = 0;
+var switcher_selected: usize = 0;
+var switcher_keyboard = lib.keymap.Keyboard{};
+
+const switcher_row_id_base: u32 = 1;
 
 // Open-Meteo forecast API (plain HTTP, no key) for the weather card above the calendar.
 const weather_host = "api.open-meteo.com";
@@ -318,6 +384,7 @@ fn run() !void {
     try start_ticker();
     try start_list_watcher();
     try start_weather_worker();
+    try start_controls_worker();
 
     // Prefetch weather and warm the popup surfaces so the first clock click is immediate.
     ensure_weather_popup() catch {};
@@ -335,6 +402,7 @@ fn run() !void {
         const list_due = @atomicRmw(u32, &list_tick, .Xchg, 0, .acquire) != 0;
         const clock_due = @atomicRmw(u32, &clock_tick, .Xchg, 0, .acquire) != 0;
         const weather_due = @atomicLoad(u32, &weather_tick, .acquire) != 0;
+        const controls_due = @atomicRmw(u32, &controls_tick, .Xchg, 0, .acquire) != 0;
 
         if (list_due) refresh_windows();
 
@@ -346,11 +414,11 @@ fn run() !void {
 
             paint_bar();
 
-        } else if (clock_due) {
+        } else if (clock_due or controls_due) {
 
             prefs_backstop_ticks +|= 1;
 
-            if (prefs_backstop_ticks >= 5) {
+            if (clock_due and prefs_backstop_ticks >= 5) {
 
                 prefs_backstop_ticks = 0;
 
@@ -362,14 +430,18 @@ fn run() !void {
                 } else {
 
                     paint_clock_only();
+                    paint_controls_indicators_only();
 
                 }
 
             } else {
 
-                paint_clock_only();
+                if (clock_due) paint_clock_only();
+                paint_controls_indicators_only();
 
             }
+
+            if (controls_open) paint_controls();
 
         }
 
@@ -591,6 +663,18 @@ fn handle(event: events.Event) void {
 
     }
 
+    if (controls) |controls_window| {
+
+        if (event.window == controls_window.id) return handle_controls(event);
+
+    }
+
+    if (switcher) |switcher_window| {
+
+        if (event.window == switcher_window.id) return handle_switcher(event);
+
+    }
+
     if (event.window == bar.id) handle_bar(event);
 
 }
@@ -674,6 +758,20 @@ fn refresh_popups() void {
 
     }
 
+    if (controls != null) {
+
+        paint_controls_content();
+        if (controls_open) if (controls) |window| window.present_all() catch {};
+
+    }
+
+    if (switcher != null) {
+
+        paint_switcher_content();
+        if (switcher_open) if (switcher) |window| window.present_all() catch {};
+
+    }
+
 }
 
 fn clock_hover_rect(clock_rect: Rect) Rect {
@@ -712,6 +810,35 @@ fn handle_bar(event: events.Event) void {
 
     switch (event.kind) {
 
+        events.kind_key_down => {
+
+            if (event.code == key_leftmeta or event.code == key_rightmeta) {
+
+                toggle_switcher();
+                return;
+
+            }
+
+            if (event.code == key_esc) {
+
+                if (switcher_open) {
+
+                    close_switcher();
+                    return;
+
+                }
+
+                if (controls_open) {
+
+                    close_controls();
+                    return;
+
+                }
+
+            }
+
+        },
+
         events.kind_button_down => {
 
             const id = bar_regions.hit(event.x, event.y);
@@ -723,6 +850,8 @@ fn handle_bar(event: events.Event) void {
                 if (id == launcher_id) {
 
                     close_calendar();
+                    close_controls();
+                    close_switcher();
                     toggle_menu();
                     return;
 
@@ -731,6 +860,7 @@ fn handle_bar(event: events.Event) void {
                 if (id == clock_id) {
 
                     close_notifications();
+                    close_controls();
                     toggle_calendar();
                     return;
 
@@ -739,13 +869,24 @@ fn handle_bar(event: events.Event) void {
                 if (id == notification_id) {
 
                     close_calendar();
+                    close_controls();
                     toggle_notifications();
+                    return;
+
+                }
+
+                if (id == network_id) {
+
+                    close_calendar();
+                    close_notifications();
+                    toggle_controls();
                     return;
 
                 }
 
                 close_calendar();
                 close_notifications();
+                close_controls();
 
                 if (id >= window_id_base) activate_item(id - window_id_base);
 
@@ -802,6 +943,8 @@ fn handle_bar(event: events.Event) void {
 
             close_pin_menu();
             close_calendar();
+            close_controls();
+            close_switcher();
 
             refresh_windows();
             paint_bar();
@@ -1367,6 +1510,8 @@ fn open_menu() void {
     close_pin_menu();
     close_calendar();
     close_notifications();
+    close_controls();
+    close_switcher();
 
     // Covers a prefs_changed dropped while closed, so the menu opens with the current material.
     _ = lib.prefs.refresh_if_changed();
@@ -2570,7 +2715,7 @@ const ButtonLayout = struct {
 fn button_layout() ButtonLayout {
 
     const start = launcher_width() + button_gap();
-    const end = @as(i32, @intCast(bar.surface.width)) - clock_width() - tray_width() - button_gap() * 2;
+    const end = @as(i32, @intCast(bar.surface.width)) - clock_width() - tray_width() - controls_width() - button_gap() * 2;
     const available = end - start;
 
     if (item_count == 0 or available <= 0) {
@@ -2783,6 +2928,7 @@ fn paint_bar_content(surface: *const gfx.Surface) void {
 
     bar_regions.add(clock_id, clock_hover_rect(clock_rect));
     paint_clock(surface, width);
+    paint_controls_indicators(surface, width);
 
 }
 
@@ -2822,6 +2968,80 @@ fn paint_clock(surface: *const gfx.Surface, width: i32) void {
 
     text_center(surface, .{ .x = rect.x, .y = top, .w = rect.w, .h = time_h }, time_size, time_text, ui.theme.text);
     text_center(surface, .{ .x = rect.x, .y = top + time_h + line_gap, .w = rect.w, .h = date_h }, date_size, date_text, ui.theme.text_dim);
+
+}
+
+fn controls_origin(width: i32) i32 {
+
+    return width - tray_width() - clock_width() - controls_width();
+
+}
+
+fn paint_controls_indicators(surface: *const gfx.Surface, width: i32) void {
+
+    const origin = controls_origin(width);
+    const icon_size: i32 = 18;
+    const icon_gap: i32 = 8;
+    const hover_h: i32 = 32;
+    const pad_x: i32 = 6;
+    const stats = controls_stats;
+    const net_live = stats.net_up and stats.net_enabled;
+
+    const group_w = pad_x * 2 + icon_size * 2 + icon_gap;
+    const group = Rect{
+
+        .x = origin + @divTrunc(controls_width() - group_w, 2),
+        .y = @divTrunc(bar_height() - hover_h, 2),
+        .w = group_w,
+        .h = hover_h,
+
+    };
+
+    // One shared hit target: both icons open the same panel and share one hover fill.
+    bar_regions.add(network_id, group);
+
+    if (controls_open or bar_regions.hovered(network_id)) {
+
+        ui.fill_round_rect(surface, group, 5, if (controls_open) ui.theme.accent_dim else ui.theme.hover);
+
+    }
+
+    const net_color = if (net_live) ui.theme.text else ui.theme.text_faint;
+    const net_icon = if (net_live) lib.icons.ethernet else lib.icons.network;
+    const audio_color = if (stats.audio_muted) ui.theme.text_faint else ui.theme.text;
+    const icon_y = group.y + @divTrunc(group.h - icon_size, 2);
+    const net_x = group.x + pad_x;
+    const audio_x = net_x + icon_size + icon_gap;
+
+    lib.draw.vector.icon_in(surface, .{
+
+        .x = net_x,
+        .y = icon_y,
+        .w = icon_size,
+        .h = icon_size,
+
+    }, net_icon, net_color);
+
+    lib.draw.vector.icon_in(surface, .{
+
+        .x = audio_x,
+        .y = icon_y,
+        .w = icon_size,
+        .h = icon_size,
+
+    }, lib.icons.volume, audio_color);
+
+}
+
+fn paint_controls_indicators_only() void {
+
+    const surface = &bar.surface;
+    const width: i32 = @intCast(surface.width);
+    const rect = Rect{ .x = controls_origin(width), .y = 0, .w = controls_width(), .h = bar_height() };
+
+    surface.fill_rect(rect, ui.theme.surface_alt);
+    paint_controls_indicators(surface, width);
+    bar.present(rect) catch {};
 
 }
 
@@ -3106,6 +3326,693 @@ fn lower(byte: u8) u8 {
 
 }
 
+fn controls_popup_width() u32 {
+
+    return 280;
+
+}
+
+fn controls_popup_height() u32 {
+
+    return 96;
+
+}
+
+fn toggle_controls() void {
+
+    if (controls_open) close_controls() else open_controls();
+
+}
+
+fn open_controls() void {
+
+    close_menu();
+    close_switcher();
+
+    ensure_controls() catch return;
+
+    const window = controls orelse return;
+    const screen = lib.wm.screen_info(&connection) catch return;
+    const width: i32 = @intCast(bar.surface.width);
+    const popup_w: i32 = @intCast(window.surface.width);
+    const popup_h: i32 = @intCast(window.surface.height);
+    const x = @max(dock_margin(), @min(controls_origin(width) + @divTrunc(controls_width(), 2) - @divTrunc(popup_w, 2), @as(i32, @intCast(screen.width)) - popup_w - dock_margin()));
+    const y = @as(i32, @intCast(screen.height)) - bar_height() - dock_margin() - popup_h - popup_gap();
+
+    paint_controls_content();
+    reveal_slide_up(&window, x, y);
+    controls_open = true;
+    paint_bar();
+
+}
+
+fn close_controls() void {
+
+    if (!controls_open) return;
+
+    if (controls) |window| lib.wm.minimize(&connection, window.id) catch {};
+
+    controls_open = false;
+    paint_bar();
+
+}
+
+fn ensure_controls() !void {
+
+    if (controls) |*window| {
+
+        if (window.surface.width != controls_popup_width() or window.surface.height != controls_popup_height()) {
+
+            try window.resize(controls_popup_width(), controls_popup_height());
+
+        }
+
+        return;
+
+    }
+
+    controls = try connection.create_window(controls_popup_width(), controls_popup_height(), proto.window.flag_undecorated, "controls");
+
+    if (controls) |*window| lib.wm.minimize(&connection, window.id) catch {};
+
+}
+
+fn handle_controls(event: events.Event) void {
+
+    switch (event.kind) {
+
+        events.kind_button_down => {
+
+            if (event.code != events.button_left) return;
+
+            const id = controls_regions.hit(event.x, event.y);
+
+            if (id == controls_net_toggle_id) {
+
+                const next = !controls_stats.net_enabled;
+
+                lib.link.set_enabled(next);
+                controls_stats.net_enabled = next;
+                paint_controls();
+                paint_controls_indicators_only();
+                return;
+
+            }
+
+            if (id == controls_audio_toggle_id) {
+
+                const next = !controls_stats.audio_muted;
+
+                lib.audio.set_muted(next);
+                controls_stats.audio_muted = next;
+                paint_controls();
+                paint_controls_indicators_only();
+                return;
+
+            }
+
+        },
+
+        events.kind_pointer_move => {
+
+            const previous = controls_regions.hovered_id();
+
+            if (controls_regions.pointer_move(event.x, event.y)) {
+
+                const current = controls_regions.hovered_id();
+                const changed = hover_damage(&controls_regions, previous, current);
+
+                if (!changed.is_empty()) paint_controls_damage(changed) else paint_controls();
+
+            }
+
+            if (controls_regions.hit(event.x, event.y) != 0) lib.cursor.set(&connection, .clicker) else lib.cursor.set(&connection, .pointer);
+
+        },
+
+        events.kind_window_blur => close_controls(),
+
+        events.kind_key_down => {
+
+            if (event.code == key_esc) close_controls();
+
+        },
+
+        else => {},
+
+    }
+
+}
+
+fn paint_controls() void {
+
+    paint_controls_content();
+
+    if (controls) |window| window.present_all() catch {};
+
+}
+
+fn paint_controls_damage(damage: Rect) void {
+
+    const window = controls orelse return;
+    const target = damage.intersect(window.surface.bounds());
+
+    if (target.is_empty()) return;
+
+    const clipped = window.surface.clipped(target);
+
+    paint_controls_surface(&clipped);
+    window.present(target) catch {};
+
+}
+
+fn paint_controls_content() void {
+
+    const window = controls orelse return;
+
+    paint_controls_surface(&window.surface);
+
+}
+
+fn paint_controls_surface(surface: *const gfx.Surface) void {
+
+    const stats = controls_stats;
+    const pad: i32 = 12;
+    const row_h: i32 = 34;
+    const width: i32 = @intCast(surface.width);
+
+    panel(surface, surface.bounds(), ui.theme.surface);
+    controls_regions.reset();
+
+    var y: i32 = pad;
+
+    const net_detail: []const u8 = if (!stats.net_enabled) "Off" else if (stats.net_up) "Connected" else "Not Connected";
+    const audio_detail: []const u8 = if (stats.audio_muted) "Muted" else "Enabled";
+
+    paint_controls_toggle_row(surface, &y, width, pad, row_h, controls_net_toggle_id, "Network", stats.net_enabled, net_detail);
+    paint_controls_toggle_row(surface, &y, width, pad, row_h, controls_audio_toggle_id, "Audio", !stats.audio_muted, audio_detail);
+
+}
+
+fn paint_controls_toggle_row(surface: *const gfx.Surface, y: *i32, width: i32, pad: i32, row_h: i32, id: u32, title: []const u8, on: bool, detail: []const u8) void {
+
+    const row = Rect{ .x = pad, .y = y.*, .w = width - pad * 2, .h = row_h };
+    const toggle_w: i32 = 44;
+    const toggle = Rect{ .x = row.x + row.w - toggle_w, .y = row.y + 5, .w = toggle_w, .h = row_h - 10 };
+    const track_r = @divTrunc(toggle.h, 2);
+
+    controls_regions.add(id, toggle);
+
+    text_in(surface, .{ .x = row.x, .y = row.y + 2, .w = row.w - toggle_w - 8, .h = 16 }, 0, 13, title, ui.theme.text);
+    text_in(surface, .{ .x = row.x, .y = row.y + 17, .w = row.w - toggle_w - 8, .h = 14 }, 0, 11, detail, ui.theme.text_faint);
+
+    ui.fill_round_rect(surface, toggle, track_r, if (on) ui.theme.accent_dim else ui.theme.surface_alt);
+
+    const knob_size: i32 = toggle.h - 4;
+    const knob_x = if (on) toggle.x + toggle.w - knob_size - 2 else toggle.x + 2;
+
+    ui.fill_round_rect(surface, .{ .x = knob_x, .y = toggle.y + 2, .w = knob_size, .h = knob_size }, @divTrunc(knob_size, 2), if (on) ui.theme.accent else ui.theme.text_dim);
+
+    y.* += row_h + 4;
+
+}
+
+fn toggle_switcher() void {
+
+    if (switcher_open) close_switcher() else open_switcher();
+
+}
+
+fn open_switcher() void {
+
+    close_menu();
+    close_controls();
+    close_calendar();
+    close_notifications();
+
+    ensure_switcher() catch return;
+
+    switcher_search.clear();
+    switcher_selected = 0;
+    rebuild_switcher_items();
+
+    const window = switcher orelse return;
+    const screen = lib.wm.screen_info(&connection) catch return;
+    const popup_w: i32 = @intCast(window.surface.width);
+    const popup_h: i32 = @intCast(window.surface.height);
+    const x = @divTrunc(@as(i32, @intCast(screen.width)) - popup_w, 2);
+    const y = @max(dock_margin(), @divTrunc(@as(i32, @intCast(screen.height)) - popup_h, 3));
+
+    paint_switcher_content();
+    reveal_slide_up(&window, x, y);
+    switcher_open = true;
+
+}
+
+fn close_switcher() void {
+
+    if (!switcher_open) return;
+
+    if (switcher) |window| lib.wm.minimize(&connection, window.id) catch {};
+
+    switcher_open = false;
+
+}
+
+fn switcher_popup_width() u32 {
+
+    return 560;
+
+}
+
+fn switcher_popup_height() u32 {
+
+    return 420;
+
+}
+
+fn ensure_switcher() !void {
+
+    if (switcher != null) return;
+
+    switcher = try connection.create_window(switcher_popup_width(), switcher_popup_height(), proto.window.flag_undecorated, "switcher");
+
+    if (switcher) |*window| lib.wm.minimize(&connection, window.id) catch {};
+
+}
+
+fn handle_switcher(event: events.Event) void {
+
+    switch (event.kind) {
+
+        events.kind_key_down => switcher_key(event.code),
+
+        events.kind_key_up => _ = switcher_keyboard.modifier(events.kind_key_up, event.code),
+
+        events.kind_button_down => {
+
+            if (event.code != events.button_left) return;
+
+            const id = switcher_regions.hit(event.x, event.y);
+
+            if (id >= switcher_row_id_base) {
+
+                const index = id - switcher_row_id_base;
+
+                if (index < switcher_count) {
+
+                    switcher_selected = index;
+                    activate_switcher_item();
+
+                }
+
+            }
+
+        },
+
+        events.kind_pointer_move => {
+
+            // Full repaint: selection follows hover, so partial damage can leave stale selected rows.
+            if (switcher_regions.pointer_move(event.x, event.y)) {
+
+                const current = switcher_regions.hovered_id();
+
+                if (current >= switcher_row_id_base) {
+
+                    const index = current - switcher_row_id_base;
+
+                    if (index < switcher_count) switcher_selected = index;
+
+                }
+
+                paint_switcher();
+
+            }
+
+            if (event.y < search_height()) lib.cursor.set(&connection, .selector)
+            else if (switcher_regions.hit(event.x, event.y) != 0) lib.cursor.set(&connection, .clicker)
+            else lib.cursor.set(&connection, .pointer);
+
+        },
+
+        events.kind_window_blur => close_switcher(),
+
+        else => {},
+
+    }
+
+}
+
+fn switcher_key(code: u16) void {
+
+    if (code == key_leftmeta or code == key_rightmeta) {
+
+        close_switcher();
+        return;
+
+    }
+
+    if (code == key_esc) {
+
+        close_switcher();
+        return;
+
+    }
+
+    if (switcher_keyboard.modifier(events.kind_key_down, code)) return;
+
+    if (code == key_enter) {
+
+        activate_switcher_item();
+        return;
+
+    }
+
+    if (code == 103) {
+
+        if (switcher_selected > 0) switcher_selected -= 1;
+        paint_switcher();
+        return;
+
+    }
+
+    if (code == 108) {
+
+        if (switcher_count > 0 and switcher_selected + 1 < switcher_count) switcher_selected += 1;
+        paint_switcher();
+        return;
+
+    }
+
+    var buffer: [3]u8 = undefined;
+    const bytes = switcher_keyboard.bytes(code, &buffer);
+
+    if (bytes.len == 0) return;
+
+    if (bytes.len == 1 and bytes[0] == 0x1b) {
+
+        close_switcher();
+        return;
+
+    }
+
+    if (switcher_search.feed(bytes, switcher_keyboard.shift)) {
+
+        switcher_selected = 0;
+        rebuild_switcher_items();
+        paint_switcher();
+
+    }
+
+}
+
+fn activate_switcher_item() void {
+
+    if (switcher_selected >= switcher_count) {
+
+        close_switcher();
+        return;
+
+    }
+
+    const item = switcher_items[switcher_selected];
+
+    close_switcher();
+
+    switch (item.kind) {
+
+        .window => {
+
+            if (item.window_index < window_count) {
+
+                const entry = windows[item.window_index];
+
+                if (entry.minimized != 0) {
+
+                    lib.wm.restore(&connection, entry.id) catch {};
+
+                }
+
+                lib.wm.activate(&connection, entry.id) catch {};
+
+            }
+
+        },
+
+        .app => {
+
+            if (item.app_index < app_count) launch(apps[item.app_index].program);
+
+        },
+
+        .file => {
+
+            const path = item.path[0..item.path_len];
+
+            if (path.len > 0 and path[path.len - 1] == '/') {
+
+                lib.wm.launch_with_path("files", path[0 .. path.len - 1]);
+
+            } else {
+
+                const name = std.fs.path.basename(path);
+
+                if (lib.handler.match(name)) |slot| {
+
+                    lib.wm.launch_with_path(slot.app(), path);
+
+                } else {
+
+                    lib.wm.launch_with_path("notepad", path);
+
+                }
+
+            }
+
+        },
+
+    }
+
+}
+
+fn rebuild_switcher_items() void {
+
+    switcher_count = 0;
+    const query = switcher_search.slice();
+
+    var index: usize = 0;
+
+    while (index < window_count and switcher_count < switcher_items.len) : (index += 1) {
+
+        const info = windows[index];
+        const title = info.title[0..@min(@as(usize, @intCast(info.title_len)), proto.window.max_title)];
+
+        if (query.len != 0 and !contains_ignore_case(title, query)) continue;
+
+        push_switcher_item(.{ .kind = .window, .window_index = @intCast(index) }, title, "");
+
+    }
+
+    index = 0;
+
+    while (index < app_count and switcher_count < switcher_items.len) : (index += 1) {
+
+        const app = apps[index];
+
+        if (query.len != 0 and !contains_ignore_case(app.title, query) and !contains_ignore_case(app.program, query) and !contains_ignore_case(app.description, query)) continue;
+
+        push_switcher_item(.{ .kind = .app, .app_index = @intCast(index) }, app.title, app.program);
+
+    }
+
+    if (query.len != 0) walk_files_for_switcher(query);
+
+    if (switcher_selected >= switcher_count) switcher_selected = if (switcher_count == 0) 0 else switcher_count - 1;
+
+}
+
+fn push_switcher_item(seed: SwitcherItem, label: []const u8, path: []const u8) void {
+
+    if (switcher_count >= switcher_items.len) return;
+
+    var item = seed;
+    const label_len = @min(label.len, item.label.len);
+    const path_len = @min(path.len, item.path.len);
+
+    @memcpy(item.label[0..label_len], label[0..label_len]);
+    item.label_len = @intCast(label_len);
+    @memcpy(item.path[0..path_len], path[0..path_len]);
+    item.path_len = @intCast(path_len);
+
+    switcher_items[switcher_count] = item;
+    switcher_count += 1;
+
+}
+
+fn walk_files_for_switcher(query: []const u8) void {
+
+    var client = lib.fs.Client.connect(cap.memory) catch return;
+    defer client.close();
+
+    const roots = [_][]const u8{ "/root/user", "/root" };
+
+    for (roots) |root| {
+
+        scan_dir_for_switcher(&client, root, query, 0);
+
+    }
+
+}
+
+fn scan_dir_for_switcher(client: *lib.fs.Client, path: []const u8, query: []const u8, depth: u8) void {
+
+    if (switcher_count >= switcher_items.len or depth > 1) return;
+
+    const entries = client.list(path) catch return;
+
+    for (entries) |entry| {
+
+        if (switcher_count >= switcher_items.len) return;
+
+        const name = entry.name[0..entry.name_len];
+
+        if (name.len == 0 or name[0] == '.') continue;
+
+        var full: [max_switcher_path]u8 = undefined;
+        const written = std.fmt.bufPrint(&full, "{s}/{s}", .{ path, name }) catch continue;
+        const is_dir = entry.kind == proto.filesystem.kind_directory;
+
+        if (contains_ignore_case(name, query) or contains_ignore_case(written, query)) {
+
+            if (is_dir and written.len + 1 < full.len) {
+
+                full[written.len] = '/';
+                push_switcher_item(.{ .kind = .file }, name, full[0 .. written.len + 1]);
+
+            } else {
+
+                push_switcher_item(.{ .kind = .file }, name, written);
+
+            }
+
+        }
+
+        if (is_dir and depth == 0) scan_dir_for_switcher(client, written, query, depth + 1);
+
+    }
+
+}
+
+fn paint_switcher() void {
+
+    paint_switcher_content();
+
+    if (switcher) |window| window.present_all() catch {};
+
+}
+
+fn paint_switcher_content() void {
+
+    const window = switcher orelse return;
+
+    paint_switcher_surface(&window.surface);
+
+}
+
+fn paint_switcher_surface(surface: *const gfx.Surface) void {
+
+    const width: i32 = @intCast(surface.width);
+    const height: i32 = @intCast(surface.height);
+    const pad: i32 = 12;
+    const row_h: i32 = 40;
+
+    panel(surface, surface.bounds(), ui.theme.surface);
+    switcher_regions.reset();
+
+    const search_rect = Rect{ .x = pad, .y = pad, .w = width - pad * 2, .h = search_height() - 8 };
+    const icon_size: i32 = 20;
+    const text_rect = Rect{
+
+        .x = search_rect.x + 8 + icon_size + 8,
+        .y = search_rect.y,
+        .w = search_rect.w - (8 + icon_size + 8) - 8,
+        .h = search_rect.h,
+
+    };
+
+    ui.paint_field_chrome(surface, search_rect, true);
+    lib.draw.vector.icon_in(surface, .{
+
+        .x = search_rect.x + 8,
+        .y = search_rect.y + @divTrunc(search_rect.h - icon_size, 2),
+        .w = icon_size,
+        .h = icon_size,
+
+    }, lib.icons.search, ui.theme.text_dim);
+    ui.paint_field_content(surface, &font, text_rect, &switcher_search, "Search windows, apps, files", true, 13);
+
+    var y = search_rect.y + search_rect.h + 10;
+    var index: usize = 0;
+
+    while (index < switcher_count and y + row_h <= height - pad) : (index += 1) {
+
+        const item = switcher_items[index];
+        const row = Rect{ .x = pad, .y = y, .w = width - pad * 2, .h = row_h };
+        const id = switcher_row_id_base + @as(u32, @intCast(index));
+
+        switcher_regions.add(id, row);
+
+        const selected = index == switcher_selected or switcher_regions.hovered(id);
+
+        if (selected) ui.fill_round_rect(surface, row, 6, ui.theme.hover);
+
+        const kind_label: []const u8 = switch (item.kind) {
+
+            .window => "Window",
+            .app => "App",
+            .file => "File",
+
+        };
+
+        const icon = switch (item.kind) {
+
+            .window => lib.icons.apps,
+            .app => if (item.app_index < app_count) apps[item.app_index].icon else lib.icons.apps,
+            .file => if (item.path_len > 0 and item.path[item.path_len - 1] == '/') lib.icons.folder else lib.icons.file,
+
+        };
+
+        lib.draw.vector.icon_in(surface, .{ .x = row.x + 10, .y = row.y + @divTrunc(row.h - 20, 2), .w = 20, .h = 20 }, icon, ui.theme.text);
+
+        const label = item.label[0..item.label_len];
+        const has_sub = item.path_len != 0 and item.kind != .window;
+        const label_w = row.w - 112;
+
+        if (has_sub) {
+
+            text_in(surface, .{ .x = row.x + 40, .y = row.y + 4, .w = label_w, .h = 16 }, 0, 13, label, ui.theme.text);
+            text_in(surface, .{ .x = row.x + 40, .y = row.y + 20, .w = label_w, .h = 14 }, 0, 11, item.path[0..item.path_len], ui.theme.text_faint);
+
+        } else {
+
+            text_in(surface, .{ .x = row.x + 40, .y = row.y, .w = label_w, .h = row.h }, 0, 13, label, ui.theme.text);
+
+        }
+
+        text_in(surface, .{ .x = row.x + row.w - 72, .y = row.y, .w = 60, .h = row.h }, 0, 11, kind_label, ui.theme.text_faint);
+
+        y += row_h + 4;
+
+    }
+
+    if (switcher_count == 0) {
+
+        text_center(surface, .{ .x = pad, .y = y + 24, .w = width - pad * 2, .h = 20 }, 13, "No matches", ui.theme.text_faint);
+
+    }
+
+}
+
 fn draw_text(surface: *const gfx.Surface, x: i32, y: i32, size: u32, content: []const u8, color: gfx.Color) void {
 
     font.draw(surface, x, y, size, content, color);
@@ -3208,6 +4115,18 @@ fn start_weather_worker() !void {
 
 }
 
+fn start_controls_worker() !void {
+
+    const stack = try sys.create(.region, ticker_stack_pages * page_size, cap.memory);
+    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
+    const thread = try sys.create_thread(@intFromPtr(&controls_worker), base + ticker_stack_pages * page_size);
+
+    sys.close(stack) catch {};
+
+    try sys.start(thread);
+
+}
+
 fn ticker() callconv(.c) noreturn {
 
     while (true) {
@@ -3250,6 +4169,32 @@ fn weather_worker() callconv(.c) noreturn {
         refresh_weather();
 
         @atomicStore(u32, &weather_tick, 1, .release);
+        sys.notify(ready, proto.window.ring_bit) catch {};
+
+    }
+
+}
+
+fn controls_worker() callconv(.c) noreturn {
+
+    while (true) {
+
+        lib.time.sleep_ms(1000);
+
+        var next = controls_stats;
+
+        if (lib.link.status()) |status| {
+
+            next.net_up = status.up;
+            next.net_enabled = status.enabled;
+
+        }
+
+        next.audio_muted = lib.audio.muted();
+
+        controls_stats = next;
+
+        @atomicStore(u32, &controls_tick, 1, .release);
         sys.notify(ready, proto.window.ring_bit) catch {};
 
     }

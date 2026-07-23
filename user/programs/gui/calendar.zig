@@ -75,17 +75,19 @@ const Nav = enum(u32) {
 
 };
 
-pub fn main(_: []const []const u8) u8 {
+pub fn main(args: []const []const u8) u8 {
 
-    run() catch return 1;
+    run(args) catch return 1;
 
     return 0;
 
 }
 
-fn run() !void {
+fn run(args: []const []const u8) !void {
 
     lib.prefs.refresh();
+
+    if (args.len > 0) lib.wm.bind_program(args[0]);
 
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
@@ -94,7 +96,7 @@ fn run() !void {
 
     reset_view();
 
-    window = try connection.create_window(win_w, @intCast(content_height(false)), 0, "Calendar");
+    window = try lib.wm.open_main(&connection, win_w, @intCast(content_height(false)), "Calendar");
 
     _ = lib.draw.round.masks_for(6);
 
@@ -108,7 +110,7 @@ fn run() !void {
 
             events.kind_window_close => {
 
-                window.destroy();
+                lib.wm.close_main(&connection, &window);
                 return;
 
             },

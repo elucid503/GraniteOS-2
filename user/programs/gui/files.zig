@@ -233,23 +233,25 @@ var drag_active = false;
 var drag_index: ?usize = null;
 var drop_target: DropTarget = .none;
 
-pub fn main(_: []const []const u8) u8 {
+pub fn main(args: []const []const u8) u8 {
 
-    run() catch return 1;
+    run(args) catch return 1;
 
     return 0;
 
 }
 
-fn run() !void {
+fn run(args: []const []const u8) !void {
 
     lib.prefs.refresh();
+
+    if (args.len > 0) lib.wm.bind_program(args[0]);
 
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(800, 520, 0, "Files");
+    window = try lib.wm.open_main(&connection, 800, 520, "Files");
 
     // Zero in place — never materialize a multi-tab temporary on the 512 KiB stack.
     @memset(std.mem.asBytes(&tabs), 0);
@@ -350,7 +352,7 @@ fn dispatch_batch(batch: []const events.Event) bool {
 
             events.kind_window_close => {
 
-                window.destroy();
+                lib.wm.close_main(&connection, &window);
                 return true;
 
             },

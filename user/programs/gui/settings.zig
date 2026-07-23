@@ -66,17 +66,19 @@ var ext_label_lens: [lib.handler.max_handlers]usize = .{0} ** lib.handler.max_ha
 var choice_labels_buf: [lib.handler.max_handlers][24]u8 = undefined;
 var choice_label_lens: [lib.handler.max_handlers]usize = .{0} ** lib.handler.max_handlers;
 
-pub fn main(_: []const []const u8) u8 {
+pub fn main(args: []const []const u8) u8 {
 
-    run() catch return 1;
+    run(args) catch return 1;
 
     return 0;
 
 }
 
-fn run() !void {
+fn run(args: []const []const u8) !void {
 
     lib.prefs.refresh();
+
+    if (args.len > 0) lib.wm.bind_program(args[0]);
 
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
@@ -84,7 +86,7 @@ fn run() !void {
     lib.handler.ensure();
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(520, 560, 0, "Settings");
+    window = try lib.wm.open_main(&connection, 520, 560, "Settings");
 
     paint();
 
@@ -96,7 +98,7 @@ fn run() !void {
 
             events.kind_window_close => {
 
-                window.destroy();
+                lib.wm.close_main(&connection, &window);
                 return;
 
             },

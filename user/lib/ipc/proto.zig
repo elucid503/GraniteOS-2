@@ -79,6 +79,8 @@ pub const audio = struct {
     pub const drain: u16 = 3; // request: -                               reply: status
     pub const stop: u16 = 4; // request: -                               reply: status
     pub const attach: u16 = 5; // request: capacity, buffer Region         reply: status
+    pub const set_mute: u16 = 6; // request: 0 = unmuted, 1 = muted         reply: status
+    pub const get_mute: u16 = 7; // request: -                               reply: muted (0/1)
 
     pub const format_s16_le: u64 = 16;
     pub const max_write: usize = 16 * 1024;
@@ -212,6 +214,7 @@ pub const window = struct {
     pub const close_title: u16 = 17; // request: title in words 1-3                       reply: status
     pub const place_relative: u16 = 18; // request: window id, anchor id, local (x<<32)|y reply: status
     pub const minimize_hint: u16 = 19; // request: window id, taskbar-local indicator center x   reply: status
+    pub const geometry: u16 = 20; // request: window id                              reply: (x<<32)|y, (w<<32)|h
 
     pub const flag_undecorated: u64 = 1; // no title bar or border
     pub const flag_fullscreen: u64 = 2; // sized to the screen, tracks mode changes
@@ -301,7 +304,8 @@ pub const net = struct {
     // handles: [0] = rx frame Ring Region (driver writes), [1] = tx staging Region (driver reads), [2] = Notification (driver signals on new RX frames)   reply: status
     pub const mac_address: u16 = 2; // request: -                     reply: mac[0..4] as le32 in data[1], mac[4..6] in low 16 bits of data[2]
     pub const transmit: u16 = 3; // request: length (bytes staged at offset 0)   reply: status
-    pub const link_status: u16 = 4; // request: -                     reply: 1 = up, 0 = down
+    pub const link_status: u16 = 4; // request: -                     reply: link up (0/1), rx bytes, tx bytes, software enabled (0/1)
+    pub const set_enabled: u16 = 5; // request: 0 = drop traffic, 1 = forward   reply: status
 
     pub const rx_bit: u64 = 1; // the Notification bit the driver signals when it pushes into the RX frame ring
 

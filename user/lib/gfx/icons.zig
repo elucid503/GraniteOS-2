@@ -21,6 +21,7 @@ pub const file_down = lucide("file-down");
 pub const chart = lucide("trending-up");
 pub const terminal = lucide("terminal");
 pub const network = lucide("globe");
+pub const ethernet = lucide("ethernet-port");
 pub const home = lucide("house");
 pub const arrow_up = lucide("arrow-up");
 pub const search = lucide("search");
@@ -35,6 +36,7 @@ pub const timer = lucide("timer");
 pub const paint = lucide("paintbrush");
 pub const image = lucide("image");
 pub const music = lucide("music");
+pub const volume = lucide("volume-2");
 pub const settings = lucide("settings");
 pub const pointer = lucide("mouse-pointer-2");
 pub const hand = lucide("hand");
@@ -173,6 +175,7 @@ test "non-catalog icons stroke without overflowing" {
         umbrella,
         sunrise,
         sunset,
+        volume,
 
     };
 

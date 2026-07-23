@@ -92,7 +92,42 @@ pub const Client = struct {
 
     }
 
+    pub fn set_mute(self: *Client, value: bool) !void {
+
+        _ = try ipc.request(self.endpoint, proto.audio.set_mute, &.{@intFromBool(value)}, &.{});
+
+    }
+
+    pub fn get_mute(self: *Client) !bool {
+
+        const reply = try ipc.request(self.endpoint, proto.audio.get_mute, &.{}, &.{});
+
+        return reply.data[1] != 0;
+
+    }
+
 };
+
+/// Mute without a PCM session (taskbar / controls).
+pub fn set_muted(value: bool) void {
+
+    const endpoint = stream.lookup_endpoint("audio") catch return;
+    defer sys.close(endpoint) catch {};
+
+    _ = ipc.request(endpoint, proto.audio.set_mute, &.{@intFromBool(value)}, &.{}) catch {};
+
+}
+
+pub fn muted() bool {
+
+    const endpoint = stream.lookup_endpoint("audio") catch return false;
+    defer sys.close(endpoint) catch {};
+
+    const reply = ipc.request(endpoint, proto.audio.get_mute, &.{}, &.{}) catch return false;
+
+    return reply.data[1] != 0;
+
+}
 
 pub const Chunk = struct {
 

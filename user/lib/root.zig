@@ -35,6 +35,7 @@ pub const fs = @import("fs/fs.zig");
 pub const netframe = @import("net/frame.zig");
 pub const netaddr = @import("net/addr.zig");
 pub const net = @import("net/net.zig");
+pub const link = @import("net/link.zig");
 pub const url = @import("net/url.zig");
 pub const http = @import("net/http.zig");
 pub const rng = @import("rng/rng.zig");

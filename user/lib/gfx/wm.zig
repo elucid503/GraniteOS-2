@@ -188,6 +188,82 @@ pub fn minimize_hint(connection: *window.Connection, id: u64, local_x: i32) Erro
 
 }
 
+pub fn geometry(connection: *window.Connection, id: u64) Error!prefs.WindowGeom {
+
+    const reply = try ipc.request(connection.endpoint, proto.window.geometry, &.{id}, &.{});
+
+    return .{
+
+        .x = @intCast(window.unpack_high(reply.data[1])),
+        .y = @intCast(window.unpack_low(reply.data[1])),
+        .width = window.unpack_high(reply.data[2]),
+        .height = window.unpack_low(reply.data[2]),
+
+    };
+
+}
+
+var bound_program: []const u8 = "";
+
+/// Bind argv[0] so main-window create/close can restore and persist geometry.
+pub fn bind_program(name: []const u8) void {
+
+    bound_program = name;
+
+}
+
+/// Create a decorated app window, restoring last-closed geometry when available.
+pub fn open_main(connection: *window.Connection, width: u32, height: u32, title: []const u8) Error!window.Window {
+
+    var create_w = width;
+    var create_h = height;
+    var restore_pos: ?prefs.WindowGeom = null;
+
+    if (bound_program.len != 0) {
+
+        if (prefs.load_window_geom(bound_program)) |saved| {
+
+            if (saved.width >= 160 and saved.height >= 120) {
+
+                create_w = saved.width;
+                create_h = saved.height;
+                restore_pos = saved;
+
+            }
+
+        }
+
+    }
+
+    const result = try connection.create_window(create_w, create_h, 0, title);
+
+    if (restore_pos) |saved| {
+
+        move_window(connection, result.id, saved.x, saved.y) catch {};
+
+    }
+
+    return result;
+
+}
+
+/// Persist geometry (async) then destroy. Safe to call from a close handler.
+pub fn close_main(connection: *window.Connection, target: *window.Window) void {
+
+    if (bound_program.len != 0) {
+
+        if (geometry(connection, target.id)) |geom| {
+
+            prefs.save_window_geom(bound_program, geom);
+
+        } else |_| {}
+
+    }
+
+    target.destroy();
+
+}
+
 pub fn activate_title(connection: *window.Connection, title: []const u8) Error!void {
 
     const title_words = window.pack_title(title);

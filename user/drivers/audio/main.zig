@@ -164,6 +164,7 @@ var completion: cap.Handle = 0;
 var control: Queue = undefined;
 var tx: Queue = undefined;
 var running = false;
+var muted = false;
 var frame_size: usize = 0;
 var sample_rate: u32 = 0;
 var last_latency: u32 = 0;
@@ -278,6 +279,8 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.audio.write => write_audio(badge, in.data[1], in.data[2], out),
         proto.audio.drain => drain_stream(),
         proto.audio.stop => stop_stream(),
+        proto.audio.set_mute => set_mute(in.data[1]),
+        proto.audio.get_mute => get_mute(out),
         else => -7,
 
     };
@@ -362,7 +365,15 @@ fn write_audio(badge: u64, offset: u64, length: u64, out: *Message) i64 {
     const source: [*]const u8 = @ptrFromInt(client.base + @as(usize, @intCast(offset)));
     const target: [*]u8 = @ptrFromInt(dma_base + payload_offset);
 
-    @memcpy(target[0..@intCast(length)], source[0..@intCast(length)]);
+    if (muted) {
+
+        @memset(target[0..@intCast(length)], 0);
+
+    } else {
+
+        @memcpy(target[0..@intCast(length)], source[0..@intCast(length)]);
+
+    }
 
     const xfer: *volatile PcmXfer = @ptrFromInt(dma_base + tx_offset);
     xfer.* = .{ .stream_id = stream_id };
@@ -412,6 +423,22 @@ fn stop_stream() i64 {
     frame_size = 0;
     sample_rate = 0;
     last_latency = 0;
+
+    return 0;
+
+}
+
+fn set_mute(value: u64) i64 {
+
+    muted = value != 0;
+
+    return 0;
+
+}
+
+fn get_mute(out: *Message) i64 {
+
+    out.data[1] = if (muted) 1 else 0;
 
     return 0;
 

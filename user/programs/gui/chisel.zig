@@ -151,23 +151,25 @@ var pointer_y: i32 = -1;
 var path_storage: [lib.file_picker.max_path]u8 = undefined;
 var file_path_len: usize = 0;
 
-pub fn main(_: []const []const u8) u8 {
+pub fn main(args: []const []const u8) u8 {
 
-    run() catch return 1;
+    run(args) catch return 1;
 
     return 0;
 
 }
 
-fn run() !void {
+fn run(args: []const []const u8) !void {
 
     lib.prefs.refresh();
+
+    if (args.len > 0) lib.wm.bind_program(args[0]);
 
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try connection.create_window(700, 540, 0, "Chisel");
+    window = try lib.wm.open_main(&connection, 700, 540, "Chisel");
     _ = lib.draw.round.masks_for(radius);
     _ = lib.draw.round.masks_for(chip_radius);
     _ = lib.draw.round.masks_for(4);
@@ -223,7 +225,7 @@ fn dispatch(batch: []const events.Event) bool {
 
             events.kind_window_close => {
 
-                window.destroy();
+                lib.wm.close_main(&connection, &window);
                 return true;
 
             },
