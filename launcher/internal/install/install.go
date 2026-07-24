@@ -171,8 +171,9 @@ func linkQEMU(srcDir, destDir string) error {
 func installQEMU(setupPath, destDir string) error {
 
 	// CreateProcess cannot elevate; ShellExecute via PowerShell surfaces UAC.
+	// -FilePath works on Windows PowerShell 5.1; -LiteralPath does not exist there.
 	ps := fmt.Sprintf(
-		`Start-Process -LiteralPath '%s' -ArgumentList @('/S','/D=%s') -Verb RunAs -Wait`,
+		`Start-Process -FilePath '%s' -ArgumentList @('/S','/D=%s') -Verb RunAs -Wait`,
 		psQuote(setupPath),
 		psQuote(destDir),
 	)
