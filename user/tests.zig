@@ -23,6 +23,11 @@ test {
     _ = @import("lib").window;
     _ = @import("lib").rng;
     _ = @import("lib").url;
+    _ = @import("lib").http;
+    _ = @import("lib").icy;
+    _ = @import("lib").mp3;
+    _ = @import("lib").mime;
+    _ = @import("lib").imap;
     _ = @import("lib").tls;
     _ = @import("servers/naming/main.zig");
     _ = @import("servers/display/manager.zig");

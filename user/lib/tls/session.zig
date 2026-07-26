@@ -82,11 +82,37 @@ pub const Session = struct {
 
     }
 
+    /// Fills `out` completely unless the peer closes first. Right for bulk transfers where the
+    /// caller knows more data is coming; use `recv_some` for anything conversational.
     pub fn recv(self: *Session, out: []u8) Error!usize {
 
         // readSliceShort returns 0 at EOF (ShortError is only ReadFailed).
 
         return self.client.reader.readSliceShort(out) catch return error.ReadFailed;
+
+    }
+
+    /// Whatever has already arrived, blocking only until the first byte. Protocols where the
+    /// server speaks first (IMAP, SMTP) would otherwise hang waiting for `out` to fill.
+    pub fn recv_some(self: *Session, out: []u8) Error!usize {
+
+        const reader = &self.client.reader;
+
+        reader.fill(1) catch |failure| switch (failure) {
+
+            error.EndOfStream => return 0,
+            else => return error.ReadFailed,
+
+        };
+
+        const available = reader.buffered();
+        const count = @min(available.len, out.len);
+
+        @memcpy(out[0..count], available[0..count]);
+
+        reader.toss(count);
+
+        return count;
 
     }
 

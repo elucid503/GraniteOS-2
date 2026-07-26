@@ -131,6 +131,31 @@ pub const Connection = struct {
 
     }
 
+    /// Whatever has already arrived rather than a full buffer. Line protocols need this: the
+    /// secure `recv` blocks until `out` fills, which never happens on a short greeting.
+    pub fn recv_some(self: *Connection, out: []u8) !usize {
+
+        return switch (self.kind) {
+
+            .plain => try self.socket.recv(out),
+            .secure => try self.session.recv_some(out),
+
+        };
+
+    }
+
+    /// Bound how long a read may block. Zero (the default) parks on readiness forever.
+    pub fn set_read_timeout(self: *Connection, timeout_ms: u64) void {
+
+        switch (self.kind) {
+
+            .plain => self.socket.set_read_timeout(timeout_ms),
+            .secure => self.session.socket.set_read_timeout(timeout_ms),
+
+        }
+
+    }
+
     pub fn close(self: *Connection) void {
 
         switch (self.kind) {

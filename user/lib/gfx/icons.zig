@@ -67,6 +67,21 @@ pub const sunrise = lucide("sunrise");
 pub const sunset = lucide("sunset");
 pub const uv = lucide("sun");
 
+// Transport and streaming, drawn for GraniteOS in the same 24x24 outline style.
+
+fn granite(comptime stem: []const u8) []const u8 {
+
+    return @embedFile("../icons/granite/" ++ stem ++ ".svg");
+
+}
+
+pub const play = granite("play");
+pub const stop = granite("stop");
+pub const radio = granite("radio");
+pub const star = granite("star");
+pub const waves = granite("waves");
+pub const mail = granite("mail");
+
 const Entry = struct {
 
     name: []const u8,
@@ -97,6 +112,8 @@ const catalog = [_]Entry{
     .{ .name = "image", .svg = image },
     .{ .name = "music", .svg = music },
     .{ .name = "weather", .svg = weather_app },
+    .{ .name = "radio", .svg = radio },
+    .{ .name = "mail", .svg = mail },
 
 };
 
