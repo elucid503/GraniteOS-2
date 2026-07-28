@@ -68,6 +68,9 @@ pub const Session = struct {
 
         errdefer socket.close();
 
+        // Handshake had no deadline of its own; without this a quiet peer wedges the worker forever.
+        socket.set_read_timeout(25_000);
+
         try finish_handshake(out, authority, heap, socket, host);
 
     }

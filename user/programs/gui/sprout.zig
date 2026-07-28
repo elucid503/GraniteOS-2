@@ -354,7 +354,7 @@ fn run(args: []const []const u8) !void {
                     // Let the worker finish or exit so netstack/FS sessions detach cleanly.
                     var waits: usize = 0;
 
-                    while (@atomicLoad(u32, &worker_alive, .acquire) != 0 and waits < 500) : (waits += 1) {
+                    while (@atomicLoad(u32, &worker_alive, .acquire) != 0 and waits < 3500) : (waits += 1) {
 
                         lib.time.sleep_ms(10);
 
@@ -1293,7 +1293,19 @@ fn worker_connect(heap: *lib.mem.Heap) !void {
 
 fn worker_resume(heap: *lib.mem.Heap) !void {
 
-    try worker_open_account(heap);
+    worker_progress("Restoring Sprout CDN session...");
+
+    // One soft retry: first HTTPS of a process pays for CA load + DNS; a single blip should not force re-login.
+    worker_open_account(heap) catch |failure| {
+
+        if (failure == error.RequestRejected) return failure;
+
+        worker_progress("Retrying session restore...");
+        lib.time.sleep_ms(400);
+
+        try worker_open_account(heap);
+
+    };
 
 }
 

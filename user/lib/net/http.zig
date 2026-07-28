@@ -120,20 +120,9 @@ pub const Connection = struct {
 
     }
 
+    /// Read available bytes. Secure path must not use fill-the-buffer recv: HTTPS servers often
+    /// keep the socket open after a short body, and a 96 KiB fill would hang until timeout.
     pub fn recv(self: *Connection, out: []u8) !usize {
-
-        return switch (self.kind) {
-
-            .plain => try self.socket.recv(out),
-            .secure => try self.session.recv(out),
-
-        };
-
-    }
-
-    /// Whatever has already arrived rather than a full buffer. Line protocols need this: the
-    /// secure `recv` blocks until `out` fills, which never happens on a short greeting.
-    pub fn recv_some(self: *Connection, out: []u8) !usize {
 
         return switch (self.kind) {
 
@@ -141,6 +130,13 @@ pub const Connection = struct {
             .secure => try self.session.recv_some(out),
 
         };
+
+    }
+
+    /// Alias kept for call sites that want the conversational read name.
+    pub fn recv_some(self: *Connection, out: []u8) !usize {
+
+        return self.recv(out);
 
     }
 

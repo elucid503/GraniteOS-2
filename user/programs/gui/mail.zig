@@ -136,6 +136,7 @@ var body_height_cache: i32 = 0;
 
 var ui_wake: u32 = 0;
 var running: u32 = 1;
+var worker_alive: u32 = 0;
 
 // Owned by the worker.
 
@@ -174,6 +175,9 @@ fn run(args: []const []const u8) !void {
 
     try start_worker();
 
+    // Same pattern as CDN session restore: saved credentials connect on launch.
+    if (address_field.len > 0 and password_field.len > 0) start_connect();
+
     paint();
 
     var blink: u64 = lib.time.now_ms();
@@ -189,6 +193,16 @@ fn run(args: []const []const u8) !void {
                 events.kind_window_close => {
 
                     @atomicStore(u32, &running, 0, .release);
+
+                    // Wait for the worker so IMAP/TLS detaches before the process dies.
+                    var waits: usize = 0;
+
+                    while (@atomicLoad(u32, &worker_alive, .acquire) != 0 and waits < 3500) : (waits += 1) {
+
+                        lib.time.sleep_ms(10);
+
+                    }
+
                     lib.wm.close_main(&connection, &window);
 
                     return;
@@ -298,13 +312,13 @@ fn run(args: []const []const u8) !void {
 
 }
 
-// Account settings. The password is deliberately not part of this.
+// Account settings under /cfgs/mail.config: host, address, base64(app-password).
 
 fn load_account() void {
 
     set_field(&server_field, "imap.gmail.com");
 
-    var storage: [256]u8 = undefined;
+    var storage: [384]u8 = undefined;
     const text = lib.config.load(account_name, &storage) catch return;
 
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -317,12 +331,43 @@ fn load_account() void {
 
     if (lines.next()) |user| set_field(&address_field, user);
 
+    if (lines.next()) |encoded| {
+
+        const trimmed = std.mem.trim(u8, encoded, " \t\r");
+
+        if (trimmed.len == 0) return;
+
+        var secret: [96]u8 = undefined;
+        const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(trimmed) catch return;
+
+        if (decoded_len > secret.len) return;
+
+        std.base64.standard.Decoder.decode(secret[0..decoded_len], trimmed) catch return;
+        set_field(&password_field, secret[0..decoded_len]);
+        @memset(secret[0..decoded_len], 0);
+
+    }
+
 }
 
 fn save_account() void {
 
-    var storage: [256]u8 = undefined;
-    const text = std.fmt.bufPrint(&storage, "{s}\n{s}\n", .{ server_field.slice(), address_field.slice() }) catch return;
+    const password = password_field.slice();
+    var encoded: [128]u8 = undefined;
+    const enc_size = std.base64.standard.Encoder.calcSize(password.len);
+
+    if (enc_size > encoded.len) return;
+
+    const secret = std.base64.standard.Encoder.encode(encoded[0..enc_size], password);
+
+    var storage: [384]u8 = undefined;
+    const text = std.fmt.bufPrint(&storage, "{s}\n{s}\n{s}\n", .{
+
+        server_field.slice(),
+        address_field.slice(),
+        secret,
+
+    }) catch return;
 
     lib.config.save(account_name, text) catch {};
 
@@ -351,6 +396,8 @@ fn start_worker() !void {
 }
 
 fn worker() callconv(.c) noreturn {
+
+    @atomicStore(u32, &worker_alive, 1, .release);
 
     var heap = lib.mem.Heap.init(cap.memory);
 
@@ -402,6 +449,8 @@ fn worker() callconv(.c) noreturn {
 
     }
 
+    client.close();
+    @atomicStore(u32, &worker_alive, 0, .release);
     lib.start.exit();
 
 }
@@ -1068,7 +1117,7 @@ fn paint_setup(surface: *const gfx.Surface) void {
     ui.stroke_round_rect(surface, form, 10, 1, ui.theme.border);
 
     font.draw(surface, form.x + form_inset, form.y + form_inset, 17, "Connect to your inbox", ui.theme.text);
-    font.draw(surface, form.x + form_inset, form.y + form_inset + 28, 12, "IMAP over TLS. Gmail needs an App Password.", ui.theme.text_faint);
+    font.draw(surface, form.x + form_inset, form.y + form_inset + 28, 12, "An IMAP server is required to access mail.", ui.theme.text_faint);
 
     const rows = [_]struct { field: Field, id: u32, label: []const u8, hint: []const u8 }{
 
@@ -1115,8 +1164,7 @@ fn paint_setup(surface: *const gfx.Surface) void {
 
     }, .{ .size = 14 });
 
-    // Passwords are held in memory only; say so rather than let anyone assume otherwise.
-    text_center(surface, .{ .x = form.x, .y = connect.y + connect.h + 6, .w = form.w, .h = 16 }, 11, "The password is kept in memory only, never saved.", ui.theme.text_faint);
+    text_center(surface, .{ .x = form.x, .y = connect.y + connect.h + 6, .w = form.w, .h = 16 }, 11, "Your app password is stored locally.", ui.theme.text_faint);
 
 }
 

@@ -72,6 +72,7 @@ fn read_driver_entropy(out: []u8) !usize {
         .{ .handle = buffer, .move = false },
 
     });
+    defer _ = ipc.request(endpoint, proto.entropy.detach, &.{}, &.{}) catch {};
 
     const amount = @min(out.len, 4096);
     const reply = try ipc.request(endpoint, proto.entropy.read, &.{amount}, &.{});

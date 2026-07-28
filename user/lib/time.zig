@@ -62,13 +62,12 @@ pub fn wall_offset() i64 {
 
 }
 
-/// Best-effort: ask netstack for its NTP-derived wall offset (once per process).
+/// Best-effort: ask netstack for its NTP-derived wall offset.
+/// Retries until a non-zero offset appears (or a few attempts) so early TLS does not bake in epoch time.
 pub fn try_pull_wall_offset() void {
 
     if (builtin.os.tag != .freestanding) return;
     if (wall_offset_pulled) return;
-
-    wall_offset_pulled = true;
 
     const endpoint = stream.lookup_endpoint("netstack") catch return;
     defer sys.close(endpoint) catch {};
@@ -96,6 +95,9 @@ pub fn try_pull_wall_offset() void {
     const offset: i64 = @bitCast(reply.data[1]);
 
     wall_offset_s = offset;
+
+    // Only latch once NTP has actually corrected the clock; zero means "not synced yet".
+    if (offset != 0) wall_offset_pulled = true;
 
 }
 

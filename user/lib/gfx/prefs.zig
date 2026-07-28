@@ -759,17 +759,26 @@ fn start_geom_worker() void {
 
 fn geom_worker() callconv(.c) noreturn {
 
+    const start = @import("../runtime/start.zig");
+
     while (true) {
 
-        while (@atomicLoad(u32, &geom_save.pending, .acquire) == 0) {
+        // Drain one save then exit when idle so GUI apps that call close_main can fully die.
+        // An infinite sleeper here kept the process alive for the rest of the boot and leaked
+        // its heap (TLS roots, window surfaces, …), which broke later HTTPS apps like CDN.
+        if (@atomicRmw(u32, &geom_save.pending, .Xchg, 0, .acquire) == 0) {
 
-            // Park cheaply between rare close events.
-            const time = @import("../time.zig");
-            time.sleep_ms(50);
+            @atomicStore(u32, &geom_save_started, 0, .release);
+
+            if (@atomicLoad(u32, &geom_save.pending, .acquire) != 0) {
+
+                if (@atomicRmw(u32, &geom_save_started, .Xchg, 1, .acq_rel) == 0) continue;
+
+            }
+
+            start.exit();
 
         }
-
-        @atomicStore(u32, &geom_save.pending, 0, .release);
 
         const program = geom_save.program[0..geom_save.length];
         const geom = geom_save.geom;

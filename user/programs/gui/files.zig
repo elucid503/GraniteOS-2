@@ -50,10 +50,6 @@ const tab_close_w: i32 = 18;
 const chrome_btn: i32 = 28;
 const view_btn: i32 = 30;
 
-// Dark frost used for the banner and inspector over Quartz.
-const chrome_tint = lib.draw.rgb(14, 14, 14);
-const chrome_solid = lib.draw.rgb(22, 22, 22);
-
 var font: lib.draw.text.Face = undefined;
 
 var connection: lib.window.Connection = undefined;
@@ -130,12 +126,10 @@ var preview: [preview_bytes]u8 = undefined;
 var preview_len: usize = 0;
 var preview_is_text = false;
 
-// Thumbnail cache for selected image previews (one decode at a time).
-const thumb_file_cap = 64 * 1024;
-const thumb_decode_cap = 256 * 1024;
+// Selected-image thumbnails: heap-backed read/decode (static arenas could not fit real PNGs).
+const thumb_file_max = 6 * 1024 * 1024;
 
-var thumb_file: [thumb_file_cap]u8 = undefined;
-var thumb_decode: [thumb_decode_cap]u8 = undefined;
+var thumb_heap: lib.mem.Heap = .{ .authority = 0 };
 var thumb_path: [max_path]u8 = undefined;
 var thumb_path_len: usize = 0;
 var thumb_image: ?lib.draw.image.Buffer = null;
@@ -249,6 +243,8 @@ fn run(args: []const []const u8) !void {
 
     var bundle = try lib.desktop.open_bundle();
     font = try lib.desktop.ui_font(&bundle);
+
+    thumb_heap = lib.mem.Heap.init(cap.memory);
 
     connection = try lib.desktop.connect(cap.memory);
     window = try lib.wm.open_main(&connection, 800, 520, "Files");
@@ -2122,14 +2118,6 @@ fn view_btn_rect(mode: ViewMode) Rect {
 
 // Rendering
 
-fn paint_chrome_rect(surface: *const gfx.Surface, rect: Rect) void {
-
-    if (rect.is_empty()) return;
-
-    surface.fill_rect(rect, chrome_solid);
-
-}
-
 fn paint() void {
 
     const surface = &window.surface;
@@ -2172,7 +2160,7 @@ fn paint_banner(surface: *const gfx.Surface, width: i32) void {
 
     } else {
 
-        paint_chrome_rect(surface, banner);
+        surface.fill_rect(banner, ui.theme.surface);
 
     }
 
@@ -2684,7 +2672,7 @@ fn paint_side_panel(surface: *const gfx.Surface, width: i32, height: i32) void {
     // Flush under the banner — no gap.
     const panel = Rect{ .x = x, .y = content_top, .w = width - x, .h = height - content_top };
 
-    paint_chrome_rect(surface, panel);
+    surface.fill_rect(panel, ui.theme.surface);
     surface.fill_rect(.{ .x = x, .y = content_top, .w = 1, .h = height - content_top }, ui.theme.border);
 
     const pad = x + 16;
@@ -2950,19 +2938,25 @@ fn entry_icon(entry: Entry) []const u8 {
 
 }
 
-// Grid / inspector PNG thumbnail (small files only).
+// Grid / inspector PNG thumbnail.
 
 fn invalidate_thumb() void {
 
+    if (thumb_image) |*img| {
+
+        img.deinit(thumb_heap.allocator());
+        thumb_image = null;
+
+    }
+
     thumb_valid = false;
     thumb_path_len = 0;
-    thumb_image = null;
 
 }
 
 fn ensure_thumb(index: usize, entry: Entry) bool {
 
-    if (entry.length == 0 or entry.length > thumb_file_cap) return false;
+    if (entry.length == 0 or entry.length > thumb_file_max) return false;
 
     var path_buffer: [max_path]u8 = undefined;
     const path = path_at(index, &path_buffer) orelse return false;
@@ -2973,35 +2967,68 @@ fn ensure_thumb(index: usize, entry: Entry) bool {
 
     }
 
-    thumb_valid = false;
-    thumb_image = null;
+    invalidate_thumb();
+
     thumb_path_len = @min(path.len, thumb_path.len);
     @memcpy(thumb_path[0..thumb_path_len], path[0..thumb_path_len]);
 
     const handle = if (client) |*c| c else return false;
 
-    const file = handle.open_path(path, 0) catch return false;
+    const file = handle.open_path(path, 0) catch {
+
+        thumb_valid = true;
+        return false;
+
+    };
     defer handle.close_file(file) catch {};
 
-    const to_read: usize = @intCast(@min(entry.length, thumb_file_cap));
-    const read = handle.read(file, 0, thumb_file[0..to_read]) catch return false;
+    const file_len: usize = @intCast(entry.length);
+    const file_bytes = thumb_heap.alloc(file_len) catch {
 
-    if (read < 8) return false;
+        thumb_valid = true;
+        return false;
 
-    var fba = std.heap.FixedBufferAllocator.init(thumb_decode[0..]);
+    };
+    defer thumb_heap.free(file_bytes);
 
-    thumb_image = lib.draw.image.decode(fba.allocator(), thumb_file[0..read]) catch {
+    var offset: u64 = 0;
+
+    while (offset < file_len) {
+
+        const got = handle.read(file, offset, file_bytes[@intCast(offset)..]) catch {
+
+            thumb_valid = true;
+            return false;
+
+        };
+
+        if (got == 0) break;
+
+        offset += got;
+
+    }
+
+    if (offset < 8) {
+
+        thumb_valid = true;
+        return false;
+
+    }
+
+    const payload = file_bytes[0..@intCast(offset)];
+
+    thumb_image = lib.draw.image.decode(thumb_heap.allocator(), payload) catch {
 
         thumb_valid = true;
         return false;
 
     };
 
-    // Drop absurdly large decoded images so the fixed arena stays stable.
-    if (thumb_image) |img| {
+    if (thumb_image) |*img| {
 
-        if (img.width > 2048 or img.height > 2048) {
+        if (img.width == 0 or img.height == 0 or img.width > 4096 or img.height > 4096) {
 
+            img.deinit(thumb_heap.allocator());
             thumb_image = null;
             thumb_valid = true;
             return false;

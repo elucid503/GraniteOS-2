@@ -490,11 +490,11 @@ pub fn tick(now_ms: u64) void {
 
         if (!tcb.used) continue;
 
-        // Backstop against a leaked slot: a Tcb that landed in `.closed` (abort, or a race past `close()`) and nobody has reclaimed
-
+        // Reap ownerless closed slots only. A live session_badge means the client still owns the
+        // socket (often sitting in `.closed` while DNS runs) — reaping those broke second opens.
         if (tcb.state == .closed) {
 
-            if (now_ms -% tcb.closed_since_ms >= orphan_grace_ms) tcb.used = false;
+            if (tcb.session_badge == 0 and now_ms -% tcb.closed_since_ms >= orphan_grace_ms) tcb.used = false;
 
             continue;
 
@@ -1124,6 +1124,7 @@ fn abort(tcb: *Tcb, mark_err: bool) void {
 
     notify_fn(tcb.session_badge, proto.socket.closed | (if (mark_err) proto.socket.err else 0));
 
+    tcb.session_badge = 0;
     tcb.state = .closed;
     tcb.closed_since_ms = lib.time.now_ms();
 

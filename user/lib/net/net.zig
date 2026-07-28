@@ -15,6 +15,8 @@ const RecvError = Error || error{Timeout};
 const buffer_size = 65536;
 // 0 = park on readiness forever (preferred for bulk transfer). Non-zero enables a soft deadline.
 const default_read_timeout_ms: u64 = 0;
+const connect_timeout_ms: u64 = 25_000;
+const resolve_timeout_ms: u64 = 20_000;
 
 pub const Socket = struct {
 
@@ -58,6 +60,8 @@ pub const Socket = struct {
 
         _ = try ipc.request(result.endpoint, proto.socket.connect, &.{ result.sid, addr, port }, &.{});
 
+        const started = time.now_ms();
+
         while (true) {
 
             const bits = try result.poll_bits();
@@ -65,7 +69,10 @@ pub const Socket = struct {
             if (bits & proto.socket.err != 0) return error.Gone;
             if (bits & proto.socket.connected != 0) return result;
 
-            _ = try sys.wait(result.readiness);
+            // Poll+sleep so a missed notify cannot wedge the worker forever (UI stays on Connecting).
+            if (time.now_ms() -% started >= connect_timeout_ms) return error.Gone;
+
+            time.sleep_ms(10);
 
         }
 
@@ -80,13 +87,22 @@ pub const Socket = struct {
 
         @memcpy(dest[0..name.len], name);
 
+        const started = time.now_ms();
+
         while (true) {
 
             const reply = ipc.request(self.endpoint, proto.socket.resolve, &.{ 0, name.len }, &.{}) catch |failure| switch (failure) {
 
                 error.WouldBlock => {
 
-                    _ = try sys.wait(self.readiness);
+                    // Same lost-wakeup pattern as recv: check readiness before parking.
+                    const bits = self.poll_bits() catch 0;
+
+                    if (bits & proto.socket.resolved != 0) continue;
+                    if (bits & proto.socket.err != 0) return error.Gone;
+                    if (time.now_ms() -% started >= resolve_timeout_ms) return error.Gone;
+
+                    time.sleep_ms(10);
                     continue;
 
                 },
@@ -143,11 +159,19 @@ pub const Socket = struct {
 
         while (true) {
 
+            const started = time.now_ms();
+
             const reply = ipc.request(self.endpoint, proto.socket.send, &.{ self.sid, 0, amount }, &.{}) catch |failure| switch (failure) {
 
                 error.WouldBlock => {
 
-                    _ = try sys.wait(self.readiness);
+                    const bits = self.poll_bits() catch 0;
+
+                    if (bits & (proto.socket.writable | proto.socket.err | proto.socket.closed) != 0) continue;
+                    if (self.read_timeout_ms != 0 and time.now_ms() -% started >= self.read_timeout_ms) return error.Gone;
+                    if (self.read_timeout_ms == 0 and time.now_ms() -% started >= connect_timeout_ms) return error.Gone;
+
+                    time.sleep_ms(10);
                     continue;
 
                 },

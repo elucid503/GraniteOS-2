@@ -103,7 +103,12 @@ pub const Face = struct {
 
         while (next_codepoint(text, &offset)) |codepoint| {
 
-            width += self.advance(self.glyph_index(codepoint), px);
+            const glyph = self.glyph_index(codepoint);
+
+            // Glyph 0 is .notdef (the empty-box fallback); skip so missing codepoints take no space.
+            if (glyph == 0 and codepoint != 0) continue;
+
+            width += self.advance(glyph, px);
 
         }
 
@@ -153,7 +158,11 @@ pub const Face = struct {
 
         while (next_codepoint(text, &offset)) |codepoint| {
 
-            self.draw_glyph(surface, self.glyph_index(codepoint), to_fx(pen), baseline, px, color);
+            const glyph = self.glyph_index(codepoint);
+
+            if (glyph == 0 and codepoint != 0) continue;
+
+            self.draw_glyph(surface, glyph, to_fx(pen), baseline, px, color);
 
             pen += cell;
 
@@ -171,6 +180,9 @@ pub const Face = struct {
         while (next_codepoint(text, &offset)) |codepoint| {
 
             const glyph = self.glyph_index(codepoint);
+
+            // Do not paint .notdef tofu for unmapped codepoints (emoji, rare symbols, …).
+            if (glyph == 0 and codepoint != 0) continue;
 
             self.draw_glyph(surface, glyph, pen, baseline, px, color);
 
@@ -330,6 +342,9 @@ pub const Face = struct {
     }
 
     fn draw_glyph(self: *const Face, surface: *const Surface, glyph: u16, pen_fx: i32, baseline: i32, px: u32, color: draw_mod.Color) void {
+
+        // .notdef is glyph 0; callers already skip missing cmap hits, but guard direct use too.
+        if (glyph == 0) return;
 
         const pen_px = @divFloor(pen_fx, 64);
         const fraction = pen_fx - pen_px * 64;
