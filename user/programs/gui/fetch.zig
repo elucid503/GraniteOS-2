@@ -1,4 +1,4 @@
-// Fetch: a GUI front end for the TCP/HTTP stack
+// Requests: GUI HTTP API client (methods, headers, body, JSON pretty-print).
 
 const std = @import("std");
 
@@ -17,10 +17,10 @@ pub const std_options = lib.rng.std_options;
 
 pub const app_meta = .{
 
-    .title = "Fetch",
-    .description = "Fetch a web address",
+    .title = "Requests",
+    .description = "Make API requests.",
     .category = "Internet",
-    .icon = "network",
+    .icon = "arrow-up",
 
 };
 
@@ -30,24 +30,75 @@ comptime {
 
 }
 
-const toolbar_height: i32 = 40;
-const summary_height: i32 = 26;
-const field_h: i32 = 28;
-const field_y: i32 = 6;
-const margin: i32 = 12;
+const margin: i32 = 18;
+const gap: i32 = 14;
+const field_h: i32 = 30;
+const method_h: i32 = 30;
+const method_w: i32 = 62;
+const send_w: i32 = 72;
+const label_h: i32 = 18;
+const tab_h: i32 = 30;
+const headers_h: i32 = 64;
+const body_h: i32 = 88;
+const radius: i32 = 6;
 
 const url_storage_size = 512;
-const host_storage_size = 128;
-const path_storage_size = 384;
-const port_storage_size = 8;
-
-const port_toggle_w: i32 = 50;
-const port_field_w: i32 = 60;
-const go_button_w: i32 = 56;
-const label_w: i32 = 32;
-
+const headers_storage_size = 1024;
+const body_storage_size = 8192;
+const max_headers = 16;
 const response_capacity = 262_144;
-const recv_chunk = 4096;
+const display_capacity = 262_144;
+
+const methods = [_][]const u8{ "GET", "POST", "PUT", "PATCH", "DELETE" };
+
+// Demo presets — public APIs that answer each verb without an auth token.
+const Demo = struct {
+
+    url: []const u8,
+    headers: []const u8,
+    body: []const u8,
+
+};
+
+const demos = [_]Demo{
+
+    .{
+
+        .url = "https://jsonplaceholder.typicode.com/posts/1",
+        .headers = "Accept: application/json",
+        .body = "",
+
+    },
+    .{
+
+        .url = "https://jsonplaceholder.typicode.com/posts",
+        .headers = "Accept: application/json\nContent-Type: application/json",
+        .body = "{\n  \"title\": \"hello\",\n  \"body\": \"from GraniteOS\",\n  \"userId\": 1\n}",
+
+    },
+    .{
+
+        .url = "https://jsonplaceholder.typicode.com/posts/1",
+        .headers = "Accept: application/json\nContent-Type: application/json",
+        .body = "{\n  \"id\": 1,\n  \"title\": \"updated\",\n  \"body\": \"full replace\",\n  \"userId\": 1\n}",
+
+    },
+    .{
+
+        .url = "https://jsonplaceholder.typicode.com/posts/1",
+        .headers = "Accept: application/json\nContent-Type: application/json",
+        .body = "{\n  \"title\": \"patched title\"\n}",
+
+    },
+    .{
+
+        .url = "https://jsonplaceholder.typicode.com/posts/1",
+        .headers = "Accept: application/json",
+        .body = "",
+
+    },
+
+};
 
 const State = enum(u8) {
 
@@ -61,7 +112,16 @@ const State = enum(u8) {
 const Focus = enum {
 
     url,
-    port,
+    headers,
+    body,
+
+};
+
+const View = enum(u8) {
+
+    body,
+    headers,
+    raw,
 
 };
 
@@ -74,43 +134,61 @@ var connection: lib.window.Connection = undefined;
 var window: lib.window.Window = undefined;
 
 var url_storage: [url_storage_size]u8 = undefined;
-var port_storage: [port_storage_size]u8 = undefined;
+var headers_storage: [headers_storage_size]u8 = undefined;
+var body_storage: [body_storage_size]u8 = undefined;
 
 var url_buffer: ui.EditBuffer = undefined;
-var port_buffer: ui.EditBuffer = undefined;
+var headers_buffer: ui.EditBuffer = undefined;
+var body_buffer: ui.EditBuffer = undefined;
 
-// Port field hidden until toggled; most URLs need no explicit port.
-var port_enabled = false;
-
+var method_index: usize = 0;
 var focused: Focus = .url;
+var view: View = .body;
 var keyboard = lib.keymap.Keyboard{};
 
 var scroll_row: usize = 0;
+var body_scroll: usize = 0;
 var dragging_scrollbar = false;
+var dragging_body_scrollbar = false;
 var dragging_field = false;
+var pointer_x: i32 = 0;
+var pointer_y: i32 = 0;
 
-// Shared between the worker thread and the paint loop.
+var regions = ui.HitRegions{};
 
 var lock: ipc.Lock = .{};
 
 var state: State = .idle;
-var response: [response_capacity]u8 = undefined;
-var response_len: usize = 0;
+var response_raw: [response_capacity]u8 = undefined;
+var response_raw_len: usize = 0;
+var display: [display_capacity]u8 = undefined;
+var display_len: usize = 0;
 var error_message: [96]u8 = undefined;
 var error_len: usize = 0;
 var elapsed_ms: u64 = 0;
+var status_code: u16 = 0;
+var body_bytes: usize = 0;
 
-var request_port: u16 = 0;
-var request_tls: bool = false;
-var request_path: [path_storage_size]u8 = undefined;
-var request_path_len: usize = 0;
-var request_host: [host_storage_size]u8 = undefined;
-var request_host_len: usize = 0;
+var request_method: [8]u8 = undefined;
+var request_method_len: usize = 0;
+var request_url: [url_storage_size + 8]u8 = undefined;
+var request_url_len: usize = 0;
+var request_headers: [headers_storage_size]u8 = undefined;
+var request_headers_len: usize = 0;
+var request_body: [body_storage_size]u8 = undefined;
+var request_body_len: usize = 0;
 
 var ready: cap.Handle = 0;
 var tick: u32 = 0;
 var running: u32 = 1;
 var request_pending: u32 = 0;
+
+const id_method_base: u32 = 1;
+const id_send: u32 = 20;
+const id_view_base: u32 = 30;
+const id_url: u32 = 40;
+const id_headers: u32 = 41;
+const id_body: u32 = 42;
 
 pub fn main(args: []const []const u8) u8 {
 
@@ -133,12 +211,13 @@ fn run(args: []const []const u8) !void {
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
 
-    window = try lib.wm.open_main(&connection, 760, 560, "Fetch");
+    window = try lib.wm.open_main(&connection, 920, 680, "Requests");
 
     url_buffer = ui.EditBuffer.init(&url_storage);
-    port_buffer = ui.EditBuffer.init(&port_storage);
+    headers_buffer = ui.EditBuffer.init(&headers_storage);
+    body_buffer = ui.EditBuffer.init(&body_storage);
 
-    set_field(&url_buffer, "http://example.com/");
+    apply_demo(0);
 
     paint();
 
@@ -190,6 +269,7 @@ fn run(args: []const []const u8) !void {
                     if (event.code == events.button_left) {
 
                         dragging_scrollbar = false;
+                        dragging_body_scrollbar = false;
                         dragging_field = false;
 
                     }
@@ -198,15 +278,24 @@ fn run(args: []const []const u8) !void {
 
                 events.kind_pointer_move => {
 
+                    pointer_x = event.x;
+                    pointer_y = event.y;
+
                     if (dragging_scrollbar) {
 
                         if (drag_scrollbar(event.y)) dirty = true;
 
+                    } else if (dragging_body_scrollbar) {
+
+                        if (drag_body_scrollbar(event.y)) dirty = true;
+
                     } else if (dragging_field) {
 
-                        if (field_drag_to(event.x)) dirty = true;
+                        if (field_drag_to(event.x, event.y)) dirty = true;
 
                     }
+
+                    if (regions.pointer_move(event.x, event.y)) dirty = true;
 
                     update_cursor(event.x, event.y);
 
@@ -250,10 +339,22 @@ fn set_field(buffer: *ui.EditBuffer, text: []const u8) void {
     @memcpy(buffer.bytes[0..length], text[0..length]);
     buffer.len = length;
     buffer.cursor = length;
+    buffer.anchor = null;
 
 }
 
-// --- input handling ---
+fn apply_demo(index: usize) void {
+
+    const demo = demos[index];
+
+    set_field(&url_buffer, demo.url);
+    set_field(&headers_buffer, demo.headers);
+    set_field(&body_buffer, demo.body);
+    body_scroll = 0;
+
+}
+
+// --- input ---
 
 fn key_down(code: u16) bool {
 
@@ -266,46 +367,69 @@ fn key_down(code: u16) bool {
 
     if (bytes.len == 1 and (bytes[0] == '\r' or bytes[0] == '\n')) {
 
-        start_fetch();
+        if (focused == .url) {
+
+            start_request();
+            return true;
+
+        }
+
+        const changed = active_buffer().insert('\n');
+
+        if (changed and focused == .body) ensure_body_cursor_visible();
+
+        return changed;
+
+    }
+
+    if (bytes.len == 1 and bytes[0] == '\t') {
+
+        focused = switch (focused) {
+
+            .url => .headers,
+            .headers => .body,
+            .body => .url,
+
+        };
+
         return true;
 
     }
 
-    const target: *ui.EditBuffer = switch (focused) {
+    const changed = active_buffer().feed(bytes, keyboard.shift);
 
-        .url => &url_buffer,
-        .port => &port_buffer,
+    if (changed and focused == .body) ensure_body_cursor_visible();
 
-    };
-
-    return target.feed(bytes, keyboard.shift);
+    return changed;
 
 }
 
-/// Map a click to a byte index in buffer; extend selection when extend is true.
-fn position_field(buffer: *ui.EditBuffer, rect: Rect, x: i32, extend: bool) bool {
-
-    const inner_w = rect.w - 2 * ui.field_pad;
-    const rel_x = x - rect.x - ui.field_pad;
-    const index = ui.field_click_index(&font, buffer.slice(), 13, buffer.cursor, inner_w, rel_x);
-
-    return buffer.set_cursor(index, extend);
-
-}
-
-/// Continue click-drag from mouse_down, extending the focused field selection.
-fn field_drag_to(x: i32) bool {
+fn active_buffer() *ui.EditBuffer {
 
     return switch (focused) {
 
-        .url => position_field(&url_buffer, url_field_rect(), x, true),
-        .port => position_field(&port_buffer, port_field_rect(), x, true),
+        .url => &url_buffer,
+        .headers => &headers_buffer,
+        .body => &body_buffer,
 
     };
 
 }
 
 fn mouse_down(x: i32, y: i32) bool {
+
+    pointer_x = x;
+    pointer_y = y;
+
+    const body_track = body_scrollbar_rect();
+
+    if (body_track.contains(x, y) and body_scroll_model().overflowing()) {
+
+        dragging_body_scrollbar = true;
+
+        return drag_body_scrollbar(y);
+
+    }
 
     const track = scrollbar_rect();
 
@@ -317,40 +441,61 @@ fn mouse_down(x: i32, y: i32) bool {
 
     }
 
-    if (url_field_rect().contains(x, y)) {
+    const id = regions.hit(x, y);
+
+    if (id >= id_method_base and id < id_method_base + methods.len) {
+
+        method_index = id - id_method_base;
+        apply_demo(method_index);
+        focused = .url;
+
+        return true;
+
+    }
+
+    if (id == id_send) {
+
+        start_request();
+        return true;
+
+    }
+
+    if (id >= id_view_base and id < id_view_base + 3) {
+
+        view = @enumFromInt(id - id_view_base);
+        rebuild_display();
+        scroll_row = 0;
+
+        return true;
+
+    }
+
+    if (id == id_url) {
 
         focused = .url;
-        _ = position_field(&url_buffer, url_field_rect(), x, keyboard.shift);
+        _ = position_field(&url_buffer, url_field_rect(), x, y, false, 0);
         dragging_field = true;
 
         return true;
 
     }
 
-    if (port_toggle_rect().contains(x, y)) {
+    if (id == id_headers) {
 
-        port_enabled = !port_enabled;
-
-        if (port_enabled and port_buffer.len == 0) set_field(&port_buffer, "80");
-        if (!port_enabled and focused == .port) focused = .url;
-
-        return true;
-
-    }
-
-    if (port_enabled and port_field_rect().contains(x, y)) {
-
-        focused = .port;
-        _ = position_field(&port_buffer, port_field_rect(), x, keyboard.shift);
+        focused = .headers;
+        _ = position_field(&headers_buffer, headers_field_rect(), x, y, true, 0);
         dragging_field = true;
 
         return true;
 
     }
 
-    if (go_button_rect().contains(x, y)) {
+    if (id == id_body) {
 
-        start_fetch();
+        focused = .body;
+        _ = position_field(&body_buffer, body_field_rect(), x, y, true, body_scroll);
+        dragging_field = true;
+
         return true;
 
     }
@@ -359,16 +504,79 @@ fn mouse_down(x: i32, y: i32) bool {
 
 }
 
+fn field_drag_to(x: i32, y: i32) bool {
+
+    return switch (focused) {
+
+        .url => position_field(&url_buffer, url_field_rect(), x, y, false, 0),
+        .headers => position_field(&headers_buffer, headers_field_rect(), x, y, true, 0),
+        .body => position_field(&body_buffer, body_field_rect(), x, y, true, body_scroll),
+
+    };
+
+}
+
+fn position_field(buffer: *ui.EditBuffer, rect: Rect, x: i32, y: i32, multiline: bool, scroll: usize) bool {
+
+    const inner = rect.inset(ui.field_pad);
+    const rel_x = x - inner.x;
+    const text = buffer.slice();
+
+    if (!multiline) {
+
+        const index = ui.field_click_index(&font, text, 13, buffer.cursor, inner.w, rel_x);
+
+        return buffer.set_cursor(index, keyboard.shift);
+
+    }
+
+    const line_h = mono.mono_height(mono_px);
+    const row: usize = scroll + @as(usize, @intCast(@max(0, @divTrunc(y - inner.y, line_h))));
+    const col: usize = @intCast(@max(0, @divTrunc(rel_x, mono.mono_width(mono_px))));
+
+    var line: usize = 0;
+    var index: usize = 0;
+    var line_start: usize = 0;
+
+    while (index <= text.len) : (index += 1) {
+
+        const at_end = index == text.len;
+        const at_break = at_end or text[index] == '\n';
+
+        if (!at_break) continue;
+
+        if (line == row) {
+
+            const line_len = index - line_start;
+            const at = line_start + @min(col, line_len);
+
+            return buffer.set_cursor(at, keyboard.shift);
+
+        }
+
+        line += 1;
+        line_start = index + 1;
+
+        if (at_end) break;
+
+    }
+
+    return buffer.set_cursor(text.len, keyboard.shift);
+
+}
+
 fn update_cursor(x: i32, y: i32) void {
 
-    if (y < toolbar_height and (url_field_rect().contains(x, y) or (port_enabled and port_field_rect().contains(x, y)))) {
+    const id = regions.hit(x, y);
+
+    if (id == id_url or id == id_headers or id == id_body) {
 
         lib.cursor.set(&connection, .selector);
         return;
 
     }
 
-    if (y < toolbar_height and (go_button_rect().contains(x, y) or port_toggle_rect().contains(x, y))) {
+    if (id == id_send or (id >= id_method_base and id < id_method_base + methods.len) or (id >= id_view_base and id < id_view_base + 3)) {
 
         lib.cursor.set(&connection, .clicker);
         return;
@@ -380,6 +588,36 @@ fn update_cursor(x: i32, y: i32) void {
 }
 
 fn wheel(delta: i64) bool {
+
+    if (body_field_rect().contains(pointer_x, pointer_y)) {
+
+        const before = body_scroll;
+
+        body_scroll = @intCast(body_scroll_model().wheel(delta, 3));
+
+        return body_scroll != before;
+
+    }
+
+    if (response_rect().contains(pointer_x, pointer_y) or scrollbar_rect().contains(pointer_x, pointer_y)) {
+
+        const before = scroll_row;
+
+        scroll_row = @intCast(scroll_model().wheel(delta, 3));
+
+        return scroll_row != before;
+
+    }
+
+    if (focused == .body) {
+
+        const before = body_scroll;
+
+        body_scroll = @intCast(body_scroll_model().wheel(delta, 3));
+
+        return body_scroll != before;
+
+    }
 
     const before = scroll_row;
 
@@ -400,18 +638,60 @@ fn drag_scrollbar(y: i32) bool {
 
 }
 
-// --- fetch request lifecycle ---
+fn drag_body_scrollbar(y: i32) bool {
 
-/// Prepend http:// when missing so bare hosts parse; lib.url.parse still requires a scheme.
+    const track = body_scrollbar_rect();
+    const before = body_scroll;
+
+    body_scroll = @intCast(body_scroll_model().offset_at(track.h, y - track.y));
+
+    return body_scroll != before;
+
+}
+
+fn cursor_line(buffer: *const ui.EditBuffer) usize {
+
+    var line: usize = 0;
+    var index: usize = 0;
+
+    while (index < buffer.cursor and index < buffer.len) : (index += 1) {
+
+        if (buffer.bytes[index] == '\n') line += 1;
+
+    }
+
+    return line;
+
+}
+
+fn ensure_body_cursor_visible() void {
+
+    const line = cursor_line(&body_buffer);
+    const visible = body_visible_rows();
+
+    if (line < body_scroll) {
+
+        body_scroll = line;
+
+    } else if (line >= body_scroll + visible) {
+
+        body_scroll = line + 1 - visible;
+
+    }
+
+}
+
+// --- request lifecycle ---
+
 fn with_scheme(raw: []const u8, scratch: []u8) ?[]const u8 {
 
     if (std.mem.indexOf(u8, raw, "://") != null) return raw;
 
-    return std.fmt.bufPrint(scratch, "http://{s}", .{raw}) catch null;
+    return std.fmt.bufPrint(scratch, "https://{s}", .{raw}) catch null;
 
 }
 
-fn start_fetch() void {
+fn start_request() void {
 
     const raw = url_buffer.slice();
 
@@ -430,47 +710,48 @@ fn start_fetch() void {
 
     };
 
-    const parsed = lib.url.parse(text) orelse {
+    if (lib.url.parse(text) == null) {
 
         fail("invalid url");
         return;
 
-    };
+    }
 
-    var port = parsed.port;
+    const method = methods[method_index];
+    const body_text = body_buffer.slice();
 
-    if (port_enabled) {
+    if (body_text.len != 0 and (std.mem.eql(u8, method, "GET") or std.mem.eql(u8, method, "HEAD"))) {
 
-        port = std.fmt.parseInt(u16, port_buffer.slice(), 10) catch {
-
-            fail("invalid port");
-            return;
-
-        };
+        fail("GET cannot carry a body");
+        return;
 
     }
 
     lock.acquire();
 
-    request_port = port;
-    request_tls = lib.url.is_tls(parsed.scheme);
+    request_method_len = method.len;
+    @memcpy(request_method[0..request_method_len], method);
 
-    request_path_len = @min(parsed.path.len, request_path.len);
-    @memcpy(request_path[0..request_path_len], parsed.path[0..request_path_len]);
+    request_url_len = @min(text.len, request_url.len);
+    @memcpy(request_url[0..request_url_len], text[0..request_url_len]);
 
-    request_host_len = @min(parsed.host.len, request_host.len);
-    @memcpy(request_host[0..request_host_len], parsed.host[0..request_host_len]);
+    request_headers_len = @min(headers_buffer.len, request_headers.len);
+    @memcpy(request_headers[0..request_headers_len], headers_buffer.bytes[0..request_headers_len]);
+
+    request_body_len = @min(body_buffer.len, request_body.len);
+    @memcpy(request_body[0..request_body_len], body_buffer.bytes[0..request_body_len]);
 
     state = .running;
-    response_len = 0;
+    response_raw_len = 0;
+    display_len = 0;
     error_len = 0;
+    status_code = 0;
+    body_bytes = 0;
     scroll_row = 0;
 
     lock.release();
 
     @atomicStore(u32, &request_pending, 1, .release);
-
-    // Paint the in-flight state before the (potentially slow) fetch runs, so the window never looks frozen.
     paint();
 
 }
@@ -496,9 +777,73 @@ fn notify_ui() void {
 
 }
 
-// --- worker thread ---
+fn rebuild_display() void {
 
-const worker_stack_pages = 64; // TLS handshake needs ~32 KiB stack + Session locals
+    lock.acquire();
+    defer lock.release();
+
+    if (state != .done or response_raw_len == 0) {
+
+        display_len = 0;
+        return;
+
+    }
+
+    const parsed = lib.http.parse_response(response_raw[0..response_raw_len]) catch {
+
+        display_len = response_raw_len;
+        @memcpy(display[0..display_len], response_raw[0..display_len]);
+        return;
+
+    };
+
+    switch (view) {
+
+        .raw => {
+
+            display_len = response_raw_len;
+            @memcpy(display[0..display_len], response_raw[0..display_len]);
+
+        },
+
+        .headers => {
+
+            display_len = @min(parsed.headers.len, display.len);
+            @memcpy(display[0..display_len], parsed.headers[0..display_len]);
+
+        },
+
+        .body => {
+
+            if (lib.json.looks_like(parsed.body)) {
+
+                if (lib.json.format(parsed.body, display[0..])) |pretty| {
+
+                    display_len = pretty.len;
+
+                } else |_| {
+
+                    display_len = @min(parsed.body.len, display.len);
+                    @memcpy(display[0..display_len], parsed.body[0..display_len]);
+
+                }
+
+            } else {
+
+                display_len = @min(parsed.body.len, display.len);
+                @memcpy(display[0..display_len], parsed.body[0..display_len]);
+
+            }
+
+        },
+
+    }
+
+}
+
+// --- worker ---
+
+const worker_stack_pages = 64;
 const page_size = 4096;
 
 fn start_worker() !void {
@@ -522,7 +867,7 @@ fn worker() callconv(.c) noreturn {
         if (@atomicLoad(u32, &running, .acquire) == 0) break;
         if (@atomicRmw(u32, &request_pending, .Xchg, 0, .acquire) == 0) continue;
 
-        do_fetch();
+        do_request();
 
     }
 
@@ -530,213 +875,222 @@ fn worker() callconv(.c) noreturn {
 
 }
 
-fn do_fetch() void {
+fn do_request() void {
 
     lock.acquire();
 
-    const port = request_port;
-    const use_tls = request_tls;
+    var method_local: [8]u8 = undefined;
+    const method_len = request_method_len;
+    @memcpy(method_local[0..method_len], request_method[0..method_len]);
 
-    var path_local: [path_storage_size]u8 = undefined;
-    const path_len = request_path_len;
+    var url_local: [url_storage_size + 8]u8 = undefined;
+    const url_len = request_url_len;
+    @memcpy(url_local[0..url_len], request_url[0..url_len]);
 
-    @memcpy(path_local[0..path_len], request_path[0..path_len]);
+    var headers_local: [headers_storage_size]u8 = undefined;
+    const headers_len = request_headers_len;
+    @memcpy(headers_local[0..headers_len], request_headers[0..headers_len]);
 
-    var host_local: [host_storage_size]u8 = undefined;
-    const host_len = request_host_len;
-
-    @memcpy(host_local[0..host_len], request_host[0..host_len]);
+    var body_local: [body_storage_size]u8 = undefined;
+    const body_len = request_body_len;
+    @memcpy(body_local[0..body_len], request_body[0..body_len]);
 
     lock.release();
+
+    var header_list: [max_headers]lib.http.Header = undefined;
+    var header_count: usize = 0;
+    var saw_content_type = false;
+
+    var lines = std.mem.splitScalar(u8, headers_local[0..headers_len], '\n');
+
+    while (lines.next()) |raw_line| {
+
+        var line = raw_line;
+
+        if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
+
+        line = std.mem.trim(u8, line, " \t");
+
+        if (line.len == 0) continue;
+
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse {
+
+            fail("bad header line");
+            return;
+
+        };
+
+        const name = std.mem.trim(u8, line[0..colon], " \t");
+        const value = std.mem.trim(u8, line[colon + 1 ..], " \t");
+
+        if (name.len == 0) {
+
+            fail("empty header name");
+            return;
+
+        }
+
+        if (header_count >= header_list.len) {
+
+            fail("too many headers");
+            return;
+
+        }
+
+        if (std.ascii.eqlIgnoreCase(name, "Content-Type")) saw_content_type = true;
+
+        header_list[header_count] = .{ .name = name, .value = value };
+        header_count += 1;
+
+    }
+
+    // Default JSON content type when the body looks like JSON and the user did not set one.
+    if (body_len != 0 and !saw_content_type and lib.json.looks_like(body_local[0..body_len])) {
+
+        if (header_count < header_list.len) {
+
+            header_list[header_count] = .{ .name = "Content-Type", .value = "application/json" };
+            header_count += 1;
+
+        }
+
+    }
 
     const start_ms = lib.time.now_ms();
+    var heap = lib.mem.Heap.init(cap.memory);
 
-    var host_header_buffer: [host_storage_size + 8]u8 = undefined;
-    const host_header = if (port == 80 or port == 443)
-        host_local[0..host_len]
-    else
-        std.fmt.bufPrint(&host_header_buffer, "{s}:{d}", .{ host_local[0..host_len], port }) catch host_local[0..host_len];
+    const result = lib.http.request(cap.memory, &heap, .{
 
-    var request_buffer: [512]u8 = undefined;
-    const request = std.fmt.bufPrint(&request_buffer, "GET {s} HTTP/1.0\r\nHost: {s}\r\nConnection: close\r\n\r\n", .{
+        .method = method_local[0..method_len],
+        .url = url_local[0..url_len],
+        .headers = header_list[0..header_count],
+        .body = body_local[0..body_len],
 
-        path_local[0..path_len],
-        host_header,
-
-    }) catch {
-
-        fail("request too long");
-        return;
-
-    };
-
-    if (use_tls) {
-
-        var heap = lib.mem.Heap.init(cap.memory);
-        var session: lib.tls.Session = undefined;
-
-        lib.tls.Session.connect_host(&session, cap.memory, &heap, host_local[0..host_len], port) catch |failure| {
-
-            fail(@errorName(failure));
-            return;
-
-        };
-
-        defer session.close();
-
-        session.send_all(request) catch |failure| {
-
-            fail(@errorName(failure));
-            return;
-
-        };
-
-        pump_recv(session_recv, &session, start_ms);
-
-        return;
-
-    }
-
-    var socket = lib.net.Socket.connect_host(cap.memory, host_local[0..host_len], port) catch |failure| {
+    }, &response_raw) catch |failure| {
 
         fail(@errorName(failure));
         return;
 
     };
-
-    defer socket.close();
-
-    socket.send_all(request) catch |failure| {
-
-        fail(@errorName(failure));
-        return;
-
-    };
-
-    pump_recv(socket_recv, &socket, start_ms);
-
-}
-
-const RecvFn = *const fn (ctx: *anyopaque, buf: []u8) anyerror!usize;
-
-fn socket_recv(ctx: *anyopaque, buf: []u8) anyerror!usize {
-
-    const socket: *lib.net.Socket = @ptrCast(@alignCast(ctx));
-
-    return socket.recv(buf);
-
-}
-
-fn session_recv(ctx: *anyopaque, buf: []u8) anyerror!usize {
-
-    const session: *lib.tls.Session = @ptrCast(@alignCast(ctx));
-
-    return session.recv(buf);
-
-}
-
-fn pump_recv(recv_fn: RecvFn, ctx: *anyopaque, start_ms: u64) void {
-
-    var chunk: [recv_chunk]u8 = undefined;
-
-    while (true) {
-
-        const length = recv_fn(ctx, &chunk) catch |failure| {
-
-            lock.acquire();
-            const have_data = response_len > 0;
-            lock.release();
-
-            if (!have_data) {
-
-                fail(@errorName(failure));
-                return;
-
-            }
-
-            break;
-
-        };
-
-        if (length == 0) break;
-
-        lock.acquire();
-
-        const room = response.len - response_len;
-        const take = @min(length, room);
-
-        @memcpy(response[response_len..][0..take], chunk[0..take]);
-        response_len += take;
-
-        const overflowed = take < length;
-
-        lock.release();
-
-        notify_ui();
-
-        if (overflowed) break;
-
-    }
 
     lock.acquire();
 
-    state = .done;
+    response_raw_len = (@intFromPtr(result.body.ptr) - @intFromPtr(&response_raw)) + result.body.len;
+    status_code = result.status;
+    body_bytes = result.body.len;
     elapsed_ms = lib.time.now_ms() - start_ms;
+    state = .done;
 
     lock.release();
 
+    rebuild_display();
     notify_ui();
 
 }
 
 // --- layout ---
 
-fn go_button_rect() Rect {
+fn method_bar_y() i32 {
 
-    const width: i32 = @intCast(window.surface.width);
-
-    return .{ .x = width - margin - go_button_w, .y = field_y, .w = go_button_w, .h = field_h };
+    return margin;
 
 }
 
-fn port_toggle_rect() Rect {
+fn url_row_y() i32 {
 
-    const go = go_button_rect();
-
-    return .{ .x = go.x - margin - port_toggle_w, .y = field_y, .w = port_toggle_w, .h = field_h };
+    return method_bar_y() + method_h + gap;
 
 }
 
-fn port_field_rect() Rect {
+fn headers_label_y() i32 {
 
-    const toggle = port_toggle_rect();
+    return url_row_y() + field_h + gap + 4;
 
-    return .{ .x = toggle.x - margin - port_field_w, .y = field_y, .w = port_field_w, .h = field_h };
+}
+
+fn headers_field_y() i32 {
+
+    return headers_label_y() + label_h + 2;
+
+}
+
+fn body_label_y() i32 {
+
+    return headers_field_y() + headers_h + gap;
+
+}
+
+fn body_field_y() i32 {
+
+    return body_label_y() + label_h + 2;
+
+}
+
+fn divider_y() i32 {
+
+    return body_field_y() + body_h + gap;
+
+}
+
+fn tabs_y() i32 {
+
+    return divider_y() + 1 + gap;
+
+}
+
+fn response_y() i32 {
+
+    return tabs_y() + tab_h + gap;
 
 }
 
 fn url_field_rect() Rect {
 
-    const start = margin + label_w;
-    const end = if (port_enabled) port_field_rect().x - margin else port_toggle_rect().x - margin;
+    const width: i32 = @intCast(window.surface.width);
+    const start = margin;
+    const end = width - margin - send_w - gap;
 
-    return .{ .x = start, .y = field_y, .w = @max(80, end - start), .h = field_h };
+    return .{ .x = start, .y = url_row_y(), .w = @max(80, end - start), .h = field_h };
 
 }
 
-fn summary_rect() Rect {
+fn send_button_rect() Rect {
 
     const width: i32 = @intCast(window.surface.width);
 
-    return .{ .x = 0, .y = toolbar_height, .w = width, .h = summary_height };
+    return .{ .x = width - margin - send_w, .y = url_row_y(), .w = send_w, .h = field_h };
 
 }
 
-fn textarea_rect() Rect {
+fn headers_field_rect() Rect {
+
+    const width: i32 = @intCast(window.surface.width);
+
+    return .{ .x = margin, .y = headers_field_y(), .w = width - margin * 2, .h = headers_h };
+
+}
+
+fn body_field_rect() Rect {
+
+    const width: i32 = @intCast(window.surface.width);
+
+    return .{ .x = margin, .y = body_field_y(), .w = width - margin * 2, .h = body_h };
+
+}
+
+fn body_scrollbar_rect() Rect {
+
+    const area = body_field_rect();
+
+    return .{ .x = area.x + area.w - ui.scrollbar_width - 4, .y = area.y + 4, .w = ui.scrollbar_width, .h = @max(0, area.h - 8) };
+
+}
+
+fn response_rect() Rect {
 
     const width: i32 = @intCast(window.surface.width);
     const height: i32 = @intCast(window.surface.height);
-    const top = toolbar_height + summary_height + 8;
+    const top = response_y();
 
     return .{ .x = margin, .y = top, .w = width - margin * 2, .h = @max(0, height - top - margin) };
 
@@ -744,7 +1098,7 @@ fn textarea_rect() Rect {
 
 fn scrollbar_rect() Rect {
 
-    const area = textarea_rect();
+    const area = response_rect();
 
     return .{ .x = area.x + area.w - ui.scrollbar_width - 2, .y = area.y + 2, .w = ui.scrollbar_width, .h = @max(0, area.h - 4) };
 
@@ -752,7 +1106,7 @@ fn scrollbar_rect() Rect {
 
 fn text_columns() usize {
 
-    const area = textarea_rect();
+    const area = response_rect();
     const usable = area.w - 12 - ui.scrollbar_width - 4;
 
     return @intCast(@max(1, @divTrunc(usable, mono.mono_width(mono_px))));
@@ -761,14 +1115,25 @@ fn text_columns() usize {
 
 fn visible_rows() usize {
 
-    const area = textarea_rect();
+    const area = response_rect();
     const usable = area.h - 12;
 
     return @intCast(@max(1, @divTrunc(usable, mono.mono_height(mono_px))));
 
 }
 
+fn body_visible_rows() usize {
+
+    const area = body_field_rect();
+    const usable = area.h - 2 * ui.field_pad;
+
+    return @intCast(@max(1, @divTrunc(usable, mono.mono_height(mono_px))));
+
+}
+
 fn total_rows(text: []const u8) usize {
+
+    if (text.len == 0) return 1;
 
     var rows: usize = 1;
 
@@ -785,7 +1150,7 @@ fn total_rows(text: []const u8) usize {
 fn scroll_model() ui.Scroll {
 
     lock.acquire();
-    const text = response[0..response_len];
+    const text = display[0..display_len];
     lock.release();
 
     return .{
@@ -793,6 +1158,18 @@ fn scroll_model() ui.Scroll {
         .offset = @intCast(scroll_row),
         .content = @intCast(total_rows(text)),
         .viewport = @intCast(visible_rows()),
+
+    };
+
+}
+
+fn body_scroll_model() ui.Scroll {
+
+    return .{
+
+        .offset = @intCast(body_scroll),
+        .content = @intCast(total_rows(body_buffer.slice())),
+        .viewport = @intCast(body_visible_rows()),
 
     };
 
@@ -806,129 +1183,261 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
 
     surface.fill(ui.theme.window_bg);
+    regions.reset();
 
-    paint_toolbar(surface, width);
+    paint_methods(surface);
+    paint_url_row(surface);
+    paint_request_fields(surface);
+    paint_divider(surface, width);
+    paint_view_tabs(surface, width);
 
     lock.acquire();
-    defer lock.release();
-
-    paint_summary(surface);
-    paint_textarea(surface);
+    paint_response(surface);
+    lock.release();
 
     window.present_all() catch {};
 
 }
 
-fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
+fn paint_methods(surface: *const gfx.Surface) void {
 
-    surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_height }, ui.theme.surface_alt);
-    surface.fill_rect(.{ .x = 0, .y = toolbar_height, .w = width, .h = 1 }, ui.theme.border);
+    var x: i32 = margin;
+    const y = method_bar_y();
 
-    paint_field(surface, "URL", &url_buffer, url_field_rect(), focused == .url);
+    for (methods, 0..) |label, index| {
 
-    const toggle = port_toggle_rect();
+        const rect = Rect{ .x = x, .y = y, .w = method_w, .h = method_h };
+        const selected = index == method_index;
+        const hovered = regions.hovered(id_method_base + @as(u32, @intCast(index)));
 
-    ui.fill_round_rect(surface, toggle, 5, if (port_enabled) ui.theme.accent_dim else ui.theme.surface);
-    ui.stroke_round_rect(surface, toggle, 5, 1, if (port_enabled) ui.theme.accent else ui.theme.border);
-    text_center(surface, toggle, 12, "Port", if (port_enabled) ui.theme.text else ui.theme.text_dim);
+        regions.add(id_method_base + @as(u32, @intCast(index)), rect);
 
-    if (port_enabled) paint_field(surface, "", &port_buffer, port_field_rect(), focused == .port);
+        ui.button(surface, &font, rect, label, .{
 
-    const go = go_button_rect();
+            .hovered = hovered,
+            .selected = selected,
+            .accent = selected,
+            .outlined = true,
 
-    ui.fill_round_rect(surface, go, 5, ui.theme.accent_dim);
-    text_center(surface, go, 13, "Go", ui.theme.text);
+        }, .{ .radius = 5, .size = 12 });
 
-}
-
-fn paint_field(surface: *const gfx.Surface, label: []const u8, buffer: *const ui.EditBuffer, rect: Rect, active: bool) void {
-
-    const label_rect = Rect{ .x = rect.x - label_w, .y = rect.y, .w = label_w - 4, .h = rect.h };
-
-    text_in(surface, label_rect, 0, 11, label, ui.theme.text_faint);
-
-    ui.paint_text_field(surface, &font, rect, buffer, "", active, active, 13);
-
-}
-
-fn paint_summary(surface: *const gfx.Surface) void {
-
-    const area = summary_rect();
-    const y = area.y + @divTrunc(area.h - font.line_height(12), 2);
-
-    switch (state) {
-
-        .idle => font.draw(surface, area.x + margin, y, 12, "Enter a URL, then press Go (or Enter). Use Port for a non-default port.", ui.theme.text_faint),
-
-        .running => font.draw(surface, area.x + margin, y, 12, "Fetching...", ui.theme.text_dim),
-
-        .failed => {
-
-            var line: [128]u8 = undefined;
-            const text = std.fmt.bufPrint(&line, "Error: {s}", .{error_message[0..error_len]}) catch "Error";
-
-            font.draw(surface, area.x + margin, y, 12, text, ui.theme.warn);
-
-        },
-
-        .done => {
-
-            const text = response[0..response_len];
-            const code = status_code(text);
-            const color = if (code >= 200 and code < 400) ui.theme.good else ui.theme.warn;
-
-            var line: [96]u8 = undefined;
-            const summary = if (code != 0)
-                std.fmt.bufPrint(&line, "HTTP {d}   {d} bytes   {d} ms", .{ code, response_len, elapsed_ms }) catch ""
-            else
-                std.fmt.bufPrint(&line, "{d} bytes   {d} ms", .{ response_len, elapsed_ms }) catch "";
-
-            font.draw(surface, area.x + margin, y, 12, summary, color);
-
-        },
+        x += method_w + 8;
 
     }
 
 }
 
-fn status_code(text: []const u8) u16 {
+fn paint_url_row(surface: *const gfx.Surface) void {
 
-    var index: usize = 0;
+    const url_rect = url_field_rect();
+    const send = send_button_rect();
 
-    while (index < text.len and text[index] != ' ') : (index += 1) {}
+    regions.add(id_url, url_rect);
+    regions.add(id_send, send);
 
-    if (index >= text.len) return 0;
+    ui.paint_text_field(surface, &font, url_rect, &url_buffer, "https://…", focused == .url, focused == .url, 13);
 
-    index += 1;
+    ui.button(surface, &font, send, "Send", .{
 
-    var end = index;
+        .hovered = regions.hovered(id_send),
+        .accent = true,
+        .outlined = true,
 
-    while (end < text.len and text[end] >= '0' and text[end] <= '9') : (end += 1) {}
-
-    if (end - index != 3) return 0;
-
-    return std.fmt.parseInt(u16, text[index..end], 10) catch 0;
+    }, .{ .radius = 5, .size = 13 });
 
 }
 
-fn paint_textarea(surface: *const gfx.Surface) void {
+fn paint_request_fields(surface: *const gfx.Surface) void {
 
-    const area = textarea_rect();
+    font.draw(surface, margin, headers_label_y(), 12, "Headers", ui.theme.text_faint);
 
-    ui.fill_round_rect(surface, area, 6, ui.theme.surface);
-    ui.stroke_round_rect(surface, area, 6, 1, ui.theme.border);
+    const headers_rect = headers_field_rect();
+    regions.add(id_headers, headers_rect);
+    paint_multiline_field(surface, headers_rect, &headers_buffer, focused == .headers, 0, false);
 
-    const text = response[0..response_len];
+    font.draw(surface, margin, body_label_y(), 12, "Body", ui.theme.text_faint);
+
+    const body_rect = body_field_rect();
+    regions.add(id_body, body_rect);
+    paint_multiline_field(surface, body_rect, &body_buffer, focused == .body, body_scroll, true);
+
+}
+
+fn paint_multiline_field(surface: *const gfx.Surface, rect: Rect, buffer: *const ui.EditBuffer, active: bool, scroll: usize, show_scroll: bool) void {
+
+    ui.fill_round_rect(surface, rect, radius, ui.theme.surface);
+    ui.stroke_round_rect(surface, rect, radius, 1, if (active) ui.theme.accent else ui.theme.border);
+
+    const inner = rect.inset(ui.field_pad);
+    const clipped = surface.clipped(inner);
+    const line_h = mono.mono_height(mono_px);
+    const text = buffer.slice();
+    const max_rows: usize = @intCast(@max(1, @divTrunc(inner.h, line_h)));
+
+    if (text.len == 0) return;
+
+    var row: usize = 0;
+    var shown: usize = 0;
+    var line_start: usize = 0;
+    var index: usize = 0;
+
+    while (index <= text.len and shown < max_rows) : (index += 1) {
+
+        const at_end = index == text.len;
+
+        if (!at_end and text[index] != '\n') continue;
+
+        if (row >= scroll) {
+
+            var line = text[line_start..index];
+
+            if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
+
+            const draw_y = inner.y + @as(i32, @intCast(shown)) * line_h;
+
+            mono.draw_mono(&clipped, inner.x, draw_y, mono_px, line, ui.theme.text);
+
+            if (active and buffer.cursor >= line_start and buffer.cursor <= index) {
+
+                const col = buffer.cursor - line_start;
+                const caret_x = inner.x + @as(i32, @intCast(col)) * mono.mono_width(mono_px);
+
+                surface.fill_rect(.{ .x = caret_x, .y = draw_y, .w = 1, .h = line_h }, ui.theme.accent);
+
+            }
+
+            shown += 1;
+
+        }
+
+        row += 1;
+        line_start = index + 1;
+
+        if (at_end) break;
+
+    }
+
+    if (show_scroll) {
+
+        ui.scrollbar(surface, body_scrollbar_rect(), body_scroll_model());
+
+    }
+
+}
+
+fn paint_divider(surface: *const gfx.Surface, width: i32) void {
+
+    surface.fill_rect(.{ .x = margin, .y = divider_y(), .w = width - margin * 2, .h = 1 }, ui.theme.border);
+
+}
+
+fn paint_view_tabs(surface: *const gfx.Surface, width: i32) void {
+
+    const labels = [_][]const u8{ "Body", "Headers", "Raw" };
+    const tab_w: i32 = 76;
+    var x: i32 = margin;
+    const y = tabs_y();
+
+    for (labels, 0..) |label, index| {
+
+        const rect = Rect{ .x = x, .y = y, .w = tab_w, .h = tab_h };
+        const selected = @intFromEnum(view) == index;
+
+        regions.add(id_view_base + @as(u32, @intCast(index)), rect);
+
+        ui.button(surface, &font, rect, label, .{
+
+            .hovered = regions.hovered(id_view_base + @as(u32, @intCast(index))),
+            .selected = selected,
+            .outlined = true,
+
+        }, .{ .radius = 5, .size = 12 });
+
+        x += tab_w + 8;
+
+    }
+
+    paint_status_inline(surface, width, y);
+
+}
+
+fn paint_status_inline(surface: *const gfx.Surface, width: i32, y: i32) void {
+
+    lock.acquire();
+    defer lock.release();
+
+    var line: [128]u8 = undefined;
+    var text: []const u8 = "";
+    var color = ui.theme.text_faint;
+
+    switch (state) {
+
+        .idle => {},
+
+        .running => {
+
+            text = "Sending…";
+            color = ui.theme.text_dim;
+
+        },
+
+        .failed => {
+
+            text = std.fmt.bufPrint(&line, "Error: {s}", .{error_message[0..error_len]}) catch "Error";
+            color = ui.theme.warn;
+
+        },
+
+        .done => {
+
+            text = std.fmt.bufPrint(&line, "HTTP {d}  ·  {d} B  ·  {d} ms", .{
+
+                status_code,
+                body_bytes,
+                elapsed_ms,
+
+            }) catch "";
+            color = if (status_code >= 200 and status_code < 400) ui.theme.good else ui.theme.warn;
+
+        },
+
+    }
+
+    if (text.len == 0) return;
+
+    const tabs_end = margin + 3 * 76 + 2 * 8 + gap;
+    const max_w = @max(0, width - margin - tabs_end);
+    const visible = ui.truncate(&font, text, 12, max_w);
+    const text_w = font.text_width(visible, 12);
+    const draw_x = width - margin - text_w;
+    const draw_y = y + @divTrunc(tab_h - font.line_height(12), 2);
+
+    font.draw(surface, draw_x, draw_y, 12, visible, color);
+
+}
+
+fn paint_response(surface: *const gfx.Surface) void {
+
+    const area = response_rect();
+
+    ui.fill_round_rect(surface, area, radius, ui.theme.surface);
+    ui.stroke_round_rect(surface, area, radius, 1, ui.theme.border);
+
+    const text = display[0..display_len];
     const inner = area.inset(6);
     const clipped = surface.clipped(inner);
 
     if (text.len == 0) {
 
-        mono.draw_mono(&clipped, inner.x, inner.y, mono_px, "Response will appear here.", ui.theme.text_faint);
+        if (state == .running) {
+
+            mono.draw_mono(&clipped, inner.x, inner.y, mono_px, "Waiting…", ui.theme.text_faint);
+
+        }
 
     } else {
 
-        paint_response_lines(&clipped, inner, text);
+        paint_lines(&clipped, inner, text);
 
     }
 
@@ -942,7 +1451,7 @@ fn paint_textarea(surface: *const gfx.Surface) void {
 
 }
 
-fn paint_response_lines(surface: *const gfx.Surface, inner: Rect, text: []const u8) void {
+fn paint_lines(surface: *const gfx.Surface, inner: Rect, text: []const u8) void {
 
     const columns = text_columns();
     const line_h = mono.mono_height(mono_px);
@@ -966,7 +1475,7 @@ fn paint_response_lines(surface: *const gfx.Surface, inner: Rect, text: []const 
                 if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
 
                 const clipped_line = line[0..@min(line.len, columns)];
-                const color = if (row == 0) status_line_color(text) else ui.theme.text;
+                const color = line_color(line, row);
 
                 mono.draw_mono(surface, inner.x, inner.y + @as(i32, @intCast(shown)) * line_h, mono_px, clipped_line, color);
 
@@ -985,33 +1494,23 @@ fn paint_response_lines(surface: *const gfx.Surface, inner: Rect, text: []const 
 
 }
 
-fn status_line_color(text: []const u8) gfx.Color {
+fn line_color(line: []const u8, row: usize) gfx.Color {
 
-    const code = status_code(text);
+    _ = row;
 
-    if (code == 0) return ui.theme.text;
+    if (line.len > 0 and (line[0] == '{' or line[0] == '}' or line[0] == '[' or line[0] == ']')) return ui.theme.accent;
 
-    return if (code >= 200 and code < 400) ui.theme.good else ui.theme.warn;
+    if (std.mem.indexOfScalar(u8, line, ':') != null and line.len > 0 and line[0] == ' ') return ui.theme.text;
 
-}
+    if (std.mem.startsWith(u8, line, "HTTP/")) {
 
-fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, value: []const u8, color: gfx.Color) void {
+        const code = status_code;
 
-    const inner = rect.inset(inset);
-    const clipped = surface.clipped(inner);
-    const visible = ui.truncate(&font, value, size, inner.w);
-    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
+        if (code >= 200 and code < 400) return ui.theme.good;
+        if (code != 0) return ui.theme.warn;
 
-    font.draw(&clipped, inner.x, y, size, visible, color);
+    }
 
-}
-
-fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, value: []const u8, color: gfx.Color) void {
-
-    const visible = ui.truncate(&font, value, size, rect.w);
-    const x = rect.x + @divTrunc(rect.w - font.text_width(visible, size), 2);
-    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
-
-    font.draw(surface, x, y, size, visible, color);
+    return ui.theme.text;
 
 }

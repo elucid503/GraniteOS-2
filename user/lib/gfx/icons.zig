@@ -98,6 +98,7 @@ const catalog = [_]Entry{
     .{ .name = "chart", .svg = chart },
     .{ .name = "terminal", .svg = terminal },
     .{ .name = "network", .svg = network },
+    .{ .name = "arrow-up", .svg = arrow_up },
     .{ .name = "home", .svg = home },
     .{ .name = "search", .svg = search },
     .{ .name = "clock", .svg = clock },

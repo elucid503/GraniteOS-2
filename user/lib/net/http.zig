@@ -170,6 +170,7 @@ pub const Connection = struct {
 };
 
 /// Send one HTTP/1.0 request and collect its response in `response_buffer`.
+/// Supports GET/POST/PUT/PATCH/DELETE (or any valid token method), custom headers, and an optional body.
 pub fn request(
     authority: Handle,
     heap: *mem.Heap,
@@ -180,26 +181,61 @@ pub fn request(
     const parsed = url_mod.parse(options.url) orelse return error.Invalid;
 
     if (!valid_token(options.method)) return error.Invalid;
+    if (options.body.len != 0 and method_forbids_body(options.method)) return error.Invalid;
 
-    var head_buffer: [4096]u8 = undefined;
+    var head_buffer: [8192]u8 = undefined;
     var stream = std.io.fixedBufferStream(&head_buffer);
     const writer = stream.writer();
 
-    try writer.print("{s} {s} HTTP/1.0\r\nHost: {s}", .{ options.method, parsed.path, parsed.host });
+    try writer.print("{s} {s} HTTP/1.0\r\n", .{ options.method, parsed.path });
 
-    if (parsed.port != 80 and parsed.port != 443) try writer.print(":{d}", .{parsed.port});
-
-    try writer.writeAll("\r\nConnection: close\r\n");
+    var saw_user_agent = false;
+    var saw_content_length = false;
+    var saw_host = false;
 
     for (options.headers) |header| {
 
         if (!valid_token(header.name) or contains_newline(header.value)) return error.Invalid;
 
+        if (std.ascii.eqlIgnoreCase(header.name, "Connection")) continue;
+
+        if (std.ascii.eqlIgnoreCase(header.name, "Host")) {
+
+            saw_host = true;
+
+        } else if (std.ascii.eqlIgnoreCase(header.name, "User-Agent")) {
+
+            saw_user_agent = true;
+
+        } else if (std.ascii.eqlIgnoreCase(header.name, "Content-Length")) {
+
+            saw_content_length = true;
+
+        }
+
         try writer.print("{s}: {s}\r\n", .{ header.name, header.value });
 
     }
 
-    if (options.body.len != 0) try writer.print("Content-Length: {d}\r\n", .{options.body.len});
+    if (!saw_host) {
+
+        try writer.print("Host: {s}", .{parsed.host});
+
+        if (parsed.port != 80 and parsed.port != 443) try writer.print(":{d}", .{parsed.port});
+
+        try writer.writeAll("\r\n");
+
+    }
+
+    try writer.writeAll("Connection: close\r\n");
+
+    if (!saw_user_agent) try writer.writeAll("User-Agent: GraniteOS/1.0\r\n");
+
+    if (options.body.len != 0 and !saw_content_length) {
+
+        try writer.print("Content-Length: {d}\r\n", .{options.body.len});
+
+    }
 
     try writer.writeAll("\r\n");
 
@@ -222,6 +258,93 @@ pub fn request(
     const length = try read_all(&connection, response_buffer);
 
     return parse_response(response_buffer[0..length]);
+
+}
+
+/// Convenience wrappers around `request` for the common verbs.
+pub fn post(
+    authority: Handle,
+    heap: *mem.Heap,
+    url_text: []const u8,
+    headers: []const Header,
+    body: []const u8,
+    response_buffer: []u8,
+) !Response {
+
+    return request(authority, heap, .{
+
+        .method = "POST",
+        .url = url_text,
+        .headers = headers,
+        .body = body,
+
+    }, response_buffer);
+
+}
+
+pub fn put(
+    authority: Handle,
+    heap: *mem.Heap,
+    url_text: []const u8,
+    headers: []const Header,
+    body: []const u8,
+    response_buffer: []u8,
+) !Response {
+
+    return request(authority, heap, .{
+
+        .method = "PUT",
+        .url = url_text,
+        .headers = headers,
+        .body = body,
+
+    }, response_buffer);
+
+}
+
+pub fn patch(
+    authority: Handle,
+    heap: *mem.Heap,
+    url_text: []const u8,
+    headers: []const Header,
+    body: []const u8,
+    response_buffer: []u8,
+) !Response {
+
+    return request(authority, heap, .{
+
+        .method = "PATCH",
+        .url = url_text,
+        .headers = headers,
+        .body = body,
+
+    }, response_buffer);
+
+}
+
+pub fn delete(
+    authority: Handle,
+    heap: *mem.Heap,
+    url_text: []const u8,
+    headers: []const Header,
+    body: []const u8,
+    response_buffer: []u8,
+) !Response {
+
+    return request(authority, heap, .{
+
+        .method = "DELETE",
+        .url = url_text,
+        .headers = headers,
+        .body = body,
+
+    }, response_buffer);
+
+}
+
+fn method_forbids_body(method: []const u8) bool {
+
+    return std.ascii.eqlIgnoreCase(method, "GET") or std.ascii.eqlIgnoreCase(method, "HEAD");
 
 }
 
@@ -260,7 +383,7 @@ pub fn parse_response(payload: []const u8) !Response {
 
 }
 
-/// GET `url_text` into `response`. Returns total bytes written (headers + body).
+/// GET `url_text` into `response`. Returns total bytes written (status line + headers + body).
 pub fn get(
     authority: Handle,
     heap: *mem.Heap,
@@ -268,108 +391,13 @@ pub fn get(
     response: []u8,
 ) !usize {
 
-    const parsed = url_mod.parse(url_text) orelse return error.Invalid;
-    const use_tls = url_mod.is_tls(parsed.scheme);
+    const parsed_response = try request(authority, heap, .{ .method = "GET", .url = url_text }, response);
+    const body_end = @intFromPtr(parsed_response.body.ptr) + parsed_response.body.len;
+    const base = @intFromPtr(response.ptr);
 
-    var request_buffer: [512]u8 = undefined;
-    const host_header = try format_host_header(parsed.host, parsed.port, &request_buffer);
-    // host_header reuses request_buffer prefix; rebuild request after.
-    var host_copy: [256]u8 = undefined;
+    if (body_end < base) return error.InvalidResponse;
 
-    if (host_header.len > host_copy.len) return error.Invalid;
-
-    @memcpy(host_copy[0..host_header.len], host_header);
-    const host_h = host_copy[0..host_header.len];
-
-    const http_request = std.fmt.bufPrint(
-        &request_buffer,
-        "GET {s} HTTP/1.0\r\nHost: {s}\r\nConnection: close\r\n\r\n",
-        .{ parsed.path, host_h },
-    ) catch return error.Invalid;
-
-    if (use_tls) {
-
-        var session: tls.Session = undefined;
-
-        try tls.Session.connect_host(&session, authority, heap, parsed.host, parsed.port);
-        defer session.close();
-
-        try session.send_all(http_request);
-
-        return read_all_tls(&session, response);
-
-    } else {
-
-        var socket = try net.Socket.connect_host(authority, parsed.host, parsed.port);
-        defer socket.close();
-
-        try socket.send_all(http_request);
-
-        return read_all_socket(&socket, response);
-
-    }
-
-}
-
-fn format_host_header(host: []const u8, port: u16, scratch: []u8) ![]const u8 {
-
-    if (port == 80 or port == 443) return host;
-
-    return std.fmt.bufPrint(scratch, "{s}:{d}", .{ host, port }) catch return error.Invalid;
-
-}
-
-fn read_all_socket(socket: *net.Socket, response: []u8) !usize {
-
-    var total: usize = 0;
-
-    while (total < response.len) {
-
-        const n = try socket.recv(response[total..]);
-
-        if (n == 0) break;
-
-        total += n;
-
-        if (try complete_length(response[0..total])) |expected| {
-
-            if (expected > response.len) return error.ResponseTooLarge;
-            if (total >= expected) return expected;
-
-        }
-
-    }
-
-    try check_content_length(response[0..total]);
-
-    return total;
-
-}
-
-fn read_all_tls(session: *tls.Session, response: []u8) !usize {
-
-    var total: usize = 0;
-
-    while (total < response.len) {
-
-        const n = try session.recv(response[total..]);
-
-        if (n == 0) break;
-
-        total += n;
-
-        if (try complete_length(response[0..total])) |expected| {
-
-            if (expected > response.len) return error.ResponseTooLarge;
-            if (total >= expected) return expected;
-
-        }
-
-    }
-
-    try check_content_length(response[0..total]);
-
-    return total;
+    return body_end - base;
 
 }
 

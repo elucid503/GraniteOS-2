@@ -93,19 +93,19 @@ fn parse_response(bytes: []const u8) !void {
     const body = bytes[body_start + 4 ..];
 
     var status_buffer: [16]u8 = undefined;
-    const status = json_string(body, "\"status\":", &status_buffer) orelse return error.Invalid;
+    const status = lib.json.string(body, "status", &status_buffer) orelse return error.Invalid;
 
     if (!std.mem.eql(u8, status, "success")) return error.Invalid;
 
-    const offset_seconds = json_int(body, "\"offset\":") orelse return error.Invalid;
-    const lat = json_float(body, "\"lat\":") orelse return error.Invalid;
-    const lon = json_float(body, "\"lon\":") orelse return error.Invalid;
+    const offset_seconds = lib.json.int(body, "offset") orelse return error.Invalid;
+    const lat = lib.json.float(body, "lat") orelse return error.Invalid;
+    const lon = lib.json.float(body, "lon") orelse return error.Invalid;
 
     var country_buffer: [2]u8 = .{ '?', '?' };
-    _ = json_string(body, "\"countryCode\":", &country_buffer);
+    _ = lib.json.string(body, "countryCode", &country_buffer);
 
     var city_buffer: [proto.metrics.max_city]u8 = .{0} ** proto.metrics.max_city;
-    const city = json_string(body, "\"city\":", &city_buffer);
+    const city = lib.json.string(body, "city", &city_buffer);
 
     state.offset_minutes = std.math.clamp(@as(i32, @intCast(@divTrunc(offset_seconds, 60))), -12 * 60, 14 * 60);
     state.country = country_buffer;
@@ -114,65 +114,6 @@ fn parse_response(bytes: []const u8) !void {
     state.city = city_buffer;
     state.city_len = if (city) |slice| slice.len else 0;
     state.ready = true;
-
-}
-
-/// Minimal JSON int extractor for a known small response shape.
-fn json_int(body: []const u8, key: []const u8) ?i64 {
-
-    const token = json_number_token(body, key) orelse return null;
-
-    return std.fmt.parseInt(i64, token, 10) catch null;
-
-}
-
-/// Minimal JSON float extractor for a known small response shape.
-fn json_float(body: []const u8, key: []const u8) ?f64 {
-
-    const token = json_number_token(body, key) orelse return null;
-
-    return std.fmt.parseFloat(f64, token) catch null;
-
-}
-
-fn json_number_token(body: []const u8, key: []const u8) ?[]const u8 {
-
-    const at = std.mem.indexOf(u8, body, key) orelse return null;
-    const rest = body[at + key.len ..];
-
-    var end: usize = 0;
-
-    while (end < rest.len) : (end += 1) {
-
-        const c = rest[end];
-
-        if (c == '-' or c == '+' or c == '.' or c == 'e' or c == 'E' or (c >= '0' and c <= '9')) continue;
-
-        break;
-
-    }
-
-    if (end == 0) return null;
-
-    return rest[0..end];
-
-}
-
-/// Scans for `"key":"value"` and copies up to `out.len` bytes of `value` into `out`, returning the copied slice.
-fn json_string(body: []const u8, key: []const u8, out: []u8) ?[]const u8 {
-
-    const at = std.mem.indexOf(u8, body, key) orelse return null;
-    const rest = body[at + key.len ..];
-
-    if (rest.len == 0 or rest[0] != '"') return null;
-
-    const value = rest[1..];
-    const end = std.mem.indexOfScalar(u8, value, '"') orelse return null;
-    const length = @min(end, out.len);
-
-    @memcpy(out[0..length], value[0..length]);
-
-    return out[0..length];
 
 }
 

@@ -2537,56 +2537,15 @@ fn parse_weather_response(out: *WeatherState, bytes: []const u8) !void {
     const at = std.mem.indexOf(u8, body, marker) orelse return error.Invalid;
     const section = body[at + marker.len - 1 ..];
 
-    const temperature = json_float_near(section, "\"temperature\":") orelse return error.Invalid;
-    const code = json_int_near(section, "\"weathercode\":") orelse
-        json_int_near(section, "\"weather_code\":") orelse
+    const temperature = lib.json.float(section, "temperature") orelse return error.Invalid;
+    const code = lib.json.int(section, "weathercode") orelse
+        lib.json.int(section, "weather_code") orelse
         return error.Invalid;
 
     out.temperature_c = temperature;
     out.code = @intCast(@max(code, 0));
     out.ready = true;
     out.failed = false;
-
-}
-
-fn json_float_near(body: []const u8, key: []const u8) ?f64 {
-
-    const token = json_number_token(body, key) orelse return null;
-
-    return std.fmt.parseFloat(f64, token) catch null;
-
-}
-
-fn json_int_near(body: []const u8, key: []const u8) ?i64 {
-
-    const token = json_number_token(body, key) orelse return null;
-
-    return std.fmt.parseInt(i64, token, 10) catch null;
-
-}
-
-fn json_number_token(body: []const u8, key: []const u8) ?[]const u8 {
-
-    const at = std.mem.indexOf(u8, body, key) orelse return null;
-    var rest = body[at + key.len ..];
-
-    while (rest.len > 0 and (rest[0] == ' ' or rest[0] == '\t')) rest = rest[1..];
-
-    var end: usize = 0;
-
-    while (end < rest.len) : (end += 1) {
-
-        const c = rest[end];
-
-        if (c == '-' or c == '+' or c == '.' or c == 'e' or c == 'E' or (c >= '0' and c <= '9')) continue;
-
-        break;
-
-    }
-
-    if (end == 0) return null;
-
-    return rest[0..end];
 
 }
 

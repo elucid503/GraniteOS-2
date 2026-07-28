@@ -18,6 +18,7 @@ pub const Grid = widgets.Grid;
 pub const Slider = widgets.Slider;
 pub const ButtonState = widgets.ButtonState;
 pub const ButtonStyle = widgets.ButtonStyle;
+pub const button = widgets.button;
 
 const Color = draw.Color;
 const Face = text_mod.Face;

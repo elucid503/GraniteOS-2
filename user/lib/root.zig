@@ -41,6 +41,7 @@ pub const link = @import("net/link.zig");
 pub const url = @import("net/url.zig");
 pub const http = @import("net/http.zig");
 pub const icy = @import("net/icy.zig");
+pub const json = @import("json.zig");
 pub const mp3 = @import("media/mp3.zig");
 pub const imap = @import("mail/imap.zig");
 pub const mime = @import("mail/mime.zig");

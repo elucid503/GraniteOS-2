@@ -1119,12 +1119,6 @@ fn section_after(body: []const u8, marker: []const u8) ?[]const u8 {
 
 }
 
-fn is_number_byte(byte: u8) bool {
-
-    return byte == '-' or byte == '+' or byte == '.' or byte == 'e' or byte == 'E' or (byte >= '0' and byte <= '9');
-
-}
-
 fn scaled_from_token(token: []const u8, scale: i32) ?i32 {
 
     const value = std.fmt.parseFloat(f64, token) catch return null;
@@ -1133,32 +1127,40 @@ fn scaled_from_token(token: []const u8, scale: i32) ?i32 {
 
 }
 
+fn bare_key(key_with_colon: []const u8) []const u8 {
+
+    // Call sites historically passed `"name":`; strip quotes and trailing colon.
+    var key = key_with_colon;
+
+    if (key.len >= 2 and key[0] == '"') {
+
+        if (std.mem.lastIndexOfScalar(u8, key, '"')) |end| {
+
+            if (end > 0) key = key[1..end];
+
+        }
+
+    }
+
+    return key;
+
+}
+
 fn value_scaled(text: []const u8, key: []const u8, scale: i32) ?i32 {
 
-    const at = std.mem.indexOf(u8, text, key) orelse return null;
-    var rest = text[at + key.len ..];
+    const token = lib.json.number_token(text, bare_key(key)) orelse return null;
 
-    while (rest.len > 0 and (rest[0] == ' ' or rest[0] == '\t')) rest = rest[1..];
-
-    var end: usize = 0;
-
-    while (end < rest.len and is_number_byte(rest[end])) : (end += 1) {}
-
-    if (end == 0) return null;
-
-    return scaled_from_token(rest[0..end], scale);
+    return scaled_from_token(token, scale);
 
 }
 
 /// "key":"2026-07-18T14:30" (or a bare quoted time) -> minutes since local midnight.
 fn value_hhmm(text: []const u8, key: []const u8) ?i32 {
 
-    const at = std.mem.indexOf(u8, text, key) orelse return null;
-    const rest = text[at + key.len ..];
-    const open = std.mem.indexOfScalar(u8, rest, '"') orelse return null;
-    const close = std.mem.indexOfScalarPos(u8, rest, open + 1, '"') orelse return null;
+    var stamp: [32]u8 = undefined;
+    const value = lib.json.string(text, bare_key(key), &stamp) orelse return null;
 
-    return hhmm_from_stamp(rest[open + 1 .. close]);
+    return hhmm_from_stamp(value);
 
 }
 
@@ -1186,11 +1188,11 @@ fn array_scaled(text: []const u8, key: []const u8, out: []i32, scale: i32) usize
 
         if (byte == ']') break;
 
-        if (is_number_byte(byte)) {
+        if (lib.json.is_number_byte(byte)) {
 
             var end: usize = 0;
 
-            while (end < rest.len and is_number_byte(rest[end])) : (end += 1) {}
+            while (end < rest.len and lib.json.is_number_byte(rest[end])) : (end += 1) {}
 
             out[count] = scaled_from_token(rest[0..end], scale) orelse 0;
             count += 1;

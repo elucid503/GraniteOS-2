@@ -1191,7 +1191,7 @@ fn parse_directory(body: []const u8) void {
     while (cursor < body.len and browse_staging.count < max_stations) {
 
         const open = std.mem.indexOfScalarPos(u8, body, cursor, '{') orelse break;
-        const close = object_end(body, open) orelse break;
+        const close = lib.json.object_end(body, open) orelse break;
         const object = body[open .. close + 1];
 
         cursor = close + 1;
@@ -1201,13 +1201,13 @@ fn parse_directory(body: []const u8) void {
         var genre_buffer: [max_genre]u8 = undefined;
         var country_buffer: [max_genre]u8 = undefined;
 
-        const name = json_string(object, "\"name\"", &name_buffer) orelse continue;
-        const address = json_string(object, "\"url_resolved\"", &url_buffer) orelse
-            json_string(object, "\"url\"", &url_buffer) orelse continue;
+        const name = lib.json.string(object, "name", &name_buffer) orelse continue;
+        const address = lib.json.string(object, "url_resolved", &url_buffer) orelse
+            lib.json.string(object, "url", &url_buffer) orelse continue;
 
-        const tags = json_string(object, "\"tags\"", &genre_buffer) orelse "";
-        const country = json_string(object, "\"country\"", &country_buffer) orelse "";
-        const bitrate = json_number(object, "\"bitrate\"") orelse 0;
+        const tags = lib.json.string(object, "tags", &genre_buffer) orelse "";
+        const country = lib.json.string(object, "country", &country_buffer) orelse "";
+        const bitrate = lib.json.uint(object, "bitrate") orelse 0;
 
         var subtitle: [max_genre]u8 = undefined;
         const described = describe(&subtitle, tags, country);
@@ -1226,141 +1226,6 @@ fn describe(out: []u8, tags: []const u8, country: []const u8) []const u8 {
     if (country.len == 0) return first_tag;
 
     return std.fmt.bufPrint(out, "{s} · {s}", .{ first_tag, country }) catch first_tag;
-
-}
-
-fn object_end(body: []const u8, open: usize) ?usize {
-
-    var depth: usize = 0;
-    var index = open;
-    var in_string = false;
-    var escaped = false;
-
-    while (index < body.len) : (index += 1) {
-
-        const byte = body[index];
-
-        if (in_string) {
-
-            if (escaped) {
-
-                escaped = false;
-
-            } else if (byte == '\\') {
-
-                escaped = true;
-
-            } else if (byte == '"') {
-
-                in_string = false;
-
-            }
-
-            continue;
-
-        }
-
-        switch (byte) {
-
-            '"' => in_string = true,
-            '{' => depth += 1,
-
-            '}' => {
-
-                depth -= 1;
-
-                if (depth == 0) return index;
-
-            },
-
-            else => {},
-
-        }
-
-    }
-
-    return null;
-
-}
-
-fn json_string(object: []const u8, key: []const u8, out: []u8) ?[]const u8 {
-
-    const at = std.mem.indexOf(u8, object, key) orelse return null;
-    const colon = std.mem.indexOfScalarPos(u8, object, at + key.len, ':') orelse return null;
-
-    var index = colon + 1;
-
-    while (index < object.len and (object[index] == ' ' or object[index] == '\t')) index += 1;
-
-    if (index >= object.len or object[index] != '"') return null;
-
-    index += 1;
-
-    var written: usize = 0;
-
-    while (index < object.len and written < out.len) {
-
-        const byte = object[index];
-
-        if (byte == '"') break;
-
-        if (byte == '\\' and index + 1 < object.len) {
-
-            index += 1;
-
-            const escape = object[index];
-
-            out[written] = switch (escape) {
-
-                'n', 't', 'r' => ' ',
-                'u' => blk: {
-
-                    // Non-ASCII escapes collapse to a placeholder; the font is Latin-1 anyway.
-                    index += @min(4, object.len - index - 1);
-
-                    break :blk '?';
-
-                },
-
-                else => escape,
-
-            };
-
-            written += 1;
-            index += 1;
-
-            continue;
-
-        }
-
-        // Keep the row text printable: control bytes would render as boxes.
-        out[written] = if (byte < 0x20 or byte >= 0x7f) ' ' else byte;
-
-        written += 1;
-        index += 1;
-
-    }
-
-    return std.mem.trim(u8, out[0..written], " ");
-
-}
-
-fn json_number(object: []const u8, key: []const u8) ?u32 {
-
-    const at = std.mem.indexOf(u8, object, key) orelse return null;
-    const colon = std.mem.indexOfScalarPos(u8, object, at + key.len, ':') orelse return null;
-
-    var index = colon + 1;
-
-    while (index < object.len and object[index] == ' ') index += 1;
-
-    var end = index;
-
-    while (end < object.len and object[end] >= '0' and object[end] <= '9') end += 1;
-
-    if (end == index) return null;
-
-    return std.fmt.parseInt(u32, object[index..end], 10) catch null;
 
 }
 

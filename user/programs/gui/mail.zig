@@ -1,8 +1,4 @@
 // Mail: a read-only IMAP inbox reader.
-//
-// One worker owns the IMAP session; the UI thread only reads atomics, so a slow server never
-// stalls the window. Passwords live in memory for the life of the process and are never written
-// to disk — only the server, port and address are remembered.
 
 const std = @import("std");
 
@@ -23,7 +19,7 @@ pub const std_options = lib.rng.std_options;
 
 pub const app_meta = .{
     .title = "Mail",
-    .description = "Read your inbox over IMAP.",
+    .description = "Read your Gmail inbox.",
     .icon = "mail",
     .category = "Internet",
 };

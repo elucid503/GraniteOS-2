@@ -18,8 +18,8 @@ pub const std_options = lib.rng.std_options;
 
 pub const app_meta = .{
 
-    .title = "Sprout CDN",
-    .description = "Manage files in Sprout CDN.",
+    .title = "CDN",
+    .description = "Manage files using Sprout.",
     .icon = "file",
     .category = "Internet",
 
@@ -319,7 +319,7 @@ fn run(args: []const []const u8) !void {
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
-    window = try lib.wm.open_main(&connection, 820, 560, "Sprout CDN");
+    window = try lib.wm.open_main(&connection, 820, 560, "CDN");
 
     picker.init();
     files = lib.fs.Client.connect(cap.memory) catch null;
@@ -1965,32 +1965,7 @@ fn append_text(out: []u8, length: *usize, text: []const u8) !void {
 
 fn append_json_string(out: []u8, length: *usize, text: []const u8) !void {
 
-    try append_text(out, length, "\"");
-
-    for (text) |byte| {
-
-        switch (byte) {
-
-            '"' => try append_text(out, length, "\\\""),
-            '\\' => try append_text(out, length, "\\\\"),
-            '\n' => try append_text(out, length, "\\n"),
-            '\r' => try append_text(out, length, "\\r"),
-            '\t' => try append_text(out, length, "\\t"),
-            0...8, 11...12, 14...31 => try append_text(out, length, "?"),
-            else => {
-
-                if (length.* >= out.len) return error.NoSpaceLeft;
-
-                out[length.*] = byte;
-                length.* += 1;
-
-            },
-
-        }
-
-    }
-
-    try append_text(out, length, "\"");
+    try lib.json.append_string(out, length, text);
 
 }
 
