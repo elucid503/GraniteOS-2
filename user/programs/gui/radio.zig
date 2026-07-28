@@ -89,7 +89,7 @@ const id_transport: u32 = 20;
 const id_row_base: u32 = 100;
 const id_star_base: u32 = 200;
 
-const favourites_path = "/root/user/radio-stations.txt";
+const favourites_name = "radio";
 
 const Station = struct {
 
@@ -492,32 +492,16 @@ fn selected_index() usize {
 
 }
 
-// Favourites live in a plain tab-separated file so they survive a reboot.
+// Favourites live in /cfgs/radio.config so they survive a reboot.
 
 fn load_favourites() void {
 
     favourites.clear();
 
-    var client = lib.fs.Client.connect(cap.memory) catch return;
-    defer client.close();
-
-    const file = client.open_path(favourites_path, 0) catch return;
-    defer client.close_file(file) catch {};
-
     var storage: [4096]u8 = undefined;
-    var length: usize = 0;
+    const text = lib.config.load(favourites_name, &storage) catch return;
 
-    while (length < storage.len) {
-
-        const count = client.read(file, length, storage[length..]) catch break;
-
-        if (count == 0) break;
-
-        length += count;
-
-    }
-
-    var lines = std.mem.splitScalar(u8, storage[0..length], '\n');
+    var lines = std.mem.splitScalar(u8, text, '\n');
 
     while (lines.next()) |line| {
 
@@ -547,15 +531,7 @@ fn save_favourites() void {
 
     }
 
-    var client = lib.fs.Client.connect(cap.memory) catch return;
-    defer client.close();
-
-    client.create(favourites_path, 0) catch {};
-
-    const file = client.open_path(favourites_path, 0) catch return;
-    defer client.close_file(file) catch {};
-
-    _ = client.write(file, 0, stream_writer.getWritten()) catch {};
+    lib.config.save(favourites_name, stream_writer.getWritten()) catch {};
 
 }
 

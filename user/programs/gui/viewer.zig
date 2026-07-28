@@ -221,7 +221,7 @@ fn open_picker() void {
 
     };
 
-    const start = if (file_path.len != 0) parent_dir(file_path) else "/root/user";
+    const start = if (file_path.len != 0) parent_dir(file_path) else lib.layout.user;
 
     picker.show_open(handle, &font, .image, start);
 

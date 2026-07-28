@@ -702,7 +702,7 @@ fn begin_save() void {
 
     };
 
-    const start = if (file_path_len != 0) parent_dir(path_storage[0..file_path_len]) else "/root/user";
+    const start = if (file_path_len != 0) parent_dir(path_storage[0..file_path_len]) else lib.layout.user;
 
     picker.show_save(handle, &font, .png, start, "drawing.png");
     paint_full();

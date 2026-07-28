@@ -681,9 +681,9 @@ fn start_directory(handle: *lib.fs.Client) []const u8 {
 
     const home = lib.start.cwd();
 
-    if (home.len > 0 and home[0] == '/') return home;
+    if (home.len > 1 and home[0] == '/') return home;
 
-    return "/";
+    return lib.layout.user;
 
 }
 

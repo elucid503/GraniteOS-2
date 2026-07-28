@@ -3854,7 +3854,7 @@ fn walk_files_for_switcher(query: []const u8) void {
     var client = lib.fs.Client.connect(cap.memory) catch return;
     defer client.close();
 
-    const roots = [_][]const u8{ "/root/user", "/root" };
+    const roots = [_][]const u8{ lib.layout.user, lib.layout.apps, "/" };
 
     for (roots) |root| {
 

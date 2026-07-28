@@ -38,7 +38,6 @@ const choice_labels = [_][]const u8{
 
     "Images",
     "Notepad",
-    "Geode",
     "Off",
 
 };
@@ -47,7 +46,6 @@ const dropdown_rows = [_]ui.Menu.Row{
 
     .{ .item = "Images" },
     .{ .item = "Notepad" },
-    .{ .item = "Geode" },
     .{ .item = "Off" },
 
 };
@@ -225,7 +223,6 @@ fn apply_choice(index: usize, row: usize) void {
 
         0 => "viewer",
         1 => "notepad",
-        2 => "audio-gui",
         else => "",
 
     };
@@ -555,11 +552,10 @@ fn paint_handler_section(parent: i16) void {
 
 fn choice_label(slot: *const lib.handler.Slot) []const u8 {
 
-    if (!slot.enabled or slot.program_len == 0) return choice_labels[3];
+    if (!slot.enabled or slot.program_len == 0) return choice_labels[2];
 
     if (std.mem.eql(u8, slot.app(), "viewer")) return choice_labels[0];
     if (std.mem.eql(u8, slot.app(), "notepad")) return choice_labels[1];
-    if (std.mem.eql(u8, slot.app(), "audio-gui")) return choice_labels[2];
 
     return slot.app();
 

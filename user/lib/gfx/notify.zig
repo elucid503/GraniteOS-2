@@ -3,11 +3,12 @@
 
 const cap = @import("../cap/cap.zig");
 const fs = @import("../fs/fs.zig");
+const layout = @import("../fs/layout.zig");
 const proto = @import("../ipc/proto.zig");
 
 pub const title_capacity = 32;
 pub const body_capacity = 96;
-const inbox_path = "/root/user/notification.inbox";
+const inbox_path = "/temp/notification.inbox";
 
 pub const Entry = struct {
 
@@ -24,6 +25,8 @@ pub fn post(title: []const u8, body: []const u8) void {
 
     var client = fs.Client.connect(cap.memory) catch return;
     defer client.close();
+
+    client.mkdir(layout.temp) catch {};
 
     const file = client.open_path(inbox_path, proto.filesystem.open_create | proto.filesystem.open_truncate) catch return;
     defer client.close_file(file) catch {};

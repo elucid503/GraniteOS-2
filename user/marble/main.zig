@@ -16,12 +16,9 @@ comptime {
 }
 
 const name = "marble";
-const root_dir = "/";
-
-// The default filesystem layout (07-userspace-ddd.md Section 8): programs live under one directory, the shell opens in another.
-
-const programs_dir = "/root/programs";
-const home_dir = "/root/user";
+const root_dir = lib.layout.root;
+const programs_dir = lib.layout.apps;
+const home_dir = lib.layout.user;
 
 const max_line = 256;
 const max_stages = 4;
@@ -115,7 +112,18 @@ fn run() !void {
         ensure_layout();
         install_programs(out);
 
-        set_cwd(lib.start.cwd());
+        // Prefer a launched cwd when set; otherwise open in the user home.
+        const launched = lib.start.cwd();
+
+        if (launched.len > 1) {
+
+            set_cwd(launched);
+
+        } else {
+
+            set_cwd(home_dir);
+
+        }
 
     } else |_| {}
 
@@ -164,15 +172,13 @@ fn ensure_layout() void {
 
     if (files) |*client| {
 
-        client.mkdir("/root") catch {};
-        client.mkdir(programs_dir) catch {};
-        client.mkdir(home_dir) catch {};
+        lib.layout.ensure(client);
 
     }
 
 }
 
-// Install bundled programs into the search path once; only a fresh disk pays the copy cost.
+// Install bundled programs and desktop apps into /apps once; only a fresh disk pays the copy cost.
 
 fn install_programs(out: *lib.stream.Stream) void {
 
@@ -187,6 +193,16 @@ fn install_programs(out: *lib.stream.Stream) void {
         const entry = catalog.program(index) orelse continue;
 
         installed += @intFromBool(install_program(entry.name));
+
+    }
+
+    index = 0;
+
+    while (index < catalog.desktop_count) : (index += 1) {
+
+        const entry = catalog.desktop(index) orelse continue;
+
+        installed += @intFromBool(install_program(entry.program));
 
     }
 

@@ -1044,7 +1044,7 @@ fn paint() void {
 
 fn init_marble_cwd() void {
 
-    const default = "/root/user";
+    const default = lib.layout.user;
 
     if (lib.prefs.take_open_path(&marble_cwd_storage)) |path| {
 

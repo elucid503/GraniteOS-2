@@ -50,7 +50,6 @@ const Builtin = struct {
 const builtins = [_]Builtin{
 
     .{ .ext = "png", .program = "viewer", .kind = .image },
-    .{ .ext = "wav", .program = "audio-gui", .kind = .audio },
 
 };
 
@@ -59,7 +58,6 @@ pub const program_choices = [_][]const u8{
 
     "viewer",
     "notepad",
-    "audio-gui",
 
 };
 
@@ -233,7 +231,7 @@ pub fn cycle(index: usize) void {
 
 }
 
-/// Apply a settings.cfg line of the form `open.<ext>=<program>` (empty program disables).
+/// Apply a settings.config line of the form `open.<ext>=<program>` (empty program disables).
 pub fn apply_config_line(line: []const u8) void {
 
     ensure();
@@ -396,7 +394,7 @@ fn eql_ascii_ignore_case(a: []const u8, b: []const u8) bool {
 
 const testing = std.testing;
 
-test "handler defaults match image and audio extensions" {
+test "handler defaults match image extensions" {
 
     reset_defaults();
 
@@ -405,10 +403,7 @@ test "handler defaults match image and audio extensions" {
     try testing.expect(png.kind == .image);
     try testing.expectEqualStrings("viewer", png.app());
     try testing.expect(match("shot.jpeg") == null);
-
-    const wav = match("beep.wav") orelse return error.TestUnexpectedResult;
-
-    try testing.expect(wav.kind == .audio);
+    try testing.expect(match("beep.wav") == null);
     try testing.expect(match("notes.txt") == null);
 
 }
@@ -420,8 +415,7 @@ test "handler cycle and config round-trip" {
     cycle(0); // png: viewer -> notepad
     try testing.expectEqualStrings("notepad", at(0).?.app());
 
-    cycle(0); // notepad -> audio-gui
-    cycle(0); // audio-gui -> disabled
+    cycle(0); // notepad -> disabled
     try testing.expect(!at(0).?.enabled);
 
     var buffer: [256]u8 = undefined;

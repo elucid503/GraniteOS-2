@@ -172,18 +172,16 @@ pub fn build(b: *std.Build) void {
     seedisk_run.addArg(disk_path);
     seedisk_run.addArg(b.fmt("{d}", .{disk_bytes}));
 
+    // Every guest binary lands under /apps (CLI, GUI, drivers, servers, shell).
     for (modules) |module| {
 
-        if (module.kind != .program) continue;
+        if (module.kind == .asset) continue;
 
         const exe = artifacts.get(module.bundle_name) orelse @panic("missing seedisk artifact");
 
         add_seed_program(seedisk_run, module.bundle_name, exe);
 
     }
-
-    seedisk_run.addArg("/root/user/demos/demo.wav");
-    seedisk_run.addFileArg(b.path("user/audio/demo.wav"));
 
     seedisk_run.has_side_effects = true;
 

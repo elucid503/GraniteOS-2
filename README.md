@@ -36,12 +36,13 @@ subsystem as it comes up (memory, interrupts, objects, and the SMP scheduler),
 then hands off to Flint. Flint loads bundled ELF programs for the name service,
 console and block/display drivers, the filesystem server, Marble (the
 interactive shell), and utilities (`echo`, `cat`, `help`, `ls`, `write`, ...).
-When a virtio-blk disk is present, programs are also installed on the persistent
-filesystem. If virtio-gpu hardware is present (`zig build qemu-gui`), Flint
+When a virtio-blk disk is present, binaries are installed under `/apps` on the
+persistent filesystem (layout: `/apps`, `/user`, `/cfgs`, `/temp`). If virtio-gpu
+hardware is present (`zig build qemu-gui`), Flint
 starts the display and input drivers, the compositor, the launcher, and a
 welcome desktop with taskbar chrome. GUI boots also expose a VirtIO Sound output;
-the Audio app and `play <file.wav>` support PCM WAV files with 8- or 16-bit mono
-or stereo samples at standard VirtIO sample rates. A virtio-net NIC is attached by
+Radio streams over the net, and `play <file.wav>` plays local PCM WAV files
+(8- or 16-bit mono/stereo at standard VirtIO sample rates). A virtio-net NIC is attached by
 default (disable with `-Dnet=false`); Flint starts the net driver and the netstack
 server, a userspace ARP/IPv4/ICMP/TCP stack reachable at `10.0.2.15` on QEMU's
 user-mode network, and `fetch <url>` does a real HTTP/1.0 or HTTPS GET over it

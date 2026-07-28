@@ -55,7 +55,7 @@ const max_messages = 30;
 const raw_capacity = 20 * 1024;
 const body_capacity = 10 * 1024;
 
-const account_path = "/root/user/mail-account.txt";
+const account_name = "mail";
 
 // Worker states.
 
@@ -308,26 +308,10 @@ fn load_account() void {
 
     set_field(&server_field, "imap.gmail.com");
 
-    var client_fs = lib.fs.Client.connect(cap.memory) catch return;
-    defer client_fs.close();
-
-    const file = client_fs.open_path(account_path, 0) catch return;
-    defer client_fs.close_file(file) catch {};
-
     var storage: [256]u8 = undefined;
-    var length: usize = 0;
+    const text = lib.config.load(account_name, &storage) catch return;
 
-    while (length < storage.len) {
-
-        const count = client_fs.read(file, length, storage[length..]) catch break;
-
-        if (count == 0) break;
-
-        length += count;
-
-    }
-
-    var lines = std.mem.splitScalar(u8, storage[0..length], '\n');
+    var lines = std.mem.splitScalar(u8, text, '\n');
 
     if (lines.next()) |host| {
 
@@ -344,15 +328,7 @@ fn save_account() void {
     var storage: [256]u8 = undefined;
     const text = std.fmt.bufPrint(&storage, "{s}\n{s}\n", .{ server_field.slice(), address_field.slice() }) catch return;
 
-    var client_fs = lib.fs.Client.connect(cap.memory) catch return;
-    defer client_fs.close();
-
-    client_fs.create(account_path, 0) catch {};
-
-    const file = client_fs.open_path(account_path, 0) catch return;
-    defer client_fs.close_file(file) catch {};
-
-    _ = client_fs.write(file, 0, text) catch {};
+    lib.config.save(account_name, text) catch {};
 
 }
 

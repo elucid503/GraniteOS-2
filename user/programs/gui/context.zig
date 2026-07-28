@@ -20,7 +20,7 @@ comptime {
 
 }
 
-const home_dir = "/root/user";
+const home_dir = lib.layout.user;
 
 // Decode arena: IDAT (~160 KiB) + full-res XRGB pixels (~8 MiB at 1920x1080) + row scratch.
 const wallpaper_arena_bytes = 12 * 1024 * 1024;

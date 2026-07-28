@@ -4,8 +4,10 @@ const std = @import("std");
 const build_options = @import("build_options");
 
 const cap = @import("../cap/cap.zig");
+const config = @import("../fs/config.zig");
 const gfx = @import("../draw/draw.zig");
 const fs = @import("../fs/fs.zig");
+const layout = @import("../fs/layout.zig");
 const handler = @import("../file/handler.zig");
 const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
@@ -16,11 +18,11 @@ const window = @import("window.zig");
 
 const Color = gfx.Color;
 
-pub const config_path = "/root/user/settings.cfg";
-pub const open_path_file = "/root/user/.open-path";
-pub const desktop_pins_path = "/root/user/desktop.pins";
-pub const taskbar_pins_path = "/root/user/taskbar.pins";
-pub const window_geom_path = "/root/user/windows.geom";
+pub const settings_name = "settings";
+pub const desktop_name = "desktop";
+pub const taskbar_name = "taskbar";
+pub const windows_name = "windows";
+pub const open_path_file = "/temp/open-path";
 
 pub const max_desktop_pins = 24;
 pub const max_pin_path = 128;
@@ -201,7 +203,7 @@ pub fn wallpaper() Color {
 }
 
 /// On-disk / source path for the single wallpaper set (one PNG per theme).
-pub const wallpaper_dir = "/root/user/images/wallpaper/default";
+pub const wallpaper_dir = "/user/images/wallpaper/default";
 
 /// File stem for the active theme's wallpaper PNG (matches files under wallpaper_dir).
 pub fn wallpaper_file_stem(id: ThemeId) []const u8 {
@@ -275,40 +277,28 @@ pub fn apply_theme(id: ThemeId) void {
 /// Reload settings from disk when the on-disk generation changes.
 pub fn refresh_if_changed() bool {
 
-    var client = fs.Client.connect(cap.memory) catch return false;
-    defer client.close();
-
-    const file = client.open_path(config_path, 0) catch return false;
-    defer client.close_file(file) catch {};
-
     var buffer: [512]u8 = undefined;
-    const read = client.read(file, 0, &buffer) catch return false;
+    const text = config.load(settings_name, &buffer) catch return false;
 
-    const generation = config_generation(buffer[0..read]);
+    const generation = config_generation(text);
 
     if (generation != 0 and generation == loaded_generation) return false;
 
-    parse_config(buffer[0..read]);
+    parse_config(text);
     loaded_generation = generation;
 
     return true;
 
 }
 
-/// Always re-reads and re-parses settings.cfg (ignores the generation short-circuit).
+/// Always re-reads and re-parses settings.config (ignores the generation short-circuit).
 pub fn force_reload() bool {
 
-    var client = fs.Client.connect(cap.memory) catch return false;
-    defer client.close();
-
-    const file = client.open_path(config_path, 0) catch return false;
-    defer client.close_file(file) catch {};
-
     var buffer: [512]u8 = undefined;
-    const read = client.read(file, 0, &buffer) catch return false;
+    const text = config.load(settings_name, &buffer) catch return false;
 
-    parse_config(buffer[0..read]);
-    loaded_generation = config_generation(buffer[0..read]);
+    parse_config(text);
+    loaded_generation = config_generation(text);
 
     return true;
 
@@ -322,9 +312,6 @@ pub fn refresh() void {
 }
 
 pub fn save() void {
-
-    var client = fs.Client.connect(cap.memory) catch return;
-    defer client.close();
 
     var buffer: [512]u8 = undefined;
     const stamp = loaded_generation +% 1;
@@ -340,22 +327,8 @@ pub fn save() void {
     const open_len = handler.write_config(buffer[head.len..]);
     const text = buffer[0 .. head.len + open_len];
 
-    if (client.open_path(config_path, 0)) |file| {
-
-        defer client.close_file(file) catch {};
-
-        if ((client.write(file, 0, text) catch 0) > 0) loaded_generation = stamp;
-
-        return;
-
-    } else |_| {}
-
-    client.create(config_path, proto.filesystem.kind_file) catch return;
-
-    const file = client.open_path(config_path, 0) catch return;
-    defer client.close_file(file) catch {};
-
-    if ((client.write(file, 0, text) catch 0) > 0) loaded_generation = stamp;
+    config.save(settings_name, text) catch return;
+    loaded_generation = stamp;
 
 }
 
@@ -402,7 +375,7 @@ pub fn apply_event(event: events.Event) bool {
 
     tz_offset_minutes = event.x;
 
-    // File associations are not packed in the event; re-read settings.cfg for open.*= lines.
+    // File associations are not packed in the event; re-read settings.config for open.*= lines.
     _ = force_reload();
 
     return true;
@@ -414,10 +387,10 @@ pub fn write_open_path(path: []const u8) void {
     var client = fs.Client.connect(cap.memory) catch return;
     defer client.close();
 
-    _ = client.delete(open_path_file) catch {};
-    _ = client.create(open_path_file, @import("../ipc/proto.zig").filesystem.kind_file) catch return;
+    client.mkdir(layout.temp) catch {};
 
-    const file = client.open_path(open_path_file, 0) catch return;
+    const flags = proto.filesystem.open_create | proto.filesystem.open_truncate;
+    const file = client.open_path(open_path_file, flags) catch return;
     defer client.close_file(file) catch {};
 
     _ = client.write(file, 0, path) catch {};
@@ -458,27 +431,21 @@ pub const DesktopPin = struct {
 /// Load desktop shortcut paths (one absolute path per line) into `out`; returns the count.
 pub fn load_desktop_pins(out: []DesktopPin) usize {
 
-    var client = fs.Client.connect(cap.memory) catch return 0;
-    defer client.close();
-
-    const file = client.open_path(desktop_pins_path, 0) catch return 0;
-    defer client.close_file(file) catch {};
-
     var buffer: [max_desktop_pins * (max_pin_path + 1)]u8 = undefined;
-    const read = client.read(file, 0, &buffer) catch return 0;
+    const text = config.load(desktop_name, &buffer) catch return 0;
 
     var written: usize = 0;
     var start: usize = 0;
     var index: usize = 0;
 
-    while (index <= read and written < out.len) : (index += 1) {
+    while (index <= text.len and written < out.len) : (index += 1) {
 
-        const at_end = index == read;
-        const sep = if (at_end) true else buffer[index] == '\n' or buffer[index] == '\r';
+        const at_end = index == text.len;
+        const sep = if (at_end) true else text[index] == '\n' or text[index] == '\r';
 
         if (!sep) continue;
 
-        const line = buffer[start..index];
+        const line = text[start..index];
         start = index + 1;
 
         if (line.len == 0 or line[0] != '/') continue;
@@ -551,9 +518,6 @@ pub fn remove_desktop_pin(path: []const u8) bool {
 
 fn save_desktop_pins(pins: []const DesktopPin) bool {
 
-    var client = fs.Client.connect(cap.memory) catch return false;
-    defer client.close();
-
     var buffer: [max_desktop_pins * (max_pin_path + 1)]u8 = undefined;
     var length: usize = 0;
 
@@ -570,13 +534,9 @@ fn save_desktop_pins(pins: []const DesktopPin) bool {
 
     }
 
-    _ = client.delete(desktop_pins_path) catch {};
-    client.create(desktop_pins_path, proto.filesystem.kind_file) catch return false;
+    config.save(desktop_name, buffer[0..length]) catch return false;
 
-    const file = client.open_path(desktop_pins_path, 0) catch return false;
-    defer client.close_file(file) catch {};
-
-    return (client.write(file, 0, buffer[0..length]) catch 0) == length;
+    return true;
 
 }
 
@@ -596,27 +556,21 @@ pub const TaskbarPin = struct {
 /// Load pinned taskbar program names (one per line) into `out`; returns the count.
 pub fn load_taskbar_pins(out: []TaskbarPin) usize {
 
-    var client = fs.Client.connect(cap.memory) catch return 0;
-    defer client.close();
-
-    const file = client.open_path(taskbar_pins_path, 0) catch return 0;
-    defer client.close_file(file) catch {};
-
     var buffer: [max_taskbar_pins * (max_pin_program + 1)]u8 = undefined;
-    const read = client.read(file, 0, &buffer) catch return 0;
+    const text = config.load(taskbar_name, &buffer) catch return 0;
 
     var written: usize = 0;
     var start: usize = 0;
     var index: usize = 0;
 
-    while (index <= read and written < out.len) : (index += 1) {
+    while (index <= text.len and written < out.len) : (index += 1) {
 
-        const at_end = index == read;
-        const sep = if (at_end) true else buffer[index] == '\n' or buffer[index] == '\r';
+        const at_end = index == text.len;
+        const sep = if (at_end) true else text[index] == '\n' or text[index] == '\r';
 
         if (!sep) continue;
 
-        const line = buffer[start..index];
+        const line = text[start..index];
         start = index + 1;
 
         if (line.len == 0) continue;
@@ -652,9 +606,6 @@ pub fn is_taskbar_pinned(program: []const u8) bool {
 /// Overwrites the on-disk taskbar pin list with exactly `pins`. Good for avoiding duplicates and keeping the order of pins consistent with the taskbar.
 pub fn save_taskbar_pins(pins: []const TaskbarPin) bool {
 
-    var client = fs.Client.connect(cap.memory) catch return false;
-    defer client.close();
-
     var buffer: [max_taskbar_pins * (max_pin_program + 1)]u8 = undefined;
     var length: usize = 0;
 
@@ -671,11 +622,9 @@ pub fn save_taskbar_pins(pins: []const TaskbarPin) bool {
 
     }
 
-    const flags = proto.filesystem.open_create | proto.filesystem.open_truncate;
-    const file = client.open_path(taskbar_pins_path, flags) catch return false;
-    defer client.close_file(file) catch {};
+    config.save(taskbar_name, buffer[0..length]) catch return false;
 
-    return (client.write(file, 0, buffer[0..length]) catch 0) == length;
+    return true;
 
 }
 
@@ -693,26 +642,20 @@ pub fn load_window_geom(program: []const u8) ?WindowGeom {
 
     if (program.len == 0) return null;
 
-    var client = fs.Client.connect(cap.memory) catch return null;
-    defer client.close();
-
-    const file = client.open_path(window_geom_path, 0) catch return null;
-    defer client.close_file(file) catch {};
-
     var buffer: [max_window_geoms * (max_pin_program + 32)]u8 = undefined;
-    const read = client.read(file, 0, &buffer) catch return null;
+    const text = config.load(windows_name, &buffer) catch return null;
 
     var start: usize = 0;
     var index: usize = 0;
 
-    while (index <= read) : (index += 1) {
+    while (index <= text.len) : (index += 1) {
 
-        const at_end = index == read;
-        const sep = if (at_end) true else buffer[index] == '\n' or buffer[index] == '\r';
+        const at_end = index == text.len;
+        const sep = if (at_end) true else text[index] == '\n' or text[index] == '\r';
 
         if (!sep) continue;
 
-        const line = buffer[start..index];
+        const line = text[start..index];
         start = index + 1;
 
         if (line.len == 0) continue;
@@ -848,61 +791,52 @@ fn write_window_geom(program: []const u8, geom: WindowGeom) void {
     } = undefined;
     var count: usize = 0;
 
-    var client = fs.Client.connect(cap.memory) catch return;
-    defer client.close();
+    var buffer: [max_window_geoms * (max_pin_program + 32)]u8 = undefined;
+    const existing = config.load(windows_name, &buffer) catch "";
 
-    if (client.open_path(window_geom_path, 0)) |file| {
+    var start: usize = 0;
+    var index: usize = 0;
 
-        defer client.close_file(file) catch {};
+    while (index <= existing.len and count < entries.len) : (index += 1) {
 
-        var buffer: [max_window_geoms * (max_pin_program + 32)]u8 = undefined;
-        const read = client.read(file, 0, &buffer) catch 0;
+        const at_end = index == existing.len;
+        const sep = if (at_end) true else existing[index] == '\n' or existing[index] == '\r';
 
-        var start: usize = 0;
-        var index: usize = 0;
+        if (!sep) continue;
 
-        while (index <= read and count < entries.len) : (index += 1) {
+        const line = existing[start..index];
+        start = index + 1;
 
-            const at_end = index == read;
-            const sep = if (at_end) true else buffer[index] == '\n' or buffer[index] == '\r';
+        if (line.len == 0) continue;
 
-            if (!sep) continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const name = line[0..eq];
+        const rest = line[eq + 1 ..];
 
-            const line = buffer[start..index];
-            start = index + 1;
+        if (std.mem.eql(u8, name, program)) continue;
 
-            if (line.len == 0) continue;
+        var parts = std.mem.splitScalar(u8, rest, ',');
+        const x_text = parts.next() orelse continue;
+        const y_text = parts.next() orelse continue;
+        const w_text = parts.next() orelse continue;
+        const h_text = parts.next() orelse continue;
 
-            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-            const name = line[0..eq];
-            const rest = line[eq + 1 ..];
+        const length = @min(name.len, max_pin_program);
 
-            if (std.mem.eql(u8, name, program)) continue;
+        entries[count] = .{};
+        @memcpy(entries[count].name[0..length], name[0..length]);
+        entries[count].length = @intCast(length);
+        entries[count].geom = .{
 
-            var parts = std.mem.splitScalar(u8, rest, ',');
-            const x_text = parts.next() orelse continue;
-            const y_text = parts.next() orelse continue;
-            const w_text = parts.next() orelse continue;
-            const h_text = parts.next() orelse continue;
+            .x = std.fmt.parseInt(i32, x_text, 10) catch continue,
+            .y = std.fmt.parseInt(i32, y_text, 10) catch continue,
+            .width = std.fmt.parseInt(u32, w_text, 10) catch continue,
+            .height = std.fmt.parseInt(u32, h_text, 10) catch continue,
 
-            const length = @min(name.len, max_pin_program);
+        };
+        count += 1;
 
-            entries[count] = .{};
-            @memcpy(entries[count].name[0..length], name[0..length]);
-            entries[count].length = @intCast(length);
-            entries[count].geom = .{
-
-                .x = std.fmt.parseInt(i32, x_text, 10) catch continue,
-                .y = std.fmt.parseInt(i32, y_text, 10) catch continue,
-                .width = std.fmt.parseInt(u32, w_text, 10) catch continue,
-                .height = std.fmt.parseInt(u32, h_text, 10) catch continue,
-
-            };
-            count += 1;
-
-        }
-
-    } else |_| {}
+    }
 
     if (count < entries.len) {
 
@@ -935,11 +869,7 @@ fn write_window_geom(program: []const u8, geom: WindowGeom) void {
 
     }
 
-    const flags = proto.filesystem.open_create | proto.filesystem.open_truncate;
-    const file = client.open_path(window_geom_path, flags) catch return;
-    defer client.close_file(file) catch {};
-
-    _ = client.write(file, 0, out[0..length]) catch {};
+    config.save(windows_name, out[0..length]) catch {};
 
 }
 

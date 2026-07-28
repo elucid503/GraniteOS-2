@@ -95,10 +95,11 @@ pub fn main() !void {
 
     var volume = try Volume.format(&device);
 
-    _ = try volume.create("/root", .directory);
-    _ = try volume.create("/root/programs", .directory);
-    _ = try volume.create("/root/user", .directory);
-    _ = try volume.create("/root/user/demos", .directory);
+    // Canonical layout: /apps binaries, /user home, /cfgs configs, /temp scratch.
+    _ = try volume.create("/apps", .directory);
+    _ = try volume.create("/temp", .directory);
+    _ = try volume.create("/user", .directory);
+    _ = try volume.create("/cfgs", .directory);
 
     var index: usize = 3;
 
@@ -109,7 +110,7 @@ pub fn main() !void {
         const image = try std.fs.cwd().readFileAlloc(arena, host_path, 64 * 1024 * 1024);
 
         var path_buffer: [format.max_name + 32]u8 = undefined;
-        const file_path = if (name.len > 0 and name[0] == '/') name else try std.fmt.bufPrint(&path_buffer, "/root/programs/{s}", .{name});
+        const file_path = if (name.len > 0 and name[0] == '/') name else try std.fmt.bufPrint(&path_buffer, "/apps/{s}", .{name});
 
         const inode = try volume.create(file_path, .file);
 

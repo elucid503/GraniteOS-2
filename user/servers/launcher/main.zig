@@ -18,7 +18,7 @@ comptime {
 
 }
 
-const home_dir = "/root/user";
+const home_dir = lib.layout.user;
 
 const worker_stack_pages = 16;
 const page_size = 4096;

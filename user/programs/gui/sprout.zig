@@ -50,7 +50,7 @@ const margin: i32 = 12;
 
 const cdn_origin = "https://cdn.sprout.software";
 const sprout_origin = "https://sprout.software";
-const session_path = "/root/user/.sprout-cdn-session";
+const session_name = "sprout";
 
 const Screen = enum {
 
@@ -891,12 +891,8 @@ fn disconnect_account() void {
 
 fn load_session() bool {
 
-    const client: *lib.fs.Client = if (files) |*handle| handle else return false;
-    const file = client.open_path(session_path, 0) catch return false;
-    defer client.close_file(file) catch {};
-
-    const length = client.read(file, 0, &session_token) catch return false;
-    const token = std.mem.trim(u8, session_token[0..length], " \t\r\n");
+    const text = lib.config.load(session_name, &session_token) catch return false;
+    const token = std.mem.trim(u8, text, " \t\r\n");
 
     if (token.len == 0) return false;
 
@@ -910,23 +906,13 @@ fn load_session() bool {
 
 fn save_session() void {
 
-    var client = lib.fs.Client.connect(cap.memory) catch return;
-    defer client.close();
-
-    const flags = proto.filesystem.open_create | proto.filesystem.open_truncate;
-    const file = client.open_path(session_path, flags) catch return;
-    defer client.close_file(file) catch {};
-
-    _ = client.write(file, 0, session_token[0..session_token_len]) catch return;
+    lib.config.save(session_name, session_token[0..session_token_len]) catch {};
 
 }
 
 fn clear_session() void {
 
-    var client = lib.fs.Client.connect(cap.memory) catch return;
-    defer client.close();
-
-    client.delete(session_path) catch {};
+    lib.config.remove(session_name);
 
 }
 
