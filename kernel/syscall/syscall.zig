@@ -32,30 +32,7 @@ const Error = err.Error;
 const VirtAddr = arch.VirtAddr;
 const page_size = config.page_size;
 
-pub const Number = enum(u64) {
-
-    create = 1,
-    spawn,
-    close,
-    start,
-    yield,
-    configure,
-    map,
-    unmap,
-    send,
-    receive,
-    call,
-    reply,
-    notify,
-    wait,
-    bind,
-    acknowledge,
-    copy,
-    inspect,
-    set_name,
-    sleep,
-
-};
+pub const Number = enum(u64) { create = 1, spawn, close, start, yield, configure, map, unmap, send, receive, call, reply, notify, wait, bind, acknowledge, copy, inspect, set_name, sleep };
 
 // `create` kinds (append-only ABI numbering); gated kinds take the granting authority handle last.
 
