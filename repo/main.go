@@ -70,9 +70,9 @@ type repositoryServer struct {
 func main() {
 
     var (
-        listen = flag.String("listen", ":8080", "HTTP listen address")
+        listen = flag.String("listen", ":8020", "HTTP listen address")
         data = flag.String("data", "./repository", "repository storage directory")
-        publicURL = flag.String("public-url", "", "public HTTPS origin override")
+        publicURL = flag.String("public-url", "https://repo.graniteos.org", "public repository origin URL")
     )
 
     flag.Parse()
