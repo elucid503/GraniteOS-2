@@ -74,9 +74,11 @@ func main() {
         data = flag.String("data", "./repository", "repository storage directory")
         publicURL = flag.String("public-url", "", "public HTTPS origin override")
     )
+
     flag.Parse()
 
     token := strings.TrimSpace(os.Getenv("GRANITE_REPO_TOKEN"))
+
     if token == "" {
 
         log.Fatal("GRANITE_REPO_TOKEN is required")
@@ -84,6 +86,7 @@ func main() {
     }
 
     root, err := filepath.Abs(*data)
+
     if err != nil {
 
         log.Fatalf("resolve storage directory: %v", err)
@@ -102,6 +105,7 @@ func main() {
         publicURL: strings.TrimRight(*publicURL, "/"),
 
     }
+
     if server.publicURL != "" {
 
         if _, err := validatePublicURL(server.publicURL); err != nil {
@@ -124,6 +128,7 @@ func main() {
     }
 
     log.Printf("Granite repository listening on %s, storage %s", *listen, root)
+
     if err := httpServer.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 
         log.Fatal(err)
@@ -157,6 +162,7 @@ func (s *repositoryServer) health(w http.ResponseWriter, _ *http.Request) {
 func (s *repositoryServer) index(w http.ResponseWriter, r *http.Request) {
 
     origin, err := s.publicOrigin(r)
+
     if err != nil {
 
         s.sendError(w, http.StatusInternalServerError, err)
@@ -167,6 +173,7 @@ func (s *repositoryServer) index(w http.ResponseWriter, r *http.Request) {
     s.mu.Lock()
     packages, err := s.loadCatalog()
     s.mu.Unlock()
+
     if err != nil {
 
         s.sendError(w, http.StatusInternalServerError, err)
@@ -184,9 +191,11 @@ func (s *repositoryServer) index(w http.ResponseWriter, r *http.Request) {
         return packages[i].Name < packages[j].Name
 
     })
+
     for index := range packages {
 
         pkg := &packages[index]
+
         pkg.Artifact = fmt.Sprintf(
             "%s/v1/packages/%s/%s.elf",
             origin,
@@ -210,13 +219,16 @@ func (s *repositoryServer) artifact(w http.ResponseWriter, r *http.Request) {
 
     id := r.PathValue("id")
     versionFile := r.PathValue("version")
+
     if !strings.HasSuffix(versionFile, ".elf") {
 
         s.sendError(w, http.StatusNotFound, errors.New("not found"))
         return
 
     }
+
     version := strings.TrimSuffix(versionFile, ".elf")
+
     if !idPattern.MatchString(id) || !versionPattern.MatchString(version) {
 
         s.sendError(w, http.StatusNotFound, errors.New("not found"))
@@ -226,21 +238,25 @@ func (s *repositoryServer) artifact(w http.ResponseWriter, r *http.Request) {
 
     path := filepath.Join(s.root, "packages", id, version+".elf")
     file, err := os.Open(path)
+
     if errors.Is(err, os.ErrNotExist) {
 
         s.sendError(w, http.StatusNotFound, errors.New("not found"))
         return
 
     }
+
     if err != nil {
 
         s.sendError(w, http.StatusInternalServerError, err)
         return
 
     }
+
     defer file.Close()
 
     info, err := file.Stat()
+
     if err != nil {
 
         s.sendError(w, http.StatusInternalServerError, err)
@@ -262,12 +278,14 @@ func (s *repositoryServer) publish(w http.ResponseWriter, r *http.Request) {
         return
 
     }
+
     if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/octet-stream" {
 
         s.sendError(w, http.StatusBadRequest, errors.New("Content-Type must be application/octet-stream"))
         return
 
     }
+
     if r.ContentLength <= 0 || r.ContentLength > maxBinary {
 
         s.sendError(w, http.StatusBadRequest, errors.New("invalid Content-Length"))
@@ -276,6 +294,7 @@ func (s *repositoryServer) publish(w http.ResponseWriter, r *http.Request) {
     }
 
     record, expectedHash, err := packageFromHeaders(r.Header)
+
     if err != nil {
 
         s.sendError(w, http.StatusBadRequest, err)
@@ -284,18 +303,21 @@ func (s *repositoryServer) publish(w http.ResponseWriter, r *http.Request) {
     }
 
     payload, err := io.ReadAll(io.LimitReader(r.Body, maxBinary+1))
+
     if err != nil {
 
         s.sendError(w, http.StatusBadRequest, errors.New("could not read package"))
         return
 
     }
+
     if len(payload) != int(r.ContentLength) {
 
         s.sendError(w, http.StatusBadRequest, errors.New("truncated body"))
         return
 
     }
+
     if err := validateELF(payload); err != nil {
 
         s.sendError(w, http.StatusBadRequest, err)
@@ -318,12 +340,14 @@ func (s *repositoryServer) publish(w http.ResponseWriter, r *http.Request) {
     s.mu.Lock()
     err = s.storeRelease(record, payload)
     s.mu.Unlock()
+
     if errors.Is(err, os.ErrExist) {
 
         s.sendError(w, http.StatusConflict, errors.New("release already exists"))
         return
 
     }
+
     if err != nil {
 
         s.sendError(w, http.StatusInternalServerError, err)
@@ -344,6 +368,7 @@ func (s *repositoryServer) publish(w http.ResponseWriter, r *http.Request) {
 func (s *repositoryServer) storeRelease(record packageRecord, payload []byte) error {
 
     packages, err := s.loadCatalog()
+
     if err != nil {
 
         return err
@@ -351,12 +376,15 @@ func (s *repositoryServer) storeRelease(record packageRecord, payload []byte) er
     }
 
     artifactDir := filepath.Join(s.root, "packages", record.ID)
+
     if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 
         return err
 
     }
+
     artifactPath := filepath.Join(artifactDir, record.Version+".elf")
+
     if _, err := os.Stat(artifactPath); err == nil {
 
         return os.ErrExist
@@ -399,21 +427,25 @@ func (s *repositoryServer) storeRelease(record packageRecord, payload []byte) er
 func (s *repositoryServer) loadCatalog() ([]packageRecord, error) {
 
     file, err := os.Open(filepath.Join(s.root, "catalog.json"))
+
     if errors.Is(err, os.ErrNotExist) {
 
         return make([]packageRecord, 0), nil
 
     }
+
     if err != nil {
 
         return nil, err
 
     }
+
     defer file.Close()
 
     var packages []packageRecord
     decoder := json.NewDecoder(io.LimitReader(file, 4*1024*1024))
     decoder.DisallowUnknownFields()
+
     if err := decoder.Decode(&packages); err != nil {
 
         return nil, fmt.Errorf("decode catalog: %w", err)
@@ -427,8 +459,10 @@ func (s *repositoryServer) loadCatalog() ([]packageRecord, error) {
 func (s *repositoryServer) saveCatalog(packages []packageRecord) error {
 
     var payload bytes.Buffer
+
     encoder := json.NewEncoder(&payload)
     encoder.SetIndent("", "  ")
+
     if err := encoder.Encode(packages); err != nil {
 
         return err
@@ -448,11 +482,13 @@ func (s *repositoryServer) publicOrigin(r *http.Request) (string, error) {
     }
 
     scheme := "http"
+
     if r.TLS != nil {
 
         scheme = "https"
 
     }
+
     if forwarded := firstHeaderValue(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
 
         scheme = strings.ToLower(forwarded)
@@ -460,6 +496,7 @@ func (s *repositoryServer) publicOrigin(r *http.Request) (string, error) {
     }
 
     host := r.Host
+
     if forwarded := firstHeaderValue(r.Header.Get("X-Forwarded-Host")); forwarded != "" {
 
         host = forwarded
@@ -495,49 +532,64 @@ func packageFromHeaders(header http.Header) (packageRecord, string, error) {
     var empty packageRecord
 
     id, err := headerText(header, "Granite-Package-Id", 32)
+
     if err != nil || !idPattern.MatchString(id) {
 
         return empty, "", errors.New("invalid Granite-Package-Id")
 
     }
+
     version, err := headerText(header, "Granite-Package-Version", 24)
+
     if err != nil || !versionPattern.MatchString(version) {
 
         return empty, "", errors.New("invalid Granite-Package-Version")
 
     }
+
     name, err := headerText(header, "Granite-Package-Name", 40)
+
     if err != nil {
 
         return empty, "", err
 
     }
+
     summary, err := headerText(header, "Granite-Package-Summary", 80)
+
     if err != nil {
 
         return empty, "", err
 
     }
+
     category, err := headerText(header, "Granite-Package-Category", 24)
+
     if err != nil {
 
         return empty, "", err
 
     }
+
     icon, err := headerText(header, "Granite-Package-Icon", 24)
+
     if err != nil {
 
         return empty, "", err
 
     }
+
     abi, err := headerText(header, "Granite-Package-ABI", 32)
+
     if err != nil || abi != packageABI {
 
         return empty, "", errors.New("unsupported ABI")
 
     }
+
     expectedHash, err := headerText(header, "Granite-Package-SHA256", 64)
     expectedHash = strings.ToLower(expectedHash)
+
     if err != nil || !hashPattern.MatchString(expectedHash) {
 
         return empty, "", errors.New("invalid Granite-Package-SHA256")
@@ -582,17 +634,7 @@ func headerText(header http.Header, name string, limit int) (string, error) {
 
 func validateELF(payload []byte) error {
 
-    magic := []byte{
-
-        0x7f,
-        'E',
-        'L',
-        'F',
-        2,
-        1,
-        1,
-
-    }
+    magic := []byte{ 0x7f, 'E', 'L', 'F', 2, 1, 1, }
 
     if len(payload) < 64 || !bytes.Equal(payload[:7], magic) {
 
@@ -614,6 +656,7 @@ func validateELF(payload []byte) error {
 func writeNewFile(path string, payload []byte, mode os.FileMode) error {
 
     file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+
     if err != nil {
 
         return err
@@ -643,11 +686,13 @@ func replaceFile(path string, payload []byte, mode os.FileMode) error {
 
     directory := filepath.Dir(path)
     file, err := os.CreateTemp(directory, ".catalog-*")
+
     if err != nil {
 
         return err
 
     }
+
     pending := file.Name()
     defer os.Remove(pending)
 
@@ -657,18 +702,21 @@ func replaceFile(path string, payload []byte, mode os.FileMode) error {
         return err
 
     }
+
     if _, err := file.Write(payload); err != nil {
 
         file.Close()
         return err
 
     }
+
     if err := file.Sync(); err != nil {
 
         file.Close()
         return err
 
     }
+
     if err := file.Close(); err != nil {
 
         return err
@@ -704,6 +752,7 @@ func isWindowsRenameError(err error) bool {
 func (s *repositoryServer) authorized(value string) bool {
 
     expected := "Bearer " + s.token
+
     if len(value) != len(expected) {
 
         return false
@@ -735,6 +784,7 @@ func (s *repositoryServer) sendError(w http.ResponseWriter, status int, err erro
 func (s *repositoryServer) sendJSON(w http.ResponseWriter, status int, value any) {
 
     payload, err := json.Marshal(value)
+
     if err != nil {
 
         http.Error(w, `{"error":"encode response"}`, http.StatusInternalServerError)
