@@ -45,6 +45,7 @@ pub const refresh_cw = lucide("refresh-cw");
 pub const log_out = lucide("log-out");
 pub const users = lucide("users");
 pub const x = lucide("x");
+pub const software = lucide("folder-plus");
 
 // Weather (WMO codes from Open-Meteo current_weather.weathercode).
 
@@ -116,7 +117,7 @@ const catalog = [_]Entry{
     .{ .name = "weather", .svg = weather_app },
     .{ .name = "radio", .svg = radio },
     .{ .name = "mail", .svg = mail },
-
+    .{ .name = "software", .svg = software },
 };
 
 /// Resolve a catalog / desktop icon name. Unknown names fall back to the apps grid.
@@ -178,6 +179,7 @@ test "non-catalog icons stroke without overflowing" {
         refresh_cw,
         log_out,
         users,
+        software,
         weather_clear,
         weather_clear_night,
         weather_partly,

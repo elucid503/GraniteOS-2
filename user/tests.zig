@@ -26,6 +26,7 @@ test {
     _ = @import("lib").rng;
     _ = @import("lib").url;
     _ = @import("lib").http;
+    _ = @import("lib").software;
     _ = @import("lib").icy;
     _ = @import("lib").mp3;
     _ = @import("lib").mime;

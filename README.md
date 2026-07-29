@@ -55,6 +55,20 @@ the `marble [/] >` prompt to watch the supervisor restart Marble; quit QEMU with
 `scripts/m6.sh` drives Marble over serial; `scripts/m9.sh` tests the GUI
 stack.
 
+## Software repositories
+
+The desktop pins **Software**, and the launcher exposes it beside its search
+field. It reads a small HTTPS repository index, verifies static AArch64 ELF
+packages by ABI, size, ELF headers, and SHA-256, then installs them
+transactionally under `/apps`.
+Installed metadata is merged into the launcher at runtime, so new applications
+appear without rebuilding the OS. The launcher now scrolls categories, apps,
+and search results independently.
+
+See [`repo/README.md`](repo/README.md) for the read/publish protocol and
+deployable reference server. See [`sdk/README.md`](sdk/README.md) for the
+source-linked Zig SDK, example application, stripped ELF builder, and publisher.
+
 ## Layout
 
 Assembly and Zig never share a directory: each arch keeps its non-Zig toolchain
@@ -67,6 +81,8 @@ build/discover.zig        build-time user-module scan and app-catalog generation
 tools/flatten.zig         host tool: ELF -> load-faithful flat image
 tools/bundle.zig          host tool: user module bundle packer
 tools/seedisk.zig         host tool: format and seed the persistent virtio disk
+repo/                     repository protocol and reference cloud server
+sdk/                      third-party Zig API, example, builder, and publisher
 kernel/
   main.zig                post-arch entry; machine discovery; subsystem init; hand-off
   config.zig              compile-time tunables
@@ -140,6 +156,7 @@ user/
     ui/                   widgets, charts, and file-picker UI
     shell/                Marble help/about catalog
     mem/                  user-space memory helpers
+    software/             repository records, verification, and install transactions
   programs/common/        bundled CLI utilities (echo, cat, help, status, ...)
   programs/fs/            filesystem commands (ls, write, mkdir, ...)
   programs/location/      cwd helper (location)

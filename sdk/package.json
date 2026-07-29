@@ -1,0 +1,9 @@
+{
+  "id": "hello-granite",
+  "name": "Hello Granite",
+  "summary": "A small third-party GraniteOS application.",
+  "version": "1.0.0",
+  "category": "Accessories",
+  "icon": "apps",
+  "abi": "gos2-aarch64-v1"
+}

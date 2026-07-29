@@ -170,7 +170,7 @@ fn search_height() i32 {
 
 }
 
-const max_apps = 32;
+const max_apps = 96;
 const max_categories = 12;
 const max_menu_rows = 10;
 
@@ -233,6 +233,7 @@ var window_count: usize = 0;
 
 var apps: [max_apps]lib.wm.App = undefined;
 var app_count: usize = 0;
+var installed_apps: [lib.software.max_packages]lib.software.Installed = undefined;
 
 // One taskbar indicator per open window, plus one per pinned app that is not currently running.
 const TaskbarItem = struct {
@@ -257,6 +258,9 @@ var pinned_count: usize = 0;
 var categories: [max_categories][]const u8 = undefined;
 var category_count: usize = 0;
 var active_category: usize = 0;
+var category_scroll: usize = 0;
+var app_scroll: usize = 0;
+var search_scroll: usize = 0;
 
 var launch_endpoint: cap.Handle = 0;
 
@@ -273,6 +277,7 @@ const launcher_id: u32 = 1;
 const clock_id: u32 = 2;
 const notification_id: u32 = 3;
 const network_id: u32 = 4;
+const software_shortcut_id: u32 = 5;
 const overflow_id: u32 = 99;
 const window_id_base: u32 = 100;
 const category_id_base: u32 = 1000;
@@ -392,7 +397,7 @@ fn run() !void {
 
     bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel, "taskbar");
 
-    app_count = lib.wm.load_apps(&bundle, apps[0..]);
+    reload_apps();
     build_categories();
     launch_endpoint = lib.stream.lookup_endpoint("launch") catch 0;
 
@@ -514,6 +519,18 @@ fn send_minimize_hints() void {
 fn reload_pins() void {
 
     pinned_count = lib.prefs.load_taskbar_pins(pinned_programs[0..]);
+
+}
+
+fn reload_apps() void {
+
+    app_count = lib.wm.load_apps(&bundle, apps[0..]);
+
+    if (app_count >= apps.len) return;
+
+    const added = lib.wm.load_installed_apps(installed_apps[0..], apps[app_count..]);
+
+    app_count += added;
 
 }
 
@@ -713,8 +730,11 @@ fn update_calendar_cursor(_: i32, _: i32) void {
 
 fn update_menu_cursor(x: i32, y: i32) void {
 
-    if (y < search_height()) lib.cursor.set(&connection, .selector)
-    else if (menu_regions.hit(x, y) != 0) lib.cursor.set(&connection, .clicker)
+    const id = menu_regions.hit(x, y);
+
+    if (id == software_shortcut_id) lib.cursor.set(&connection, .clicker)
+    else if (y < search_height()) lib.cursor.set(&connection, .selector)
+    else if (id != 0) lib.cursor.set(&connection, .clicker)
     else lib.cursor.set(&connection, .pointer);
 
 }
@@ -897,7 +917,6 @@ fn handle_bar(event: events.Event) void {
                     close_switcher();
                     toggle_menu();
                     return;
-
                 }
 
                 if (id == clock_id) {
@@ -1030,6 +1049,7 @@ fn handle_menu(event: events.Event) void {
                     if (index != active_category) {
 
                         active_category = index;
+                        app_scroll = 0;
                         need = true;
                         category_changed = true;
 
@@ -1051,6 +1071,11 @@ fn handle_menu(event: events.Event) void {
             }
 
             update_menu_cursor(event.x, event.y);
+        },
+
+        events.kind_scroll => {
+
+            if (menu_wheel(event.value, event.x)) paint_menu();
 
         },
 
@@ -1127,7 +1152,12 @@ fn menu_key(code: u16) void {
 
     // Printable bytes, Backspace/Delete, and the arrow escapes all flow through the shared edit buffer.
 
-    if (search.feed(bytes, keyboard.shift)) paint_menu();
+    if (search.feed(bytes, keyboard.shift)) {
+
+        search_scroll = 0;
+        paint_menu();
+
+    }
 
 }
 
@@ -1150,6 +1180,14 @@ fn menu_click(x: i32, y: i32) void {
     const id = menu_regions.hit(x, y);
 
     if (id == 0) return;
+
+    if (id == software_shortcut_id) {
+
+        launch("software");
+        close_menu();
+        return;
+
+    }
 
     if (id >= search_id_base) {
 
@@ -1182,6 +1220,7 @@ fn menu_click(x: i32, y: i32) void {
     if (index != active_category) {
 
         active_category = index;
+        app_scroll = 0;
         paint_menu();
 
     }
@@ -1339,8 +1378,62 @@ fn row_at(y: i32) ?usize {
 fn category_at(y: i32) ?usize {
 
     const row = row_at(y) orelse return null;
+    const index = category_scroll + row;
 
-    return if (row < category_count) row else null;
+    return if (index < category_count) index else null;
+
+}
+
+fn menu_wheel(delta: i64, x: i32) bool {
+
+    if (delta == 0) return false;
+
+    if (searching()) {
+
+        const before = search_scroll;
+        const model = ui.Scroll{
+
+            .offset = @intCast(search_scroll),
+            .content = @intCast(match_count()),
+            .viewport = @intCast(menu_row_limit),
+
+        };
+
+        search_scroll = @intCast(model.wheel(delta, 1));
+
+        return search_scroll != before;
+
+    }
+
+    if (x < category_col_width()) {
+
+        const before = category_scroll;
+        const model = ui.Scroll{
+
+            .offset = @intCast(category_scroll),
+            .content = @intCast(category_count),
+            .viewport = @intCast(menu_row_limit),
+
+        };
+
+        category_scroll = @intCast(model.wheel(delta, 1));
+
+        return category_scroll != before;
+
+    }
+
+    const before = app_scroll;
+    const model = ui.Scroll{
+
+        .offset = @intCast(app_scroll),
+        .content = @intCast(category_size(active_category)),
+        .viewport = @intCast(menu_row_limit),
+
+    };
+
+    app_scroll = @intCast(model.wheel(delta, 1));
+
+    return app_scroll != before;
 
 }
 
@@ -1561,8 +1654,16 @@ fn open_menu() void {
 
     ensure_menu() catch return;
 
+    reload_apps();
+    build_categories();
+    rebuild_items();
+    paint_bar();
+
     search.clear();
     active_category = 0;
+    category_scroll = 0;
+    app_scroll = 0;
+    search_scroll = 0;
 
     _ = menu_regions.leave();
 
@@ -3116,7 +3217,31 @@ fn paint_menu_surface(surface: *const gfx.Surface) void {
 
 fn search_box_rect(width: i32) Rect {
 
-    return .{ .x = 8, .y = 8, .w = width - 16, .h = search_height() - 12 };
+    const shortcut = software_shortcut_rect(width);
+
+    return .{
+
+        .x = 8,
+        .y = 8,
+        .w = shortcut.x - 16,
+        .h = search_height() - 12,
+
+    };
+
+}
+
+fn software_shortcut_rect(width: i32) Rect {
+
+    const size = search_height() - 12;
+
+    return .{
+
+        .x = width - size - 8,
+        .y = 8,
+        .w = size,
+        .h = size,
+
+    };
 
 }
 
@@ -3127,7 +3252,14 @@ fn search_text_rect(width: i32) Rect {
     const icon_size: i32 = 20;
     const text_x = search_rect.x + 8 + icon_size + 8;
 
-    return .{ .x = text_x, .y = search_rect.y, .w = width - 8 - text_x, .h = search_rect.h };
+    return .{
+
+        .x = text_x,
+        .y = search_rect.y,
+        .w = search_rect.x + search_rect.w - text_x - 8,
+        .h = search_rect.h,
+
+    };
 
 }
 
@@ -3145,6 +3277,22 @@ fn paint_search_box(surface: *const gfx.Surface, width: i32) void {
 
     ui.paint_field_content(surface, &font, search_text_rect(width), &search, "Search applications", true, 13);
 
+    const shortcut = software_shortcut_rect(width);
+
+    menu_regions.add(software_shortcut_id, shortcut);
+
+    ui.fill_round_rect(surface, shortcut, 6, if (menu_regions.hovered(software_shortcut_id)) ui.theme.hover else ui.theme.surface_alt);
+    ui.stroke_round_rect(surface, shortcut, 6, 1, ui.theme.border);
+
+    lib.draw.vector.icon_in(surface, .{
+
+        .x = shortcut.x + @divTrunc(shortcut.w - icon_size, 2),
+        .y = shortcut.y + @divTrunc(shortcut.h - icon_size, 2),
+        .w = icon_size,
+        .h = icon_size,
+
+    }, lib.icons.software, ui.theme.accent);
+
 }
 
 fn paint_categories(surface: *const gfx.Surface) void {
@@ -3154,9 +3302,15 @@ fn paint_categories(surface: *const gfx.Surface) void {
     // Divider between the category column and the app flyout.
     surface.fill_rect(.{ .x = col_w, .y = search_height(), .w = 1, .h = @as(i32, @intCast(surface.height)) - search_height() }, ui.theme.border);
 
-    for (categories[0..category_count], 0..) |name, index| {
+    const end = @min(category_count, category_scroll + menu_row_limit);
+    var index = category_scroll;
 
-        const top = search_height() + @as(i32, @intCast(index)) * row_height();
+    while (index < end) : (index += 1) {
+
+        const name = categories[index];
+        const visible = index - category_scroll;
+
+        const top = search_height() + @as(i32, @intCast(visible)) * row_height();
         const rect = Rect{ .x = 6, .y = top + 3, .w = col_w - 12, .h = row_height() - 6 };
         const id = category_id_base + @as(u32, @intCast(index));
 
@@ -3184,6 +3338,21 @@ fn paint_categories(surface: *const gfx.Surface) void {
 
     }
 
+    ui.scrollbar(surface, .{
+
+        .x = col_w - ui.scrollbar_width - 2,
+        .y = search_height() + 3,
+        .w = ui.scrollbar_width,
+        .h = @as(i32, @intCast(surface.height)) - search_height() - 6,
+
+    }, .{
+
+        .offset = @intCast(category_scroll),
+        .content = @intCast(category_count),
+        .viewport = @intCast(menu_row_limit),
+
+    });
+
 }
 
 fn paint_category_apps(surface: *const gfx.Surface, width: i32) void {
@@ -3198,12 +3367,14 @@ fn paint_category_apps(surface: *const gfx.Surface, width: i32) void {
 
     }
 
-    var index: usize = 0;
+    var index = app_scroll;
+    const end = @min(count, app_scroll + menu_row_limit);
 
-    while (index < count) : (index += 1) {
+    while (index < end) : (index += 1) {
 
         const app = category_app(active_category, index) orelse break;
-        const top = search_height() + @as(i32, @intCast(index)) * row_height();
+        const visible = index - app_scroll;
+        const top = search_height() + @as(i32, @intCast(visible)) * row_height();
         const rect = Rect{ .x = left + 6, .y = top + 3, .w = width - left - 12, .h = row_height() - 6 };
         const id = browse_id_base + @as(u32, @intCast(index));
 
@@ -3213,31 +3384,56 @@ fn paint_category_apps(surface: *const gfx.Surface, width: i32) void {
 
     }
 
+    ui.scrollbar(surface, .{
+
+        .x = width - ui.scrollbar_width - 2,
+        .y = search_height() + 3,
+        .w = ui.scrollbar_width,
+        .h = @as(i32, @intCast(surface.height)) - search_height() - 6,
+
+    }, .{
+
+        .offset = @intCast(app_scroll),
+        .content = @intCast(count),
+        .viewport = @intCast(menu_row_limit),
+
+    });
+
 }
 
 fn paint_search_results(surface: *const gfx.Surface, width: i32) void {
 
     var y = search_height();
     var any = false;
-    var nth: u32 = 0;
+    var matched: usize = 0;
+    var shown: usize = 0;
     const visible_rows = view_rows();
 
     for (apps[0..app_count]) |app| {
 
         if (!matches(app)) continue;
-        if (@as(usize, nth) >= visible_rows) break;
+
+        if (matched < search_scroll) {
+
+            matched += 1;
+            continue;
+
+        }
+
+        if (shown >= visible_rows) break;
 
         any = true;
 
         const rect = Rect{ .x = 6, .y = y + 3, .w = width - 12, .h = row_height() - 6 };
-        const id = search_id_base + nth;
+        const id = search_id_base + @as(u32, @intCast(matched));
 
         menu_regions.add(id, .{ .x = 0, .y = rect.y, .w = width, .h = rect.h });
 
         paint_app_row(surface, rect, app, menu_regions.hovered(id));
 
         y += row_height();
-        nth += 1;
+        shown += 1;
+        matched += 1;
 
     }
 
@@ -3246,6 +3442,21 @@ fn paint_search_results(surface: *const gfx.Surface, width: i32) void {
         draw_text(surface, 20, search_height() + 12, 13, "No matching applications", ui.theme.text_dim);
 
     }
+
+    ui.scrollbar(surface, .{
+
+        .x = width - ui.scrollbar_width - 2,
+        .y = search_height() + 3,
+        .w = ui.scrollbar_width,
+        .h = @as(i32, @intCast(surface.height)) - search_height() - 6,
+
+    }, .{
+
+        .offset = @intCast(search_scroll),
+        .content = @intCast(match_count()),
+        .viewport = @intCast(menu_row_limit),
+
+    });
 
 }
 

@@ -22,11 +22,14 @@ const home_dir = lib.layout.user;
 
 const worker_stack_pages = 16;
 const page_size = 4096;
+const max_program = lib.software.max_binary;
 
 var bundle: lib.bundle.Bundle = undefined;
 var bundle_length: usize = 0;
 var bundle_offset: usize = 0;
 var core_count: u64 = 1;
+var files: ?lib.fs.Client = null;
+var load_buffer: [max_program]u8 = undefined;
 
 // GUI children report their exit here; a worker drains the deaths so an exiting child's one-way send never stalls.
 var deaths: Handle = 0;
@@ -54,6 +57,10 @@ fn run() !void {
 
     const base = try sys.map(cap.self_space, cap.launcher.bundle, 0, sys.read);
     bundle = try lib.bundle.Bundle.open(base + bundle_offset, bundle_length);
+
+    if (lib.fs.Client.connect(cap.memory)) |client| {
+        files = client;
+    } else |_| {}
 
     deaths = try sys.create(.endpoint, 0, 0);
 
@@ -92,14 +99,58 @@ fn spawn(in: *const Message) i64 {
     var name_bytes: [proto.launch.max_length]u8 = undefined;
     const name = decode_name(in, &name_bytes) orelse return -7;
 
-    const image = bundle.find(name) orelse return -6;
-
     lock.acquire();
     defer lock.release();
+
+    const image = resolve_image(name) catch return -6;
 
     spawn_gui(name, image) catch return -3;
 
     return 0;
+
+}
+
+fn resolve_image(name: []const u8) ![]const u8 {
+
+    if (bundle.find(name)) |image| return image;
+    if (!managed_program(name)) return error.NotFound;
+
+    const client = if (files) |*handle| handle else return error.Gone;
+
+    var path_buffer: [96]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buffer, "{s}/{s}", .{ lib.layout.apps, name }) catch return error.Invalid;
+    const info = try client.stat(path);
+    const length: usize = @intCast(info.length);
+
+    if (info.kind != proto.filesystem.kind_file or length == 0 or length > load_buffer.len) return error.Invalid;
+
+    const file = try client.open_path(path, 0);
+    defer client.close_file(file) catch {};
+
+    var offset: usize = 0;
+
+    while (offset < length) {
+
+        const read = try client.read(file, offset, load_buffer[offset..length]);
+
+        if (read == 0) return error.Invalid;
+
+        offset += read;
+
+    }
+
+    try lib.software.verify_elf(load_buffer[0..length]);
+
+    return load_buffer[0..length];
+
+}
+
+fn managed_program(name: []const u8) bool {
+
+    var installed: [lib.software.max_packages]lib.software.Installed = undefined;
+    const count = lib.software.load_installed(installed[0..]);
+
+    return lib.software.find_installed(installed[0..count], name) != null;
 
 }
 

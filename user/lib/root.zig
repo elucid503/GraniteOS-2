@@ -59,3 +59,4 @@ pub const term = @import("io/term.zig");
 pub const log = @import("io/log.zig");
 pub const catalog = @import("shell/catalog.zig");
 pub const line = @import("shell/line.zig");
+pub const software = @import("software/software.zig");

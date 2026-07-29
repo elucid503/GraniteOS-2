@@ -70,6 +70,7 @@ const pin_cell_h: i32 = 88;
 const pin_icon: i32 = 36;
 const pin_margin: i32 = 24;
 const pin_gap: i32 = 12;
+const software_pin_index = lib.prefs.max_desktop_pins;
 
 var font: lib.draw.text.Face = undefined;
 var bundle: lib.bundle.Bundle = undefined;
@@ -391,6 +392,8 @@ fn button_down(event: events.Event) void {
 
         if (pin_at(event.x, event.y)) |index| {
 
+            if (index == software_pin_index) return;
+
             open_menu(event.x, event.y, index);
 
         } else {
@@ -580,6 +583,13 @@ fn remove_pin_at(index: usize) void {
 
 fn open_pin(index: usize) void {
 
+    if (index == software_pin_index) {
+
+        lib.wm.launch("software");
+        return;
+
+    }
+
     if (index >= pin_count) return;
 
     const path = pins[index].slice();
@@ -612,6 +622,18 @@ fn open_pin(index: usize) void {
 
 fn pin_cell(index: usize) Rect {
 
+    return pin_slot(index + 1);
+
+}
+
+fn software_pin_cell() Rect {
+
+    return pin_slot(0);
+
+}
+
+fn pin_slot(index: usize) Rect {
+
     const cols = @max(1, @divTrunc(@as(i32, @intCast(desktop.surface.width)) - pin_margin * 2 + pin_gap, pin_cell_w + pin_gap));
     const col: i32 = @intCast(@as(usize, @intCast(index)) % @as(usize, @intCast(cols)));
     const row: i32 = @intCast(@as(usize, @intCast(index)) / @as(usize, @intCast(cols)));
@@ -628,6 +650,8 @@ fn pin_cell(index: usize) Rect {
 }
 
 fn pin_at(x: i32, y: i32) ?usize {
+
+    if (software_pin_cell().contains(x, y)) return software_pin_index;
 
     var index: usize = 0;
 
@@ -928,7 +952,14 @@ fn paint_pin_hover(previous: ?usize, next: ?usize) void {
 
     if (previous) |index| {
 
-        if (index < pin_count) {
+        if (index == software_pin_index) {
+
+            const cell = software_pin_cell();
+
+            paint_software_pin(surface);
+            damage = damage.cover(cell);
+
+        } else if (index < pin_count) {
 
             const cell = pin_cell(index);
 
@@ -941,7 +972,14 @@ fn paint_pin_hover(previous: ?usize, next: ?usize) void {
 
     if (next) |index| {
 
-        if (index < pin_count) {
+        if (index == software_pin_index) {
+
+            const cell = software_pin_cell();
+
+            paint_software_pin(surface);
+            damage = damage.cover(cell);
+
+        } else if (index < pin_count) {
 
             const cell = pin_cell(index);
 
@@ -958,6 +996,8 @@ fn paint_pin_hover(previous: ?usize, next: ?usize) void {
 
 fn paint_pins(surface: *const gfx.Surface) void {
 
+    paint_software_pin(surface);
+
     var index: usize = 0;
 
     while (index < pin_count) : (index += 1) {
@@ -965,6 +1005,38 @@ fn paint_pins(surface: *const gfx.Surface) void {
         paint_one_pin(surface, index);
 
     }
+
+}
+
+fn paint_software_pin(surface: *const gfx.Surface) void {
+
+    const cell = software_pin_cell();
+
+    paint_wallpaper(surface, cell);
+
+    if (pin_hover != null and pin_hover.? == software_pin_index) {
+
+        ui.fill_round_rect(surface, cell, 8, ui.theme.hover);
+
+    }
+
+    const icon_x = cell.x + @divTrunc(cell.w - pin_icon, 2);
+    const icon_y = cell.y + 10;
+
+    lib.draw.vector.icon_in(surface, .{
+
+        .x = icon_x,
+        .y = icon_y,
+        .w = pin_icon,
+        .h = pin_icon,
+
+    }, lib.icons.software, ui.theme.accent);
+
+    const text_w = font.text_width("Software", 12);
+    const text_x = cell.x + @divTrunc(cell.w - text_w, 2);
+    const text_y = icon_y + pin_icon + 8;
+
+    font.draw(surface, text_x, text_y, 12, "Software", ui.theme.text);
 
 }
 
@@ -1075,4 +1147,3 @@ fn paint_prompt(surface: *const gfx.Surface) void {
     page.paint(surface);
 
 }
-

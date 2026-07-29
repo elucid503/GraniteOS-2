@@ -334,6 +334,30 @@ pub fn load_apps(bundle: *const bundle_mod.Bundle, out: []App) usize {
 
 }
 
+pub fn load_installed_apps(storage: []@import("../software/software.zig").Installed, out: []App) usize {
+
+    const software = @import("../software/software.zig");
+    const count = software.load_installed(storage);
+    const written = @min(count, out.len);
+
+    for (storage[0..written], 0..) |*entry, index| {
+
+        out[index] = .{
+
+            .program = entry.program(),
+            .title = entry.title(),
+            .description = entry.description(),
+            .icon = icon_by_name(entry.icon_name()),
+            .category = entry.group(),
+
+        };
+
+    }
+
+    return written;
+
+}
+
 pub fn open_catalog(bundle: *const bundle_mod.Bundle) ?app_catalog.Catalog {
 
     const bytes = bundle.find("app-catalog") orelse return null;

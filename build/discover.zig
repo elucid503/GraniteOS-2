@@ -55,6 +55,7 @@ const chrome_gui = std.StaticStringMap(void).initComptime(.{
     .{ "context", {} },
     .{ "about", {} },
     .{ "clipboard", {} },
+    .{ "software", {} },
 
 });
 
