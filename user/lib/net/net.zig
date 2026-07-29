@@ -157,9 +157,9 @@ pub const Socket = struct {
 
         @memcpy(dest[0..amount], bytes[0..amount]);
 
-        while (true) {
+        const started = time.now_ms();
 
-            const started = time.now_ms();
+        while (true) {
 
             const reply = ipc.request(self.endpoint, proto.socket.send, &.{ self.sid, 0, amount }, &.{}) catch |failure| switch (failure) {
 

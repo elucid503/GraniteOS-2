@@ -321,10 +321,7 @@ fn fill(want: usize) !usize {
 
         _ = sys.wait(completion) catch {};
 
-        // Ack interrupt.
-        const status = reg_read(reg_interrupt_status);
-
-        if (status != 0) reg_write(reg_interrupt_ack, status);
+        acknowledge_interrupt();
 
         spins += 1;
 
@@ -332,11 +329,25 @@ fn fill(want: usize) !usize {
 
     }
 
+    // The device can finish before the first wait; that IRQ still has to be retired or the line
+    // stays masked and the next fill() parks forever.
+    acknowledge_interrupt();
+
     const elem = used.ring[last_used % queue_size];
 
     last_used +%= 1;
 
     return @min(want, elem.len);
+
+}
+
+fn acknowledge_interrupt() void {
+
+    const status = reg_read(reg_interrupt_status);
+
+    if (status != 0) reg_write(reg_interrupt_ack, status);
+
+    _ = sys.acknowledge(cap.driver.interrupt) catch {};
 
 }
 
