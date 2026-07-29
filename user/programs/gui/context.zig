@@ -285,8 +285,7 @@ fn handle_desktop(event: events.Event) void {
 
         events.kind_window_blur => {
 
-            // Opening the menu focuses it and blurs the desktop; that must not dismiss.
-            // The menu window handles dismiss-on-blur when focus leaves the popup.
+            // Menu open blurs the desktop; ignore that blur — dismiss is handled by the menu window.
             if (menu.open) return;
 
             if (prompt_open) close_prompt();
@@ -427,9 +426,7 @@ fn open_menu(x: i32, y: i32, pin_index: ?usize) void {
 
     lib.wm.move_window(&connection, window.id, placement.x, placement.y) catch {};
 
-    // Fade in over a few frames; close stays abrupt.
-    // Restore once so focus does not thrash; desktop blur from that focus shift
-    // is ignored until blur_guard_ms after open completes.
+    // Fade in on open; restore focus once and ignore desktop blur until blur_guard_ms.
     paint_context_menu_content();
     gfx.fence();
     lib.wm.restore(&connection, window.id) catch {};
@@ -720,8 +717,7 @@ fn prompt_click(x: i32, y: i32) void {
 
     }
 
-    // Mirrors paint_prompt's layout: 16px padding, then the fixed-height title label, an 8px gap, then this
-    // field - deterministic regardless of what's laid out below it.
+    // Match paint_prompt: 16px pad, title, 8px gap, then this field.
     const field_rect = Rect{ .x = rect.x + 16, .y = rect.y + 38, .w = rect.w - 32, .h = 28 };
 
     if (field_rect.contains(x, y)) {

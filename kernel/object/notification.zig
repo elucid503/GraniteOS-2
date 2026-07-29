@@ -75,8 +75,7 @@ pub const Notification = struct {
 
         }
 
-        // Multi-wait (M5): a bound thread blocked in `receive` wakes with NOTIFICATION_WAKE. `awaiting_reply` rules out
-        // a caller that is merely blocked awaiting its reply (also `.blocked_receive`, but not a queued receiver).
+        // Wake bound receiver on notify; skip callers awaiting reply only.
 
         if (self.bound_to) |thread| {
 

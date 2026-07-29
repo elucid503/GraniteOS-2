@@ -776,8 +776,7 @@ pub const Manager = struct {
 
     }
 
-    /// Move a window's frame origin; returns the combined damage of the old and new footprint, or null when
-    /// clamping leaves the frame unchanged (so drags against a screen edge do not spam full repaints).
+    /// Move frame origin; returns old+new damage, or null if clamping left the frame unchanged.
     pub fn move(self: *Manager, id: u32, x: i32, y: i32) ?Rect {
 
         const window = self.by_id(id) orelse return null;

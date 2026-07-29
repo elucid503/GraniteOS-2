@@ -449,8 +449,7 @@ fn to_canvas(x: i32, y: i32) ?Point {
 
 fn button_down(x: i32, y: i32, right: bool) ?Rect {
 
-    // A dropdown panel can extend past toolbar_h, so route by the panel rect — not the bar height —
-    // or an item below the bar (e.g. "Save PNG") reads as a canvas click and the action is lost.
+    // Hit-test dropdowns by panel rect, not toolbar height, or items below the bar miss clicks.
     if (open_menu != .none) {
 
         if (y < toolbar_h or menu_panel_rect(open_menu).contains(x, y)) {
@@ -711,8 +710,7 @@ fn begin_save() void {
 
 fn handle_save_path(path: []const u8) void {
 
-    // The write itself blocks for a while on this OS's block driver; paint a status line first so the
-    // window shows feedback instead of sitting on the picker's last frame for the entire encode+write.
+    // Block driver writes are slow; paint status first so the window does not look frozen.
     status = "Saving...";
     paint_full();
 

@@ -82,9 +82,7 @@ fn run(args: []const []const u8) !void {
 
     const staged = load_staged_path();
 
-    // Paint the window (toolbar, pane, status) before any blocking filesystem call. A large PNG's read can
-    // take a while on this OS's block driver; without this, the window shows nothing but its raw, unpainted
-    // backing store (visually solid black) for the entire read instead of the toolbar and a status line.
+    // Paint chrome before blocking PNG read or the window stays black until load finishes.
     if (staged) status = "Loading...";
 
     paint();

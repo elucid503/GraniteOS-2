@@ -62,8 +62,7 @@ pub fn wall_offset() i64 {
 
 }
 
-/// Best-effort: ask netstack for its NTP-derived wall offset.
-/// Retries until a non-zero offset appears (or a few attempts) so early TLS does not bake in epoch time.
+/// Pull netstack NTP wall offset; retry until non-zero so TLS does not use epoch time.
 pub fn try_pull_wall_offset() void {
 
     if (builtin.os.tag != .freestanding) return;
@@ -72,8 +71,7 @@ pub fn try_pull_wall_offset() void {
     const endpoint = stream.lookup_endpoint("netstack") catch return;
     defer sys.close(endpoint) catch {};
 
-    // Attach is required for a session badge, but wall_offset is session-less in the server;
-    // open a minimal attach with a throwaway buffer so badge is established.
+    // wall_offset needs a session badge; attach with a throwaway buffer.
     const buffer = sys.create(.region, 4096, cap.memory) catch return;
     defer sys.close(buffer) catch {};
 

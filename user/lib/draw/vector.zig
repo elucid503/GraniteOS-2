@@ -1139,8 +1139,7 @@ fn vector_angle(ux: f32, uy: f32, vx: f32, vy: f32) f32 {
 
 const max_curve_steps = 24;
 
-// Steps follow the control polygon's length in destination pixels: tiny icons stop over-tessellating
-// (every extra vertex used to cost a join disc) and large ones stop faceting.
+// Tessellation steps scale with hull length in pixels.
 
 fn curve_steps(transform: *const Transform, hull: []const Point) usize {
 

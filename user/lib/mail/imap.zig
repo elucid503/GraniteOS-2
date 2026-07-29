@@ -1,8 +1,4 @@
-// A read-only IMAP4rev1 client: connect, authenticate, select a mailbox, list envelopes and pull
-// one message body. Enough for an inbox reader, and nothing that mutates the server.
-//
-// Gmail works with this over TLS on port 993 using an App Password: it advertises AUTH=PLAIN with
-// SASL-IR, which is what `login` sends when the server offers it.
+// Read-only IMAP4 client for inbox fetch; Gmail uses TLS:993 with AUTH=PLAIN + SASL-IR.
 
 const std = @import("std");
 
@@ -218,8 +214,7 @@ pub const Client = struct {
 
     }
 
-    /// Fetch envelopes for sequence numbers `first`..`last` into `out`, newest first.
-    /// Returns how many slots were filled.
+    /// Fetch envelopes for `first`..`last` into `out` (newest first); returns count filled.
     pub fn fetch_envelopes(self: *Client, first: u32, last: u32, out: []Envelope) Error!usize {
 
         if (first > last or out.len == 0) return 0;
@@ -235,8 +230,7 @@ pub const Client = struct {
         var count: usize = 0;
         var budget: usize = max_response_lines;
 
-        // FLAGS may sit either before the literal or on the line trailing it, so the row stays
-        // reachable until the next response begins.
+        // Keep the row alive until the next response; FLAGS can trail the literal.
         var pending: ?*Envelope = null;
 
         while (try self.next_response(&line, tag, &budget)) |response| {
@@ -341,9 +335,7 @@ pub const Client = struct {
 
     }
 
-    /// The next untagged line for `tag`, or null once its tagged completion arrives. `budget`
-    /// caps how many lines one command may produce so a desynced stream fails instead of
-    /// looping forever waiting for a completion that will never parse.
+    /// Next untagged line for `tag`, or null at completion; `budget` caps lines per command.
     fn next_response(self: *Client, out: []u8, tag: u32, budget: *usize) Error!?[]const u8 {
 
         if (budget.* == 0) return error.Protocol;
@@ -382,9 +374,7 @@ pub const Client = struct {
 
     }
 
-    /// One CRLF-terminated response line. A line longer than `out` is an error rather than a
-    /// silent truncation: dropping a trailing "{n}" would desync the literal that follows it,
-    /// and every read after that would be garbage.
+    /// One CRLF line; overflow is an error (truncation would desync the literal that follows).
     fn read_line(self: *Client, out: []u8) Error![]const u8 {
 
         var written: usize = 0;

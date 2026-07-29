@@ -1,5 +1,4 @@
-// Shared fixed-point animation timing (no float in userspace): progress and
-// easing operate in 0..=1000, so callers stay integer end to end.
+// Fixed-point animation timing: progress and easing in 0..=1000.
 
 const std = @import("std");
 

@@ -85,8 +85,7 @@ pub const Session = struct {
 
     }
 
-    /// Fills `out` completely unless the peer closes first. Right for bulk transfers where the
-    /// caller knows more data is coming; use `recv_some` for anything conversational.
+    /// Fill `out` or return on close; use for bulk. For line protocols use `recv_some`.
     pub fn recv(self: *Session, out: []u8) Error!usize {
 
         // readSliceShort returns 0 at EOF (ShortError is only ReadFailed).
@@ -95,8 +94,7 @@ pub const Session = struct {
 
     }
 
-    /// Whatever has already arrived, blocking only until the first byte. Protocols where the
-    /// server speaks first (IMAP, SMTP) would otherwise hang waiting for `out` to fill.
+    /// Read what's available after the first byte; avoids hang when the server speaks first.
     pub fn recv_some(self: *Session, out: []u8) Error!usize {
 
         const reader = &self.client.reader;
@@ -220,8 +218,8 @@ fn map_init_error(err: anyerror) Error {
 
 fn pull_rng_and_time() void {
 
-    // Best-effort: reseed from virtio-rng and pull NTP offset from netstack.
-
+    // Seed CSPRNG from hardware before ClientHello to avoid virtio-rng race failures.
+    _ = rng.ensure_strong();
     rng.try_reseed_from_driver();
     time.try_pull_wall_offset();
 

@@ -43,8 +43,7 @@ const list_share = 42;
 
 const page_size = 4096;
 
-// The TLS handshake alone wants ~32 KiB of stack, and it runs several frames down from here.
-// See the same constant in programs/gui/fetch.zig.
+// TLS handshake needs ~32 KiB stack; matches fetch.zig worker_stack_pages.
 const worker_stack_pages = 64;
 
 const max_messages = 30;
@@ -947,8 +946,7 @@ fn status_rect() Rect {
 
 }
 
-// One rhythm for the whole form: a 24px frame, 16px between a label and its field, 20px between
-// rows, and the same 24px of breathing room under the last element as above the title.
+// Form spacing: 24px inset, 16px label-to-field, 20px row gap, 24px bottom margin.
 
 const form_inset: i32 = 24;
 const form_label_gap: i32 = 16;
@@ -1323,8 +1321,7 @@ fn paint_reader(surface: *const gfx.Surface) void {
 
 }
 
-/// Wrapping 10 KiB of text is too costly to redo every paint, so height is measured once per
-/// message and once per resize.
+/// Cache body wrap height per message and resize; 10 KiB text is too costly per paint.
 fn measure_cached_body() void {
 
     body_height_cache = if (body_len == 0) 0 else measure_body(reader_rect().inset(pad + 8).w, body_text[0..body_len]);

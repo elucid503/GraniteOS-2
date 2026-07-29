@@ -534,9 +534,7 @@ fn app_index_for_program(program: []const u8) ?usize {
 
 }
 
-/// Merge open windows with pinned idle apps into one indicator list. The compositor reports its
-/// list in z-order, which changes every time a window is focused; taskbar order is instead stable
-/// by window id so a click never shuffles its indicator left.
+/// Stable taskbar order by window id; compositor z-order changes on every focus.
 fn rebuild_items() void {
 
     item_count = 0;
@@ -2531,8 +2529,7 @@ fn parse_weather_response(out: *WeatherState, bytes: []const u8) !void {
     const body_start = std.mem.indexOf(u8, bytes, "\r\n\r\n") orelse return error.Invalid;
     const body = bytes[body_start + 4 ..];
 
-    // Open-Meteo emits unit strings under current_weather_units first (same key names).
-    // Scope parsing to the current_weather object so temperature/weathercode are numeric.
+    // Parse only current_weather so temperature and weathercode stay numeric.
     const marker = "\"current_weather\":{";
     const at = std.mem.indexOf(u8, body, marker) orelse return error.Invalid;
     const section = body[at + marker.len - 1 ..];

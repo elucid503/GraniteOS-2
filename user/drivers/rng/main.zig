@@ -229,6 +229,16 @@ fn attach(in: *const Message) i64 {
 
     if (in.handle_count < 1) return -7;
 
+    // One global session: drop any previous map so concurrent clients cannot read each other's
+    // buffer or leave the driver pointing at a dead region.
+    if (session_base != 0) {
+
+        sys.unmap(cap.self_space, session_base) catch {};
+        session_base = 0;
+        session_capacity = 0;
+
+    }
+
     session_base = sys.map(cap.self_space, in.handles[0].handle, 0, sys.read | sys.write) catch return -7;
     session_capacity = @intCast(in.data[1]);
 

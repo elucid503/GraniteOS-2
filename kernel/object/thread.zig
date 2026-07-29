@@ -81,9 +81,7 @@ pub const Thread = struct {
     awaiting_reply: bool,
     notify_bits: u64,
 
-    // Multi-wait and fault semantics (M5, 06-kernel-ddd.md Section 9).
-
-    // The notification bound for multi-wait: a signal to it also wakes this thread out of `receive`.
+    // Notification bound for multi-wait: notify also wakes this thread from receive.
     bound_notification: ?*Notification,
 
     // Set when `receive` woke on the bound notification rather than a request; `receive` then reports NOTIFICATION_WAKE.
@@ -146,8 +144,7 @@ pub const Thread = struct {
 
             },
 
-            // Multi-wait (M5, 03-syscall-abi.md): bind a notification so a signal also wakes this thread out of
-            // `receive`. Value 0 clears the binding.
+            // Bind notification for multi-wait receive wake; 0 clears.
 
             .bound_notification => {
 

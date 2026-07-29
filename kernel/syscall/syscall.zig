@@ -604,9 +604,7 @@ fn decode_permissions(bits: u64) arch.Permissions {
 
 }
 
-// User-memory copies
-
-// The envelope is copied through the process's page tables (arch.translate), so it works with any TTBR0 loaded and tolerates a buffer that straddles a page boundary (a Message on the user stack need not be page-aligned).
+// User copies via arch.translate so buffers may straddle page boundaries.
 
 fn read_message(into: *Thread, message_ptr: VirtAddr) Error!void {
 

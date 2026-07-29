@@ -1,5 +1,4 @@
-// ISO/IEC 11172-3 Layer III constant tables.
-// Generated from the public-domain PDMP3 reference (unlicense.org); see mp3.zig.
+// ISO/IEC 11172-3 Layer III tables from PDMP3 reference; see mp3.zig.
 
 pub const huffman_tree = [_]u16{
 

@@ -763,9 +763,7 @@ fn geom_worker() callconv(.c) noreturn {
 
     while (true) {
 
-        // Drain one save then exit when idle so GUI apps that call close_main can fully die.
-        // An infinite sleeper here kept the process alive for the rest of the boot and leaked
-        // its heap (TLS roots, window surfaces, …), which broke later HTTPS apps like CDN.
+        // Exit after one idle drain; an endless loop leaked heap and broke later HTTPS apps.
         if (@atomicRmw(u32, &geom_save.pending, .Xchg, 0, .acquire) == 0) {
 
             @atomicStore(u32, &geom_save_started, 0, .release);

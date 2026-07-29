@@ -1,5 +1,4 @@
-// Lightweight cross-app notification inbox. Producers post a compact record; the taskbar consumes
-// it into its live notification center, so no application needs a privileged desktop capability.
+// Cross-app notification inbox; taskbar consumes posts without extra desktop caps.
 
 const cap = @import("../cap/cap.zig");
 const fs = @import("../fs/fs.zig");
@@ -19,8 +18,7 @@ pub const Entry = struct {
 
 };
 
-/// Replace the pending inbox record. Notifications are rare and the taskbar consumes promptly;
-/// keeping a single handoff record avoids granting every GUI app a long-lived desktop endpoint.
+/// Single pending record; taskbar drains fast so apps need no desktop endpoint.
 pub fn post(title: []const u8, body: []const u8) void {
 
     var client = fs.Client.connect(cap.memory) catch return;

@@ -1618,8 +1618,7 @@ fn screen_bounds() Rect {
 
 }
 
-// Window animation machinery: fade+scale a snapshot of the window's composited pixels, so
-// chrome, glass and content all animate together and no client cooperation is needed.
+// Animate composited snapshots so chrome and content move together without client help.
 
 fn window_anims_active() bool {
 

@@ -1,7 +1,4 @@
-// Shoutcast/Icecast streaming client: one long-lived HTTP response that never ends.
-//
-// Unlike http.request, nothing here buffers the whole body. `read` hands back audio bytes and
-// quietly strips the metadata blocks the server interleaves every `icy-metaint` bytes.
+// Icecast/Shoutcast stream reader; strips icy-metaint metadata without buffering the body.
 
 const std = @import("std");
 
@@ -108,8 +105,7 @@ pub const Stream = struct {
 
     }
 
-    /// Connect and read the response head. Returns 0 on success, or the length of a redirect
-    /// target written into `next`.
+    /// Connect and read the head; 0 on success, else redirect length in `next`.
     fn attempt(self: *Stream, authority: Handle, heap: *mem.Heap, location: []const u8, next: *[max_url]u8) Error!usize {
 
         const parsed = url_mod.parse(location) orelse return error.BadUrl;
@@ -174,8 +170,7 @@ pub const Stream = struct {
         self.head = 0;
         self.tail = 0;
 
-        // The terminator check has to come after the read that filled the buffer: a live stream
-        // hands over the head and a few kilobytes of audio in the very first recv.
+        // Check the terminator after the first recv; head and audio often arrive together.
         while (true) {
 
             if (std.mem.indexOf(u8, self.buffer[0..self.tail], "\r\n\r\n")) |at| return at + 4;

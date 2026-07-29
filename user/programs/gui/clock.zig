@@ -43,8 +43,7 @@ const Mode = enum {
 const weekday_long = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
 const weekday_short = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 
-// Daylight-saving rule families. Transitions are evaluated against the UTC date,
-// so a city can read up to an hour off within the transition day itself.
+// DST rules use UTC date; local time can be ~1 hour off on transition day.
 const Dst = enum {
 
     none,
@@ -249,8 +248,7 @@ fn paint_clock(surface: *const gfx.Surface) void {
     raster.fill(surface, &shape, ui.theme.text_dim);
     shape.reset();
 
-    // 60 minute marks, every fifth lengthened for the hour. Separate fill keeps
-    // winding simple and the short radial spines from fighting the ring hole.
+    // Hour marks use a separate fill so short spines do not overlap the ring hole.
     var mark: i32 = 0;
 
     while (mark < 60) : (mark += 1) {

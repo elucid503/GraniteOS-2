@@ -31,9 +31,7 @@ const read_write = arch.Permissions{ .read = true, .write = true, .user = true }
 
 const image_permissions = arch.Permissions{ .read = true, .write = true, .execute = true, .user = true };
 
-// The bundle's fixed handle order; user/lib/cap/cap.zig relies on these indices.
-
-// Bundle handle order: 0 MemoryAuthority, 1 InterruptAuthority, 2 DeviceAuthority, 3 DTB, 4 boot module, 5 DmaAuthority.
+// Fixed bundle handles (cap.zig indices): MemoryAuthority, InterruptAuthority, DeviceAuthority, DTB, boot module, DmaAuthority.
 
 /// Build the first world, raw-map Flint, preload the capability bundle, and start its first thread; `arg` carries DTB offset in its Region.
 pub fn start(initrd: dtb.MemoryRange, dtb_address: PhysAddr) Error!void {

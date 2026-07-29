@@ -120,8 +120,7 @@ pub const Connection = struct {
 
     }
 
-    /// Read available bytes. Secure path must not use fill-the-buffer recv: HTTPS servers often
-    /// keep the socket open after a short body, and a 96 KiB fill would hang until timeout.
+    /// Read available bytes; TLS uses recv_some because HTTPS keep-alive would hang a big fill.
     pub fn recv(self: *Connection, out: []u8) !usize {
 
         return switch (self.kind) {
@@ -165,8 +164,7 @@ pub const Connection = struct {
 
 };
 
-/// Send one HTTP/1.0 request and collect its response in `response_buffer`.
-/// Supports GET/POST/PUT/PATCH/DELETE (or any valid token method), custom headers, and an optional body.
+/// HTTP/1.0 request/response in `response_buffer`; any method token, headers, optional body.
 pub fn request(
     authority: Handle,
     heap: *mem.Heap,

@@ -1,10 +1,4 @@
-// MPEG-1 Layer III decoder. Frame-at-a-time: feed bytes, get interleaved 16-bit PCM.
-//
-// The constant tables in mp3_tables.zig are ISO/IEC 11172-3 Annex B data, generated from the
-// public-domain PDMP3 reference (unlicense.org). Everything here is written against the spec.
-//
-// MPEG-2 / 2.5 (the "LSF" half-rate extension) is recognized but not decoded; those frames
-// report error.Unsupported so a caller can say so rather than play noise.
+// MPEG-1 Layer III decoder; tables from ISO 11172-3 Annex B. MPEG-2/2.5 returns Unsupported.
 
 const std = @import("std");
 
@@ -166,8 +160,7 @@ pub fn find_header(bytes: []const u8) ?usize {
 
         const header = parse_header(bytes[index..]) orelse continue;
 
-        // A lone sync pattern shows up constantly in compressed data; require the frame that
-        // follows to land on another header before trusting this one.
+        // Require the next frame to sync before trusting a lone header pattern.
         const size = header.frame_size();
 
         if (index + size + header_size > bytes.len) return index;
@@ -308,11 +301,7 @@ pub const Decoder = struct {
 
     }
 
-    /// Decode the frame at the start of `input` into interleaved little-endian s16 in `out`.
-    ///
-    /// `input` must begin on a frame header (see `find_header`). `out` needs room for
-    /// `frame_samples * channels` samples. Frames that only refill the bit reservoir decode to
-    /// zero samples but still report the bytes they consumed.
+    /// Decode one frame to interleaved s16 LE; header-aligned input, reservoir-only frames return 0 samples.
     pub fn decode(self: *Decoder, input: []const u8, out: []i16) Error!Result {
 
         const header = parse_header(input) orelse return error.InvalidFrame;
@@ -890,9 +879,7 @@ pub const Decoder = struct {
 
         if (header.mode_extension & 2 != 0) {
 
-            // Every line, not just up to the rzero bound: reorder shuffles coefficients within a
-            // scalefactor band, so a short block can leave non-zero lines above either channel's
-            // bound. Lines that really are zero in both channels are unaffected anyway.
+            // Reorder affects all lines in a band, not just up to each channel's rzero bound.
             const inverse_root_two: f32 = 0.70710678;
 
             for (0..granule_lines) |index| {
@@ -1113,8 +1100,7 @@ fn intensity_ratio(position: u8) [2]f32 {
 
 }
 
-// Huffman decoding: each table is a binary tree of 16-bit nodes. A node whose high byte is zero
-// is a leaf holding the x and y nibbles; otherwise the two bytes are the left and right hops.
+// Huffman tables are 16-bit binary trees; high byte zero marks a leaf.
 
 fn walk_tree(reader: *BitReader, table: usize) u16 {
 
@@ -1432,8 +1418,7 @@ test "huffman table 1 decodes its four code words" {
 
 test "count1 table 33 decodes a fixed four-bit quadruple" {
 
-    // Table 33 is a flat 4-bit code holding 15 - value, so 0b1010 -> 5 -> v,w,x,y = 0,1,0,1.
-    // A sign bit then follows each non-zero value: w stays +1, y becomes -1.
+    // Table 33: 4-bit code is 15-value; sign bits follow non-zero nibbles.
     var storage = [_]u8{ 0b1010_0100, 0 };
     var reader = BitReader{ .bytes = &storage };
 

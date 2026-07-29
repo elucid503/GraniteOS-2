@@ -19,18 +19,12 @@ const hkdfExpandLabel = tls.hkdfExpandLabel;
 const int = tls.int;
 const array = tls.array;
 
-/// The encrypted stream from the server to the client. Bytes are pulled from
-/// here via `reader`.
-///
-/// The buffer is asserted to have capacity at least `min_buffer_len`.
+/// Server ciphertext stream; buffer must hold at least `min_buffer_len`.
 input: *Reader,
 /// Decrypted stream from the server to the client.
 reader: Reader,
 
-/// The encrypted stream from the client to the server. Bytes are pushed here
-/// via `writer`.
-///
-/// The buffer is asserted to have capacity at least `min_buffer_len`.
+/// Client ciphertext stream; buffer must hold at least `min_buffer_len`.
 output: *Writer,
 /// The plaintext stream from the client to the server.
 writer: Writer,
@@ -41,15 +35,12 @@ read_err: ?ReadError = null,
 tls_version: tls.ProtocolVersion,
 read_seq: u64,
 write_seq: u64,
-/// When this is true, the stream may still not be at the end because there
-/// may be data in the input buffer.
+/// True after close_notify; input buffer may still hold data.
 received_close_notify: bool,
 allow_truncation_attacks: bool,
 application_cipher: tls.ApplicationCipher,
 
-/// If non-null, ssl secrets are logged to a stream. Creating such a log file
-/// allows other programs with access to that file to decrypt all traffic over
-/// this connection.
+/// Optional SSL key log; anyone with the file can decrypt this connection.
 ssl_key_log: ?*SslKeyLog,
 
 pub const ReadError = error{
@@ -82,45 +73,29 @@ pub const SslKeyLog = struct {
     }
 };
 
-/// The `Reader` supplied to `init` requires a buffer capacity
-/// at least this amount.
+/// `init` input `Reader` needs at least this much buffer capacity.
 pub const min_buffer_len = tls.max_ciphertext_record_len;
 
 pub const Options = struct {
     /// How to perform host verification of server certificates.
     host: union(enum) {
-        /// No host verification is performed, which prevents a trusted connection from
-        /// being established.
+        /// No host verification; no trusted connection can be established.
         no_verification,
         /// Verify that the server certificate was issued for a given host.
         explicit: []const u8,
     },
     /// How to verify the authenticity of server certificates.
     ca: union(enum) {
-        /// No ca verification is performed, which prevents a trusted connection from
-        /// being established.
+        /// No CA verification; no trusted connection can be established.
         no_verification,
-        /// Verify that the server certificate is a valid self-signed certificate.
-        /// This provides no authorization guarantees, as anyone can create a
-        /// self-signed certificate.
+        /// Self-signed cert only; no authorization guarantees.
         self_signed,
         /// Verify that the server certificate is authorized by a given ca bundle.
         bundle: Certificate.Bundle,
     },
-    /// If non-null, ssl secrets are logged to this stream. Creating such a log file allows
-    /// other programs with access to that file to decrypt all traffic over this connection.
-    ///
-    /// Only the `writer` field is observed during the handshake (`init`).
-    /// After that, the other fields are populated.
+    /// Optional SSL key log; only `writer` is used during `init`.
     ssl_key_log: ?*SslKeyLog = null,
-    /// By default, reaching the end-of-stream when reading from the server will
-    /// cause `error.TlsConnectionTruncated` to be returned, unless a close_notify
-    /// message has been received. By setting this flag to `true`, instead, the
-    /// end-of-stream will be forwarded to the application layer above TLS.
-    ///
-    /// This makes the application vulnerable to truncation attacks unless the
-    /// application layer itself verifies that the amount of data received equals
-    /// the amount of data expected, such as HTTP with the Content-Length header.
+    /// Allow EOF without close_notify; app must detect truncation (e.g. HTTP Content-Length).
     allow_truncation_attacks: bool = false,
     write_buffer: []u8,
     read_buffer: []u8,
@@ -180,11 +155,7 @@ const InitError = error{
     WeakPublicKey,
 };
 
-/// Initiates a TLS handshake and establishes a TLSv1.2 or TLSv1.3 session.
-///
-/// `host` is only borrowed during this function call.
-///
-/// `input` is asserted to have buffer capacity at least `min_buffer_len`.
+/// TLS handshake (1.2 or 1.3); `host` is borrowed only for this call.
 pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client {
     assert(input.buffer.len >= min_buffer_len);
     const host = switch (options.host) {
@@ -284,13 +255,9 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
     }
 
     var tls_version: tls.ProtocolVersion = undefined;
-    // These are used for two purposes:
-    // * Detect whether a certificate is the first one presented, in which case
-    //   we need to verify the host name.
+    // Chain index: host verify runs on the first cert.
     var cert_index: usize = 0;
-    // * Flip back and forth between the two cleartext buffers in order to keep
-    //   the previous certificate in memory so that it can be verified by the
-    //   next one.
+    // Ping-pong cert buffers so the previous cert stays for chain verify.
     var cert_buf_index: usize = 0;
     var write_seq: u64 = 0;
     var read_seq: u64 = 0;
@@ -312,9 +279,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
         encrypted_extensions,
         /// In this state we expect certificate handshake messages.
         certificate,
-        /// In this state we expect certificate or certificate_verify messages.
-        /// certificate messages are ignored since the trust chain is already
-        /// established.
+        /// Expect certificate or certificate_verify; extra certs are ignored.
         trust_chain_established,
         /// In this state, we expect only the server_hello_done handshake message.
         server_hello_done,
@@ -447,8 +412,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                         const legacy_version = hsd.decode(u16);
                         @memcpy(&server_hello_rand, hsd.array(32));
                         if (mem.eql(u8, &server_hello_rand, &tls.hello_retry_request_sequence)) {
-                            // This is a HelloRetryRequest message. This client implementation
-                            // does not expect to get one.
+                            // HelloRetryRequest is unsupported here.
                             return error.TlsUnexpectedMessage;
                         }
                         const legacy_session_id_echo_len = hsd.decode(u8);
@@ -637,8 +601,7 @@ pub fn init(input: *Reader, output: *Writer, options: Options) InitError!Client 
                                     .explicit => try subject.verifyHostName(host),
                                 }
 
-                                // Keep track of the public key for the
-                                // certificate_verify message later.
+                                // Save the leaf public key for certificate_verify later.
                                 try main_cert_pub_key.init(subject.pub_key_algo, subject.pubKey());
                             } else {
                                 try prev_cert.verify(subject, now_sec);
@@ -972,9 +935,7 @@ fn flush(w: *Writer) Writer.Error!void {
     w.end = 0;
 }
 
-/// Sends a `close_notify` alert, which is necessary for the server to
-/// distinguish between a properly finished TLS session, or a truncation
-/// attack.
+/// Send close_notify so the server can tell clean shutdown from truncation.
 pub fn end(c: *Client) Writer.Error!void {
     try flush(&c.writer);
     const output = c.output;
@@ -992,8 +953,7 @@ fn prepareCiphertextRecord(
     ciphertext_end: usize,
     cleartext_len: usize,
 } {
-    // Due to the trailing inner content type byte in the ciphertext, we need
-    // an additional buffer for storing the cleartext into before encrypting.
+    // Encrypt needs a scratch buffer for the trailing content-type byte.
     var cleartext_buf: [max_ciphertext_len]u8 = undefined;
     var ciphertext_end: usize = 0;
     var bytes_i: usize = 0;
@@ -1112,9 +1072,7 @@ fn readIndirect(c: *Client) Reader.Error!usize {
     // If at least one full encrypted record is not buffered, read once.
     const record_header = input.peek(tls.record_header_len) catch |err| switch (err) {
         error.EndOfStream => {
-            // This is either a truncation attack, a bug in the server, or an
-            // intentional omission of the close_notify message due to truncation
-            // detection handled above the TLS layer.
+            // EOF without close_notify may be truncation, a server bug, or intentional.
             if (c.allow_truncation_attacks) {
                 c.received_close_notify = true;
                 return error.EndOfStream;
@@ -1568,27 +1526,7 @@ const CertificatePublicKey = struct {
     }
 };
 
-/// The priority order here is chosen based on what crypto algorithms Zig has
-/// available in the standard library as well as what is faster. Following are
-/// a few data points on the relative performance of these algorithms.
-///
-/// Measurement taken with 0.11.0-dev.810+c2f5848fe
-/// on x86_64-linux Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz:
-/// zig run .lib/std/crypto/benchmark.zig -OReleaseFast
-///       aegis-128l:      15382 MiB/s
-///        aegis-256:       9553 MiB/s
-///       aes128-gcm:       3721 MiB/s
-///       aes256-gcm:       3010 MiB/s
-/// chacha20Poly1305:        597 MiB/s
-///
-/// Measurement taken with 0.11.0-dev.810+c2f5848fe
-/// on x86_64-linux Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz:
-/// zig run .lib/std/crypto/benchmark.zig -OReleaseFast -mcpu=baseline
-///       aegis-128l:        629 MiB/s
-/// chacha20Poly1305:        529 MiB/s
-///        aegis-256:        461 MiB/s
-///       aes128-gcm:        138 MiB/s
-///       aes256-gcm:        120 MiB/s
+/// Cipher suite order: stdlib support first, then speed (aegis > aes-gcm > chacha on HW AES).
 const cipher_suites = if (crypto.core.aes.has_hardware_support)
     array(u16, tls.CipherSuite, .{
         .AEGIS_128L_SHA256,

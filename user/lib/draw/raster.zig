@@ -421,8 +421,7 @@ pub const Raster = struct {
 
         var run_end = max_col;
 
-        // A closed contour cancels to ~0 rather than exactly 0 in float, so ignore accumulator dust
-        // instead of smearing a faint run to the clip edge.
+        // Ignore float dust so a closed contour does not smear faint coverage to the clip edge.
 
         if (@abs(acc) > coverage_epsilon) {
 
@@ -452,9 +451,7 @@ pub const Raster = struct {
 
 };
 
-// Linear analytic alpha here; display gamma belongs in SurfaceWriter compositing.
-
-// Half an alpha step: below this the tail accumulator is rounding residue, not real coverage.
+// Tail epsilon filters float residue; gamma stays in SurfaceWriter.
 const coverage_epsilon: f32 = 0.5 / 255.0;
 
 fn to_alpha(coverage: f32) u8 {

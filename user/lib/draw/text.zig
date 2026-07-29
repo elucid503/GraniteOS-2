@@ -726,9 +726,7 @@ fn emit_contour(path: *Path, xs: []const i32, ys: []const i32, on: []const bool)
 
 }
 
-// Glyph cache keyed by face, glyph, px, phase; face tag avoids Inter/mono slot collisions; single-threaded.
-
-// Cache size tuned to Flint's 4 MiB child_budget so welcome/taskbar still spawn.
+// Glyph cache (face/glyph/px/phase); sized for Flint's 4 MiB child budget.
 const cache_max_px: u32 = 32;
 const cache_box_w: u32 = 40;
 const cache_box_h: u32 = 46;

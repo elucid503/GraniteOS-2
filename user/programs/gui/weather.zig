@@ -1,5 +1,4 @@
-// Weather: Open-Meteo forecast (plain HTTP) for the metrics-reported location. A worker thread
-// owns the network; the UI paints current conditions, a hoverable hourly chart, and a 7-day strip.
+// Open-Meteo forecast for metrics location; worker fetches, UI paints chart and 7-day strip.
 
 const std = @import("std");
 
@@ -636,8 +635,7 @@ fn paint_chart(surface: *const gfx.Surface) void {
 
 }
 
-/// Per-day forecast facts for the selected day (above the hourly chart).
-/// Omits conditions (day chip icon + header) and current-only stats (tiles).
+/// Selected-day facts above the hourly chart; omits chip/header conditions and current tiles.
 fn paint_day_details(surface: *const gfx.Surface) void {
 
     if (selected_day >= forecast.day_count) return;
@@ -850,8 +848,7 @@ fn big_temp_text(buffer: []u8, dc: i32) []const u8 {
 
 }
 
-/// Minutes since local midnight -> "10:47 PM". Width specifiers stay on unsigned values: with a
-/// width, std.fmt prints an explicit sign for signed integers.
+/// Minutes since midnight -> "10:47 PM"; fmt widths need unsigned (signed gets a sign).
 fn clock_text(buffer: []u8, minutes: i32) []const u8 {
 
     const total: u32 = @intCast(@mod(minutes, 24 * 60));

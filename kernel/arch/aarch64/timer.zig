@@ -23,8 +23,7 @@ pub fn init_secondary() void {
 
     );
 
-    // Let EL0 read the physical and virtual counters (CNTKCTL_EL1.EL0PCTEN | EL0VCTEN), so user code can time itself
-    // (the IPC micro-benchmark) without a syscall. The timer *interrupt* stays kernel-only.
+    // EL0 can read counters for user timing; timer IRQ stays kernel-only.
 
     asm volatile ("msr cntkctl_el1, %[bits]"
         :

@@ -10,8 +10,7 @@ const Handle = cap.Handle;
 const Rect = draw.Rect;
 const Surface = draw.Surface;
 
-// Multi-core scanout: helpers drain independent row bands while the compositor thread works the same
-// queue. Window ordering stays on the compositor thread; only the back-buffer-to-scanout copy scales.
+// Row-band scanout copy scales across cores; compositor thread keeps window ordering.
 
 const max_helpers = 3;
 const worker_stack_pages = 16;
@@ -144,8 +143,7 @@ fn copy_band(index: u32) void {
 
 }
 
-/// Copy a screen-space damage rectangle from the cached back buffer into scanout. Large bands share
-/// the row work with the compositor helpers; small updates avoid the notification/barrier overhead.
+/// Blit damage from back buffer to scanout; big bands parallelize rows, small ones skip barriers.
 pub fn blit_scanout(destination: *const Surface, source: *const Surface, rect: Rect) void {
 
     const visible = rect.intersect(destination.bounds()).intersect(source.bounds());

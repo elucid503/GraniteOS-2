@@ -1,9 +1,4 @@
 // Radio: internet radio over ICY/Shoutcast with in-OS MP3 decoding.
-//
-// Three workers sit behind the UI thread. The network worker owns the socket and pushes raw
-// stream bytes into a ring; the decode worker drains the ring, turns frames into PCM and feeds
-// the audio server; the browse worker runs directory searches. The UI thread only ever reads
-// atomics, so nothing on screen can block on the network.
 
 const std = @import("std");
 
@@ -47,9 +42,6 @@ const card_w_share = 45;
 
 const page_size = 4096;
 
-// Only the network worker runs a TLS handshake, which alone wants ~32 KiB of stack (see the same
-// constant in programs/gui/fetch.zig). The other two never touch TLS, so they stay small and the
-// process keeps well inside its spawn budget.
 const network_stack_pages = 64;
 const browse_stack_pages = 16;
 const decode_stack_pages = 8;
@@ -1689,12 +1681,9 @@ fn empty_message() []const u8 {
 
     return switch (active_tab) {
 
-        tab_browse => if (@atomicLoad(u32, &browse_busy, .acquire) != 0)
-            "Searching the station directory..."
-        else if (@atomicLoad(u32, &browse_failed, .acquire) != 0)
-            "Directory unavailable. Check the network and try again."
-        else
-            "Type a name or genre, then press Search.",
+        tab_browse => if (@atomicLoad(u32, &browse_busy, .acquire) != 0) "Searching the station directory..."
+        else if (@atomicLoad(u32, &browse_failed, .acquire) != 0) "Directory unavailable. Check the network and try again."
+        else "Type a name or genre, then press Search.",
 
         tab_favourites => "No favourites yet. Tap a star to keep a station here.",
 

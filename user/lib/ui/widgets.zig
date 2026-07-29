@@ -429,8 +429,7 @@ pub const Menu = struct {
 
     }
 
-    /// Paint rows over a caller-owned panel. Quartz popup windows use this to
-    /// keep the menu's text and hit layout while supplying one shared lens.
+    /// Paint rows on a caller-owned panel; popups keep menu layout with one shared lens.
     pub fn paint_content(self: *const Menu, surface: *const Surface, font: *const Face) void {
 
         if (!self.open) return;

@@ -1,5 +1,4 @@
-// Just enough MIME to show a message: decode header words, walk multipart bodies, and pull out
-// the first readable text part. Output is UTF-8, which is what the font renders.
+// MIME helpers: decode headers, walk multipart, emit UTF-8 text.
 
 const std = @import("std");
 
