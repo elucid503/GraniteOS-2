@@ -44,6 +44,7 @@ pub const text_cursor = lucide("text-cursor");
 pub const refresh_cw = lucide("refresh-cw");
 pub const log_out = lucide("log-out");
 pub const users = lucide("users");
+pub const x = lucide("x");
 
 // Weather (WMO codes from Open-Meteo current_weather.weathercode).
 

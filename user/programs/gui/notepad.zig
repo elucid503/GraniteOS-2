@@ -109,10 +109,15 @@ fn run(args: []const []const u8) !void {
 
             events.kind_button_down => {
 
-                if (event.code == events.button_left) mouse_down(event.x, event.y);
+                const selection_changed = lib.window.text_selection(event);
+
+                if (event.code == events.button_left) mouse_down(event.x, event.y)
+                else if (selection_changed) paint();
 
             },
             events.kind_button_up => {
+
+                _ = lib.window.text_selection(event);
 
                 if (event.code == events.button_left) {
 
@@ -123,7 +128,21 @@ fn run(args: []const []const u8) !void {
 
             },
 
-            events.kind_pointer_move => mouse_move(event.x, event.y),
+            events.kind_pointer_move => {
+
+                const selection_changed = lib.window.text_selection(event);
+
+                mouse_move(event.x, event.y);
+
+                if (selection_changed) paint();
+
+            },
+
+            events.kind_window_blur => {
+
+                if (lib.window.text_selection(event)) paint();
+
+            },
 
             events.kind_scroll => {
 
@@ -222,19 +241,6 @@ fn key_down(code: u16) void {
 
     if (keyboard.modifier(events.kind_key_down, code)) return;
 
-    if (code == 29 or code == 97) {
-
-        if (keyboard.ctrl) {
-
-            save_file();
-            paint();
-
-        }
-
-        return;
-
-    }
-
     var buffer: [3]u8 = undefined;
     const bytes = keyboard.bytes(code, &buffer);
 
@@ -242,7 +248,12 @@ fn key_down(code: u16) void {
 
     if (bytes.len == 3 and bytes[0] == 0x1b and bytes[1] == '[') {
 
-        clear_selection();
+        // Shift turns a caret move into a selection edge; a bare arrow drops what was selected.
+        if (keyboard.shift) {
+
+            if (selection_anchor == null) selection_anchor = cursor;
+
+        } else clear_selection();
 
         switch (bytes[2]) {
 
@@ -251,7 +262,7 @@ fn key_down(code: u16) void {
             'C' => move_right(),
             'D' => move_left(),
             'H' => cursor = row_start(cursor_row()),
-            'F' => cursor = row_start(cursor_row() + 1),
+            'F' => cursor = row_start(cursor_row()) + row_len(cursor_row()),
 
             else => {},
 
@@ -268,6 +279,12 @@ fn key_down(code: u16) void {
 
         switch (bytes[0]) {
 
+            0x01 => select_all(),
+            0x03 => copy_selection(),
+            0x13 => save_file(),
+            0x16 => paste_clipboard(),
+            0x18 => cut_selection(),
+
             0x08, 0x7f => delete_before(),
 
             '\r', '\n' => insert_char('\n'),
@@ -282,6 +299,57 @@ fn key_down(code: u16) void {
 
         clamp_scroll();
         paint();
+
+    }
+
+}
+
+fn select_all() void {
+
+    if (content_len == 0) return;
+
+    selection_anchor = 0;
+    cursor = content_len;
+
+}
+
+fn copy_selection() void {
+
+    const selection = selection_bounds() orelse {
+
+        // Nothing selected in the body: fall back to whatever the global selection covers.
+        _ = ui.copy_selection();
+        return;
+
+    };
+
+    lib.clipboard.copy(content[selection.start..selection.end]);
+
+}
+
+fn cut_selection() void {
+
+    if (selection_bounds() == null) return;
+
+    copy_selection();
+    _ = delete_selection();
+
+}
+
+fn paste_clipboard() void {
+
+    var text: [lib.clipboard.max_entry]u8 = undefined;
+    const pasted = lib.clipboard.paste(&text) orelse return;
+
+    _ = delete_selection();
+
+    for (pasted) |byte| {
+
+        // A foreign source may carry CRLF, which would otherwise show up as a stray glyph.
+        if (byte == '\r') continue;
+        if (byte != '\n' and (byte < 0x20 or byte >= 0x7f)) continue;
+
+        insert_char(byte);
 
     }
 
@@ -667,6 +735,10 @@ fn paint() void {
     const caret_row = cursor_row();
     const selection = selection_bounds();
 
+    // The editor selects its own body, so those lines are not global text-selection runs.
+    lib.select.pause_capture();
+    defer lib.select.resume_capture();
+
     while (index <= content_len and shown < visible_rows()) : (index += 1) {
 
         const at_end = index == content_len;
@@ -699,8 +771,11 @@ fn paint() void {
 
                     const before = content[line_start..@min(cursor, index)];
                     const caret_x = text_x + font.text_width(before, font_size);
+                    const caret = Rect{ .x = caret_x, .y = line_y, .w = 1, .h = line_h - 2 };
 
-                    surface.fill_rect(.{ .x = caret_x, .y = line_y, .w = 1, .h = line_h - 2 }, ui.theme.accent);
+                    lib.select.caret = caret;
+
+                    surface.fill_rect(caret, ui.theme.accent);
 
                 }
 

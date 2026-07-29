@@ -88,6 +88,8 @@ fn run() !void {
 
         while (connection.poll_event()) |event| {
 
+            if (lib.window.text_selection(event)) repaint_all = true;
+
             switch (event.kind) {
 
                 events.kind_window_close => {

@@ -338,6 +338,8 @@ fn run(args: []const []const u8) !void {
 
         while (connection.poll_event()) |event| {
 
+            if (lib.window.text_selection(event)) dirty = true;
+
             if (picker.open) {
 
                 dirty = handle_picker_event(event) or dirty;

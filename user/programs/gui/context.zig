@@ -184,9 +184,13 @@ fn owns_event(event: events.Event) bool {
 
 fn dispatch_batch(batch: []const events.Event) void {
 
+    var selection_changed = false;
+
     for (batch) |event| {
 
         if (!owns_event(event)) continue;
+
+        if (lib.window.text_selection(event)) selection_changed = true;
         if (event.kind != events.kind_button_down) continue;
 
         handle_event(event);
@@ -212,6 +216,8 @@ fn dispatch_batch(batch: []const events.Event) void {
     }
 
     if (last_move) |event| handle_event(event);
+
+    if (selection_changed) paint_desktop();
 
 }
 

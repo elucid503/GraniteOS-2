@@ -9,6 +9,7 @@ pub const path = @import("path.zig");
 pub const png = @import("png.zig");
 pub const raster = @import("raster.zig");
 pub const round = @import("round.zig");
+pub const select = @import("select.zig");
 pub const stroke = @import("stroke.zig");
 pub const text = @import("text.zig");
 pub const vector = @import("vector.zig");

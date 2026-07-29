@@ -221,6 +221,8 @@ fn dispatch(batch: []const events.Event) bool {
 
     for (batch) |event| {
 
+        if (lib.window.text_selection(event)) need_full = true;
+
         switch (event.kind) {
 
             events.kind_window_close => {

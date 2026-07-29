@@ -4,6 +4,7 @@ const std = @import("std");
 const lib = @import("lib");
 
 const draw = lib.draw;
+const proto = lib.proto;
 
 const manager_module = @import("manager.zig");
 
@@ -183,7 +184,8 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
 
     if (visible.is_empty()) return;
 
-    if (window.is_panel() and content.h > 2 * corner_radius and content.w > 2 * corner_radius) {
+    // Floating chrome (panel, Super+V, context menus): all four corners.
+    if (float_all_corners(window) and content.h > 2 * corner_radius and content.w > 2 * corner_radius) {
 
         blit_content_all_corners(back, surface, clip, matte, content);
 
@@ -253,7 +255,17 @@ pub fn blit_content(back: *const Surface, window: *const Window, surface: *const
 
 }
 
-/// Blits a floating panel's content with all four corners cut.
+fn float_all_corners(window: *const Window) bool {
+
+    if (window.is_panel()) return true;
+    if (window.is_desktop()) return false;
+    if (window.flags & proto.window.flag_fullscreen != 0) return false;
+
+    return window.flags & proto.window.flag_undecorated != 0;
+
+}
+
+/// Blits floating chrome with all four corners cut.
 fn blit_content_all_corners(back: *const Surface, surface: *const Surface, clip: Rect, matte: Color, content: Rect) void {
 
     const masks = content_corner_masks() orelse {

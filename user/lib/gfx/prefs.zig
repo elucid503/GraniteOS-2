@@ -272,6 +272,8 @@ pub fn apply_theme(id: ThemeId) void {
     ui.theme.warn = palette.warn;
     ui.theme.wallpaper = palette.wallpaper;
 
+    gfx.select.highlight = palette.accent_dim;
+
 }
 
 /// Reload settings from disk when the on-disk generation changes.

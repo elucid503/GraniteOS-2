@@ -283,6 +283,25 @@ const key_esc: u16 = 1;
 const key_enter: u16 = 28;
 const key_leftmeta: u16 = 125;
 const key_rightmeta: u16 = 126;
+const key_v: u16 = 47;
+
+// The compositor routes every key chorded with Super to the panel, so the chords resolve here.
+var super_held = false;
+var super_chorded = false;
+
+const clipboard_title = "Clipboard";
+
+fn super_chord(code: u16) void {
+
+    if (code != key_v) return;
+
+    close_switcher();
+
+    // The popup is undecorated, so it never reaches the window list: closing it by title and
+    // launching only when that finds nothing is what makes Super+V a toggle.
+    lib.wm.close_title(&connection, clipboard_title) catch launch("clipboard");
+
+}
 
 // Controls center (sampled off the UI thread).
 const ControlsStats = struct {
@@ -812,7 +831,20 @@ fn handle_bar(event: events.Event) void {
 
             if (event.code == key_leftmeta or event.code == key_rightmeta) {
 
-                toggle_switcher();
+                // Super alone toggles the switcher, but only on release: a chord like Super+V
+                // must not flash it open first.
+                super_held = true;
+                super_chorded = false;
+
+                return;
+
+            }
+
+            if (super_held) {
+
+                super_chorded = true;
+                super_chord(event.code);
+
                 return;
 
             }
@@ -832,6 +864,19 @@ fn handle_bar(event: events.Event) void {
                     return;
 
                 }
+
+            }
+
+        },
+
+        events.kind_key_up => {
+
+            if (event.code == key_leftmeta or event.code == key_rightmeta) {
+
+                if (super_held and !super_chorded) toggle_switcher();
+
+                super_held = false;
+                super_chorded = false;
 
             }
 

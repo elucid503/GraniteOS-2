@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const cap = @import("../cap/cap.zig");
+const clipboard = @import("../clipboard.zig");
 const ipc = @import("../ipc/ipc.zig");
 const proto = @import("../ipc/proto.zig");
 const stream = @import("../io/stream.zig");
@@ -69,8 +70,94 @@ fn unregister(id: u64) void {
 
 fn release_surface(region: Handle, base: usize) void {
 
+    gfx.select.forget(base);
+
     sys.unmap(cap.self_space, base) catch {};
     sys.close(region) catch {};
+
+}
+
+fn covers_surface(rect: gfx.Rect, bounds: gfx.Rect) bool {
+
+    return rect.x <= bounds.x and rect.y <= bounds.y and
+        rect.x + rect.w >= bounds.x + bounds.w and rect.y + rect.h >= bounds.y + bounds.h;
+
+}
+
+var published_caret = gfx.Rect.empty;
+
+fn surface_of(id: u32) ?usize {
+
+    for (&tracked) |*entry| {
+
+        if (entry.used and entry.id == id) return entry.base;
+
+    }
+
+    return null;
+
+}
+
+const key_leftctrl: u16 = 29;
+const key_rightctrl: u16 = 97;
+const key_c: u16 = 46;
+const key_esc: u16 = 1;
+
+var ctrl_held = false;
+
+/// Feed a window event to the global text selection; true when the app should repaint.
+/// Apps call this alongside their own handling: a press only arms a drag, so clicks still land,
+/// and Ctrl+C here copies screen text that belongs to no editable field.
+pub fn text_selection(event: events.Event) bool {
+
+    if (event.kind == events.kind_key_down or event.kind == events.kind_key_up) {
+
+        const down = event.kind == events.kind_key_down;
+
+        if (event.code == key_leftctrl or event.code == key_rightctrl) {
+
+            ctrl_held = down;
+
+            return false;
+
+        }
+
+        if (!down) return false;
+
+        if (event.code == key_esc) return gfx.select.clear();
+
+        if (event.code == key_c and ctrl_held and gfx.select.has_selection()) {
+
+            var text: [clipboard.max_entry]u8 = undefined;
+
+            clipboard.copy(gfx.select.selection(&text));
+
+        }
+
+        return false;
+
+    }
+
+    const owner = surface_of(event.window) orelse return false;
+
+    return switch (event.kind) {
+
+        events.kind_button_down => if (event.code == events.button_left) gfx.select.press(owner, event.x, event.y) else false,
+        events.kind_pointer_move => gfx.select.drag(owner, event.x, event.y),
+
+        events.kind_button_up => {
+
+            gfx.select.release();
+
+            return false;
+
+        },
+
+        events.kind_window_blur => gfx.select.clear(),
+
+        else => false,
+
+    };
 
 }
 
@@ -220,6 +307,18 @@ pub const Window = struct {
 
         gfx.fence();
 
+        // Only a whole-surface present retires the window's captured text runs and its caret; a
+        // partial repaint redraws part of them and would otherwise drop the rest of the selection.
+        if (covers_surface(rect, self.surface.bounds())) {
+
+            gfx.select.end_frame(@intFromPtr(self.surface.pixels));
+
+            self.publish_caret();
+
+            gfx.select.caret = gfx.Rect.empty;
+
+        }
+
         _ = try ipc.request(self.connection.endpoint, proto.window.present, &.{
 
             self.id,
@@ -233,6 +332,26 @@ pub const Window = struct {
     pub fn present_all(self: *const Window) Error!void {
 
         try self.present(self.surface.bounds());
+
+    }
+
+    /// Tell the compositor where this window's caret sits, so popups can anchor to the insertion point.
+    fn publish_caret(self: *const Window) void {
+
+        const caret = gfx.select.caret;
+
+        // An empty rect is published too: it is how a window says its caret went away.
+        if (std.meta.eql(caret, published_caret)) return;
+
+        published_caret = caret;
+
+        _ = ipc.request(self.connection.endpoint, proto.window.set_caret, &.{
+
+            self.id,
+            pack_pair(@intCast(@max(0, caret.x)), @intCast(@max(0, caret.y))),
+            pack_pair(@intCast(@max(0, caret.w)), @intCast(@max(0, caret.h))),
+
+        }, &.{}) catch {};
 
     }
 

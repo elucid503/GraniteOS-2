@@ -2,7 +2,9 @@
 
 const std = @import("std");
 
+const clipboard = @import("../clipboard.zig");
 const draw = @import("../draw/draw.zig");
+const select = @import("../draw/select.zig");
 const text_mod = @import("../draw/text.zig");
 const vector = @import("../draw/vector.zig");
 
@@ -897,6 +899,19 @@ pub fn field_click_index(font: *const Face, content: []const u8, size: u32, curs
 
 }
 
+/// Ctrl+C with no focused field: copy whatever the global text selection covers.
+pub fn copy_selection() bool {
+
+    if (!select.has_selection()) return false;
+
+    var text: [clipboard.max_entry]u8 = undefined;
+
+    clipboard.copy(select.selection(&text));
+
+    return true;
+
+}
+
 pub const field_pad: i32 = 8;
 
 /// Rounded background + border for a field-shaped surface
@@ -913,6 +928,10 @@ pub fn paint_field_chrome(surface: *const Surface, rect: Rect, focused: bool) vo
 pub fn paint_field_content(surface: *const Surface, font: *const Face, inner: Rect, buffer: *const EditBuffer, placeholder: []const u8, show_caret: bool, size: u32) void {
 
     if (inner.w <= 0) return;
+
+    // A field selects and copies its own text, so it must not also become a global selection run.
+    select.pause_capture();
+    defer select.resume_capture();
 
     const clipped = surface.clipped(inner);
     const baseline = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
@@ -963,8 +982,12 @@ fn paint_field_caret(surface: *const Surface, x: i32, inner: Rect, size: u32, fo
 
     const caret_h = @min(inner.h - 8, font.line_height(size));
     const caret_y = inner.y + @divTrunc(inner.h - caret_h, 2);
+    const caret = Rect{ .x = x, .y = caret_y, .w = 1, .h = caret_h };
 
-    surface.fill_rect(.{ .x = x, .y = caret_y, .w = 1, .h = caret_h }, theme.text);
+    // Publishing the caret is what lets the clipboard manager slide in at the insertion point.
+    select.caret = caret;
+
+    surface.fill_rect(caret, theme.text);
 
 }
 
@@ -1077,6 +1100,63 @@ pub const EditBuffer = struct {
 
     }
 
+    /// The selected bytes, or an empty slice when nothing is selected.
+    pub fn selected_text(self: *const EditBuffer) []const u8 {
+
+        const range = self.selection_range() orelse return self.bytes[0..0];
+
+        return self.bytes[range.start..range.end];
+
+    }
+
+    /// Ctrl+C: put the selection on the clipboard, leaving the buffer untouched.
+    pub fn copy(self: *const EditBuffer) bool {
+
+        clipboard.copy(self.selected_text());
+
+        return false;
+
+    }
+
+    /// Ctrl+X: copy the selection, then remove it.
+    pub fn cut(self: *EditBuffer) bool {
+
+        if (self.selection_range() == null) return false;
+
+        clipboard.copy(self.selected_text());
+
+        return self.delete_selection();
+
+    }
+
+    /// Ctrl+V: replace the selection with the newest clipboard entry.
+    pub fn paste(self: *EditBuffer) bool {
+
+        var text: [clipboard.max_entry]u8 = undefined;
+        const pasted = clipboard.paste(&text) orelse return false;
+
+        return self.insert_text(pasted);
+
+    }
+
+    /// Insert `text` at the caret, replacing the selection; newlines and controls are dropped.
+    pub fn insert_text(self: *EditBuffer, text: []const u8) bool {
+
+        var changed = self.delete_selection();
+
+        for (text) |byte| {
+
+            if (byte < 0x20 or byte >= 0x7f) continue;
+            if (!self.insert(byte)) break;
+
+            changed = true;
+
+        }
+
+        return changed;
+
+    }
+
     pub fn insert(self: *EditBuffer, byte: u8) bool {
 
         _ = self.delete_selection();
@@ -1180,7 +1260,13 @@ pub const EditBuffer = struct {
             const byte = input[0];
 
             if (byte == 0x7f or byte == 0x08) return self.backspace();
-            if (byte == 0x01) return self.select_all(); // Ctrl+A - keymap folds letters to 0x01-0x1a under Ctrl
+
+            // keymap folds letters to 0x01-0x1a under Ctrl, so the chords arrive as control bytes.
+            if (byte == 0x01) return self.select_all();
+            if (byte == 0x03) return self.copy();
+            if (byte == 0x16) return self.paste();
+            if (byte == 0x18) return self.cut();
+
             if (byte >= 0x20 and byte < 0x7f) return self.insert(byte);
 
         }

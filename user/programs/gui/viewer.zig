@@ -108,6 +108,8 @@ fn run(args: []const []const u8) !void {
 
         const event = try connection.wait_event();
 
+        if (lib.window.text_selection(event)) paint();
+
         switch (event.kind) {
 
             events.kind_window_close => {

@@ -34,6 +34,11 @@ const display_bit: u64 = 1 << 1;
 
 const key_leftmeta: u16 = 125;
 const key_rightmeta: u16 = 126;
+const key_leftctrl: u16 = 29;
+const key_v: u16 = 47;
+
+// Super is a chrome-level modifier: while it is held every key belongs to the panel, not the app.
+var meta_held = false;
 
 const input_ring_capacity: u32 = 512;
 const worker_stack_pages = 16;
@@ -205,6 +210,9 @@ pub fn main(_: []const []const u8) u8 {
 
 fn run() !void {
 
+    // The compositor draws only chrome, so it never captures text runs for the global selection.
+    lib.select.enabled = false;
+
     try acquire_display();
     try load_font();
     load_compositor_theme();
@@ -282,6 +290,10 @@ fn process_message(badge: u64, in: *const Message) void {
         if (bits & display_bit != 0) handle_mode_change();
 
     } else {
+
+        // Settle focus history before the call runs: a client asks about the window it displaced
+        // on its very next message after creating its own.
+        track_focus();
 
         var out = Message.zeroed;
         const status = dispatch(badge, in.data[0], in, &out);
@@ -545,6 +557,9 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
         proto.window.place_relative => place_relative(badge, in),
         proto.window.minimize_hint => set_minimize_hint(in),
         proto.window.geometry => window_geometry(badge, in.data[1], out),
+        proto.window.set_caret => set_caret(badge, in),
+        proto.window.caret_anchor => caret_anchor(badge, in.data[1], out),
+        proto.window.paste_previous => paste_previous(badge, in.data[1]),
 
         else => -7, // Invalid: servers reuse the shared codes (05-server-protocol.md)
 
@@ -696,6 +711,7 @@ fn destroy_window(badge: u64, id: u64) i64 {
     release_grabs(window.id);
     surfaces.release(slot);
     resize_damage[slot] = Rect.empty;
+    caret_rects[slot] = Rect.empty;
 
     if (manager.destroy(window.id)) |dead| add_damage(dead);
 
@@ -726,6 +742,7 @@ fn destroy_owner_windows(owner: u64) void {
 
         surfaces.release(index);
         resize_damage[index] = Rect.empty;
+        caret_rects[index] = Rect.empty;
 
         if (manager.destroy(window.id)) |dead| add_damage(dead);
 
@@ -934,6 +951,83 @@ fn window_geometry(badge: u64, id: u64, out: *Message) i64 {
 
 }
 
+// Caret tracking: clients report where they draw their caret so popups can anchor to the insertion
+// point, and the clipboard manager can hand a paste back to the window it took focus from.
+
+var caret_rects: [manager_module.max_windows]Rect = [_]Rect{Rect.empty} ** manager_module.max_windows;
+
+var focus_current: u32 = 0;
+var focus_prior: u32 = 0;
+
+fn track_focus() void {
+
+    if (manager.focus == focus_current) return;
+
+    // A window that is gone is no worse than no target: paste_previous validates before it fires.
+    focus_prior = focus_current;
+    focus_current = manager.focus;
+
+}
+
+fn set_caret(badge: u64, in: *const Message) i64 {
+
+    const window = owned_window(badge, in.data[1]) orelse return -7;
+
+    caret_rects[slot_of(window)] = .{
+
+        .x = @intCast(lib.window.unpack_high(in.data[2])),
+        .y = @intCast(lib.window.unpack_low(in.data[2])),
+
+        .w = @intCast(lib.window.unpack_high(in.data[3])),
+        .h = @intCast(lib.window.unpack_low(in.data[3])),
+
+    };
+
+    return 0;
+
+}
+
+fn caret_anchor(badge: u64, id: u64, out: *Message) i64 {
+
+    _ = owned_window(badge, id) orelse return -7;
+
+    out.data[1] = 0;
+    out.data[2] = lib.window.pack_pair(@intCast(@max(0, pointer_x)), @intCast(@max(0, pointer_y)));
+    out.data[3] = lib.window.pack_pair(1, 1);
+
+    const target = manager.by_id(focus_prior) orelse return 0;
+    const caret = caret_rects[slot_of(target)];
+
+    if (caret.w <= 0 or caret.h <= 0) return 0;
+
+    const content = target.content();
+
+    out.data[1] = 1;
+    out.data[2] = lib.window.pack_pair(@intCast(@max(0, content.x + caret.x)), @intCast(@max(0, content.y + caret.y)));
+    out.data[3] = lib.window.pack_pair(@intCast(caret.w), @intCast(caret.h));
+
+    return 0;
+
+}
+
+fn paste_previous(badge: u64, id: u64) i64 {
+
+    _ = owned_window(badge, id) orelse return -7;
+
+    const target = manager.by_id(focus_prior) orelse return -6;
+
+    focus_and_raise(target);
+
+    // Synthesised so the receiving app takes its ordinary Ctrl+V path; keymap folds v to 0x16.
+    forward(target, .{ .kind = events.kind_key_down, .code = key_leftctrl, .window = target.id, .x = 0, .y = 0, .value = 0 });
+    forward(target, .{ .kind = events.kind_key_down, .code = key_v, .window = target.id, .x = 0, .y = 0, .value = 0 });
+    forward(target, .{ .kind = events.kind_key_up, .code = key_v, .window = target.id, .x = 0, .y = 0, .value = 0 });
+    forward(target, .{ .kind = events.kind_key_up, .code = key_leftctrl, .window = target.id, .x = 0, .y = 0, .value = 0 });
+
+    return 0;
+
+}
+
 fn minimize_window(id: u64) i64 {
 
     const window = manager.by_id(id_of(id) orelse return -7) orelse return -7;
@@ -1124,8 +1218,19 @@ fn drain_input() void {
 
                     events.kind_key_down, events.kind_key_up => {
 
-                        // Super/Meta is a global chrome shortcut: always deliver to the panel.
-                        if (event.code == key_leftmeta or event.code == key_rightmeta) {
+                        const is_meta = event.code == key_leftmeta or event.code == key_rightmeta;
+                        const down = event.kind == events.kind_key_down;
+
+                        if (is_meta) meta_held = down;
+
+                        // Super/Meta and everything chorded with it are global chrome shortcuts.
+                        // A release follows its own press even if Super was let go in between,
+                        // so no app is left holding a modifier it never saw go down.
+                        const to_panel = if (down) is_meta or meta_held else take_panel_key(event.code);
+
+                        if (down and to_panel) mark_panel_key(event.code);
+
+                        if (to_panel) {
 
                             if (manager.panel()) |panel| forward(panel, event);
 
@@ -1162,6 +1267,29 @@ fn drain_input() void {
         move_cursor();
 
     }
+
+}
+
+var panel_keys = [_]u64{0} ** 4;
+
+fn mark_panel_key(code: u16) void {
+
+    if (code >= 256) return;
+
+    panel_keys[code >> 6] |= @as(u64, 1) << @intCast(code & 63);
+
+}
+
+fn take_panel_key(code: u16) bool {
+
+    if (code >= 256) return false;
+
+    const bit = @as(u64, 1) << @intCast(code & 63);
+    const held = panel_keys[code >> 6] & bit != 0;
+
+    panel_keys[code >> 6] &= ~bit;
+
+    return held;
 
 }
 

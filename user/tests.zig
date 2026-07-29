@@ -13,6 +13,8 @@ test {
     _ = @import("lib").draw.round;
     _ = @import("lib").draw.stroke;
     _ = @import("lib").draw.text;
+    _ = @import("lib").draw.select;
+    _ = @import("lib").clipboard;
     _ = @import("lib").draw.vector;
     _ = @import("lib").ui;
     _ = @import("lib").ui.chart;

@@ -104,6 +104,8 @@ fn run(args: []const []const u8) !void {
 
         while (connection.poll_event()) |event| {
 
+            if (lib.window.text_selection(event)) dirty = true;
+
             switch (event.kind) {
 
                 events.kind_window_close => {

@@ -316,8 +316,11 @@ fn dispatch_batch(batch: []const events.Event) bool {
     var last_move: ?events.Event = null;
     var last_menu_move: ?events.Event = null;
     var scroll_delta: i64 = 0;
+    var selection_changed = false;
 
     for (batch) |event| {
+
+        if (lib.window.text_selection(event)) selection_changed = true;
 
         if (lib.prefs.apply_event(event)) {
 
@@ -393,6 +396,8 @@ fn dispatch_batch(batch: []const events.Event) bool {
 
     if (last_move) |event| handle_pointer_move(event);
     if (last_menu_move) |event| handle_menu_pointer_move(event);
+
+    if (selection_changed) paint();
 
     return false;
 

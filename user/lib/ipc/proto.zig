@@ -215,6 +215,9 @@ pub const window = struct {
     pub const place_relative: u16 = 18; // request: window id, anchor id, local (x<<32)|y reply: status
     pub const minimize_hint: u16 = 19; // request: window id, taskbar-local indicator center x   reply: status
     pub const geometry: u16 = 20; // request: window id                              reply: (x<<32)|y, (w<<32)|h
+    pub const set_caret: u16 = 21; // request: window id, (x<<32)|y, (w<<32)|h (content-local)   reply: status
+    pub const caret_anchor: u16 = 22; // request: window id (the caller's own)          reply: valid (0/1), screen (x<<32)|y, (w<<32)|h
+    pub const paste_previous: u16 = 23; // request: window id (the caller's own)          reply: status (refocus the window this one stole focus from and send it Ctrl+V)
 
     pub const flag_undecorated: u64 = 1; // no title bar or border
     pub const flag_fullscreen: u64 = 2; // sized to the screen, tracks mode changes

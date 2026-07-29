@@ -203,6 +203,30 @@ pub fn geometry(connection: *window.Connection, id: u64) Error!prefs.WindowGeom 
 
 }
 
+/// Where the window this one stole focus from last drew its caret, in screen pixels.
+/// Falls back to a zero-width rect at the pointer when nothing reported a caret.
+pub fn caret_anchor(connection: *window.Connection, id: u64) Error!prefs.WindowGeom {
+
+    const reply = try ipc.request(connection.endpoint, proto.window.caret_anchor, &.{id}, &.{});
+
+    return .{
+
+        .x = @intCast(window.unpack_high(reply.data[2])),
+        .y = @intCast(window.unpack_low(reply.data[2])),
+        .width = window.unpack_high(reply.data[3]),
+        .height = window.unpack_low(reply.data[3]),
+
+    };
+
+}
+
+/// Refocus the window this one stole focus from and deliver a synthetic Ctrl+V to it.
+pub fn paste_previous(connection: *window.Connection, id: u64) void {
+
+    _ = ipc.request(connection.endpoint, proto.window.paste_previous, &.{id}, &.{}) catch {};
+
+}
+
 var bound_program: []const u8 = "";
 
 /// Bind argv[0] so main-window create/close can restore and persist geometry.

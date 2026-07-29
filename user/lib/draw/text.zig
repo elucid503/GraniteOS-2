@@ -5,6 +5,7 @@ const std = @import("std");
 const draw_mod = @import("draw.zig");
 const path_mod = @import("path.zig");
 const raster = @import("raster.zig");
+const select = @import("select.zig");
 
 const Path = path_mod.Path;
 const Surface = draw_mod.Surface;
@@ -144,6 +145,10 @@ pub const Face = struct {
     /// Draw with the line box's top-left at (x, y) in pixels; the compatibility entry point.
     pub fn draw(self: *const Face, surface: *const Surface, x: i32, y: i32, px: u32, text: []const u8, color: draw_mod.Color) void {
 
+        const box = draw_mod.Rect{ .x = x, .y = y, .w = self.text_width(text, px), .h = self.line_height(px) };
+
+        select.observe(surface, self, box, px, false, text);
+
         self.draw_fx(surface, to_fx(x), to_fx(y + self.ascent_px(px)), px, text, color);
 
     }
@@ -152,6 +157,9 @@ pub const Face = struct {
     pub fn draw_mono(self: *const Face, surface: *const Surface, x: i32, y: i32, px: u32, text: []const u8, color: draw_mod.Color) void {
 
         const cell = self.mono_width(px);
+
+        select.observe(surface, self, .{ .x = x, .y = y, .w = select.prefix_width(self, px, true, text), .h = self.mono_height(px) }, px, true, text);
+
         const baseline = y + self.ascent_px(px);
         var pen = x;
         var offset: usize = 0;

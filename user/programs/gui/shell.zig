@@ -357,6 +357,8 @@ fn update_cursor(x: i32, y: i32) void {
 
 fn handle(event: events.Event) bool {
 
+    if (lib.window.text_selection(event)) @atomicStore(u32, &dirty, 1, .release);
+
     switch (event.kind) {
 
         events.kind_window_close => {
