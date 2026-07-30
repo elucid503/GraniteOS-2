@@ -59,6 +59,7 @@ func run() error {
     }
 
     manifest, err := readManifest(settings.manifest)
+
     if err != nil {
 
         return err
@@ -66,11 +67,13 @@ func run() error {
     }
 
     binary, size, digest, err := openBinary(settings.elf)
+
     if err != nil {
 
         return err
 
     }
+
     defer binary.Close()
 
     endpoint, err := publishURL(settings.repository)
@@ -106,24 +109,29 @@ func run() error {
     }
 
     response, err := client.Do(request)
+
     if err != nil {
 
         return fmt.Errorf("publish package: %w", err)
 
     }
+
     defer response.Body.Close()
 
     payload, err := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
+
     if err != nil {
 
         return fmt.Errorf("read response: %w", err)
 
     }
+
     if len(payload) > 64*1024 {
 
         return errors.New("repository response is too large")
 
     }
+
     if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 
         return fmt.Errorf("%s: %s", response.Status, strings.TrimSpace(string(payload)))
@@ -140,7 +148,7 @@ func parseOptions() (options, error) {
 
     var settings options
 
-    flag.StringVar(&settings.repository, "repository", "", "HTTPS repository origin")
+    flag.StringVar(&settings.repository, "repository", "https://repo.graniteos.org", "HTTPS repository origin")
     flag.StringVar(&settings.token, "token", os.Getenv("GRANITE_REPO_TOKEN"), "repository token")
     flag.StringVar(&settings.manifest, "manifest", "package.json", "package manifest")
     flag.StringVar(&settings.elf, "elf", "", "AArch64 ELF to publish")
@@ -156,6 +164,7 @@ func parseOptions() (options, error) {
         }, errors.New("-repository is required")
 
     }
+
     if settings.token == "" {
 
         return options{
@@ -163,6 +172,7 @@ func parseOptions() (options, error) {
         }, errors.New("-token or GRANITE_REPO_TOKEN is required")
 
     }
+
     if settings.elf == "" {
 
         return options{
@@ -178,6 +188,7 @@ func parseOptions() (options, error) {
 func readManifest(path string) (packageManifest, error) {
 
     file, err := os.Open(path)
+
     if err != nil {
 
         return packageManifest{
@@ -185,6 +196,7 @@ func readManifest(path string) (packageManifest, error) {
         }, fmt.Errorf("open manifest: %w", err)
 
     }
+
     defer file.Close()
 
     var manifest packageManifest
@@ -200,6 +212,7 @@ func readManifest(path string) (packageManifest, error) {
     }
 
     var trailing any
+
     if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 
         return packageManifest{
@@ -215,6 +228,7 @@ func readManifest(path string) (packageManifest, error) {
 func openBinary(path string) (*os.File, int64, string, error) {
 
     file, err := os.Open(path)
+
     if err != nil {
 
         return nil, 0, "", fmt.Errorf("open ELF: %w", err)
@@ -222,6 +236,7 @@ func openBinary(path string) (*os.File, int64, string, error) {
     }
 
     info, err := file.Stat()
+
     if err != nil {
 
         file.Close()
@@ -229,6 +244,7 @@ func openBinary(path string) (*os.File, int64, string, error) {
         return nil, 0, "", fmt.Errorf("inspect ELF: %w", err)
 
     }
+
     if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxBinary {
 
         file.Close()
@@ -238,6 +254,7 @@ func openBinary(path string) (*os.File, int64, string, error) {
     }
 
     hash := sha256.New()
+
     if _, err := io.Copy(hash, file); err != nil {
 
         file.Close()
@@ -245,6 +262,7 @@ func openBinary(path string) (*os.File, int64, string, error) {
         return nil, 0, "", fmt.Errorf("hash ELF: %w", err)
 
     }
+
     if _, err := file.Seek(0, io.SeekStart); err != nil {
 
         file.Close()
@@ -260,12 +278,8 @@ func openBinary(path string) (*os.File, int64, string, error) {
 func publishURL(repository string) (string, error) {
 
     parsed, err := url.Parse(strings.TrimRight(repository, "/"))
-    if err != nil ||
-        parsed.Scheme != "https" ||
-        parsed.Host == "" ||
-        parsed.User != nil ||
-        parsed.RawQuery != "" ||
-        parsed.Fragment != "" {
+
+    if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 
         return "", errors.New("repository must be an HTTPS URL")
 
