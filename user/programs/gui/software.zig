@@ -32,10 +32,11 @@ comptime {
 
 const pad: i32 = 18;
 const header_height: i32 = 66;
-const status_height: i32 = 42;
-const row_height: i32 = 72;
+const footer_height: i32 = 32;
+const row_height: i32 = 58;
 const button_width: i32 = 92;
-const worker_stack_pages = 16;
+// TLS handshake needs a deep stack; matches fetch/mail/sprout workers.
+const worker_stack_pages = 64;
 const page_size = 4096;
 
 const refresh_id: u32 = 1;
@@ -266,7 +267,7 @@ fn wheel(delta: i64) bool {
 fn visible_rows() usize {
 
     const height: i32 = @intCast(window.surface.height);
-    const available = height - header_height - status_height - pad;
+    const available = height - header_height - footer_height - pad * 2;
 
     return @max(@as(usize, 1), @as(usize, @intCast(@max(0, @divTrunc(available, row_height)))));
 
@@ -306,7 +307,6 @@ fn paint() void {
     regions.reset();
 
     paint_header(surface, width);
-    paint_status(surface, width);
 
     if (package_count == 0) {
 
@@ -316,9 +316,9 @@ fn paint() void {
         text_center(surface, .{
 
             .x = pad,
-            .y = header_height + status_height,
+            .y = header_height,
             .w = width - pad * 2,
-            .h = height - header_height - status_height,
+            .h = height - header_height - footer_height,
 
         }, 14, text, ui.theme.text_dim);
 
@@ -328,6 +328,7 @@ fn paint() void {
 
     }
 
+    paint_footer(surface, width, height);
     window.present_all() catch {};
 
 }
@@ -377,25 +378,31 @@ fn paint_header(surface: *const gfx.Surface, width: i32) void {
 
 }
 
-fn paint_status(surface: *const gfx.Surface, width: i32) void {
+fn paint_footer(surface: *const gfx.Surface, width: i32, height: i32) void {
 
-    const y = header_height;
+    const y = height - footer_height;
     const state: Result = @enumFromInt(@atomicLoad(u32, &result_state, .acquire));
     const color = if (state == .failed) ui.theme.warn else if (state == .ready) ui.theme.good else ui.theme.text_dim;
-    const message = message_storage[0..message_len];
-
-    font.draw(surface, pad, y + 7, 12, if (message.len == 0) "Ready" else message, color);
-
+    const message = if (message_len == 0) "Ready" else message_storage[0..message_len];
     const url = repository_storage[0..repository_len];
-    const visible = ui.truncate(&font, url, 10, width - pad * 2);
+    const text_y = y + @divTrunc(footer_height - font.line_height(11), 2);
+    const half = @max(0, @divTrunc(width - pad * 2, 2) - 8);
 
-    font.draw(surface, pad, y + 25, 10, visible, ui.theme.text_faint);
+    surface.fill_rect(.{ .x = 0, .y = y, .w = width, .h = footer_height }, ui.theme.surface_alt);
+    surface.fill_rect(.{ .x = 0, .y = y, .w = width, .h = 1 }, ui.theme.border);
+
+    const left = ui.truncate(&font, message, 11, half);
+    const right = ui.truncate(&font, url, 11, half);
+
+    font.draw(surface, pad, text_y, 11, left, color);
+    font.draw(surface, width - pad - font.text_width(right, 11), text_y, 11, right, ui.theme.text_faint);
 
 }
 
 fn paint_packages(surface: *const gfx.Surface, width: i32, height: i32) void {
 
-    const top = header_height + status_height;
+    const top = header_height + pad;
+    const bottom = height - footer_height;
     const shown = visible_rows();
     const end = @min(package_count, scroll + shown);
     var index = scroll;
@@ -428,19 +435,14 @@ fn paint_packages(surface: *const gfx.Surface, width: i32, height: i32) void {
         lib.draw.vector.icon_in(surface, .{
 
             .x = row.x + 12,
-            .y = row.y + 18,
+            .y = row.y + @divTrunc(row.h - 28, 2),
             .w = 28,
             .h = 28,
 
         }, lib.icons.get(package.icon_name()), ui.theme.accent);
 
-        font.draw(surface, row.x + 52, row.y + 9, 14, package.title(), ui.theme.text);
-        font.draw(surface, row.x + 52, row.y + 31, 11, ui.truncate(&font, package.description(), 11, row.w - button_width - 86), ui.theme.text_dim);
-
-        var version_buffer: [48]u8 = undefined;
-        const version = std.fmt.bufPrint(&version_buffer, "Version {s}", .{package.release()}) catch package.release();
-
-        font.draw(surface, row.x + 52, row.y + 49, 10, version, ui.theme.text_faint);
+        font.draw(surface, row.x + 52, row.y + 10, 14, package.title(), ui.theme.text);
+        font.draw(surface, row.x + 52, row.y + 30, 11, ui.truncate(&font, package.description(), 11, row.w - button_width - 86), ui.theme.text_dim);
 
         const found = installed_index(package.program());
         const label: []const u8 = if (found) |installed_at|
@@ -465,7 +467,7 @@ fn paint_packages(surface: *const gfx.Surface, width: i32, height: i32) void {
         .x = width - pad - ui.scrollbar_width,
         .y = top,
         .w = ui.scrollbar_width,
-        .h = height - top - pad,
+        .h = @max(0, bottom - top - pad),
 
     }, scroll_model());
 
@@ -584,7 +586,7 @@ fn refresh_repository(heap: *lib.mem.Heap) !void {
     installed_count = lib.software.load_installed(installed[0..]);
 
     var status_buffer: [128]u8 = undefined;
-    const status = std.fmt.bufPrint(&status_buffer, "{d} packages available, {d} installed.", .{ package_count, installed_count }) catch "Repository loaded.";
+    const status = std.fmt.bufPrint(&status_buffer, "{d} package{s} available, {d} installed.", .{ package_count, if (package_count != 1) "s" else "", installed_count }) catch "Repository loaded.";
 
     set_message(status);
 

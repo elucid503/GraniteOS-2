@@ -1,7 +1,7 @@
 {
   "id": "hello-granite",
   "name": "Hello Granite",
-  "summary": "A small third-party GraniteOS application.",
+  "summary": "A third-party app demo.",
   "version": "1.0.0",
   "category": "Accessories",
   "icon": "apps",
