@@ -43,8 +43,6 @@ const bundle_overrides = std.StaticStringMap([]const u8).initComptime(.{
     .{ "servers/display", "compositor" },
     .{ "programs/gui/status", "status-gui" },
     .{ "programs/gui/about", "about-gui" },
-    // Without this, both fetch programs derive the bundle name "fetch"
-    .{ "programs/gui/fetch", "fetch-gui" },
 
 });
 

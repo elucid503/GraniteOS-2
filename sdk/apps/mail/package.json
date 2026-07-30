@@ -1,0 +1,9 @@
+{
+  "id": "mail",
+  "name": "Mail",
+  "summary": "Read your Gmail inbox.",
+  "version": "1.0.0",
+  "category": "Internet",
+  "icon": "mail",
+  "abi": "gos2-aarch64-v1"
+}

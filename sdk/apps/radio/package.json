@@ -1,0 +1,9 @@
+{
+  "id": "radio",
+  "name": "Radio",
+  "summary": "Stream internet radio stations.",
+  "version": "1.0.0",
+  "category": "Media",
+  "icon": "radio",
+  "abi": "gos2-aarch64-v1"
+}

@@ -35,7 +35,7 @@ const header_height: i32 = 66;
 const footer_height: i32 = 32;
 const row_height: i32 = 58;
 const button_width: i32 = 92;
-// TLS handshake needs a deep stack; matches fetch/mail/sprout workers.
+// TLS handshake needs a deep stack; matches other HTTPS GUI workers.
 const worker_stack_pages = 64;
 const page_size = 4096;
 

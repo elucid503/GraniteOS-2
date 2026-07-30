@@ -1,0 +1,9 @@
+{
+  "id": "fetch-gui",
+  "name": "Requests",
+  "summary": "Make API requests.",
+  "version": "1.0.0",
+  "category": "Internet",
+  "icon": "arrow-up",
+  "abi": "gos2-aarch64-v1"
+}

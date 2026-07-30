@@ -1,0 +1,9 @@
+{
+  "id": "sprout",
+  "name": "CDN",
+  "summary": "Manage files using Sprout.",
+  "version": "1.0.0",
+  "category": "Internet",
+  "icon": "file",
+  "abi": "gos2-aarch64-v1"
+}
