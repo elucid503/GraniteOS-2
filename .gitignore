@@ -9,8 +9,3 @@ redux.md
 launcher/internal/assets/files
 launcher/go.sum
 launcher/GraniteOS.exe
-
-/_docs/build_report.py
-/_docs/GraniteOS-2.html
-/_docs/GraniteOS-2.md
-/_docs/GraniteOS-2.pdf
