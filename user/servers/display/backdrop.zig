@@ -1,13 +1,4 @@
 // Quartz: a cached glass look for chrome (launcher, menus, taskbar, title bars).
-//
-// How a panel is painted, in order:
-//  1. Shrink the picture behind the panel (that is already a soft blur).
-//  2. Soften it once more with a 3-pixel neighbour average.
-//  3. Scale it back up, mix in the theme colour, and near the rim look a few
-//     pixels toward the middle so the wallpaper appears to bend through thick glass.
-//  4. Add a thin light lip on the top and left, and a thin shade on the bottom
-//     and right. That is the "liquid glass" edge. It only runs when the cache
-//     is rebuilt, never on hover.
 
 const std = @import("std");
 
