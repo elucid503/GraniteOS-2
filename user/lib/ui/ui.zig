@@ -843,6 +843,13 @@ pub fn fill_round_rect(surface: *const Surface, rect: Rect, radius: i32, color: 
 
 }
 
+/// A hover chip that lets Quartz glass show through.
+pub fn fill_glass_row(surface: *const Surface, rect: Rect, radius: i32) void {
+
+    draw.round.fill_round_rect_alpha(surface, rect, radius, theme.hover, 210);
+
+}
+
 pub fn stroke_round_rect(surface: *const Surface, rect: Rect, radius: i32, width: i32, color: Color) void {
 
     draw.round.stroke_round_rect(surface, rect, radius, width, color);

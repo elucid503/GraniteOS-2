@@ -32,6 +32,7 @@ const dropdown_w: i32 = 140;
 const swatch_id_base: u32 = 100;
 const unit_celsius_id: u32 = 200;
 const unit_fahrenheit_id: u32 = 201;
+const quartz_id_base: u32 = 210;
 const handler_id_base: u32 = 300;
 
 const choice_labels = [_][]const u8{
@@ -84,7 +85,7 @@ fn run(args: []const []const u8) !void {
     lib.handler.ensure();
 
     connection = try lib.desktop.connect(cap.memory);
-    window = try lib.wm.open_main(&connection, 520, 560, "Settings");
+    window = try lib.wm.open_main(&connection, 520, 640, "Settings");
 
     paint();
 
@@ -208,6 +209,20 @@ fn handle_page_hit(hit: u32) void {
 
     }
 
+    if (hit >= quartz_id_base and hit < quartz_id_base + lib.prefs.quartz_count) {
+
+        const next: lib.prefs.Quartz = @enumFromInt(@as(u8, @intCast(hit - quartz_id_base)));
+
+        if (lib.prefs.quartz == next) return;
+
+        lib.prefs.quartz = next;
+        lib.prefs.save();
+        lib.prefs.broadcast_change(&connection);
+
+        return;
+
+    }
+
     if (hit >= handler_id_base and hit < handler_id_base + lib.handler.count()) {
 
         open_dropdown(hit - handler_id_base);
@@ -296,6 +311,7 @@ fn paint() void {
     });
 
     paint_theme_section(content);
+    paint_quartz_section(content);
     paint_temp_section(content);
     paint_handler_section(content);
 
@@ -432,6 +448,39 @@ fn paint_theme_section(parent: i16) void {
             .center_text = true,
 
         });
+
+    }
+
+}
+
+fn paint_quartz_section(parent: i16) void {
+
+    const section = page.box(parent, .{
+
+        .direction = .column,
+        .gap = 14,
+
+    });
+
+    _ = page.label(section, "Quartz", .{
+
+        .size = 14,
+        .color = ui.theme.text,
+
+    });
+
+    const row = page.box(section, .{
+
+        .direction = .row,
+        .gap = 8,
+
+    });
+
+    for (0..lib.prefs.quartz_count) |index| {
+
+        const selected = @intFromEnum(lib.prefs.quartz) == index;
+
+        paint_choice_button(row, quartz_id_base + @as(u32, @intCast(index)), lib.prefs.quartz_names[index], selected);
 
     }
 

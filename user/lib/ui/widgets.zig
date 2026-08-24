@@ -445,7 +445,7 @@ pub const Menu = struct {
                     const rect = Rect{ .x = self.x + self.inset, .y = cursor_y, .w = self.width - 2 * self.inset, .h = self.row_height - 1 };
                     const is_hovered = self.hover != null and self.hover.? == index;
 
-                    if (is_hovered) ui.fill_round_rect(surface, rect, 4, ui.theme.hover);
+                    if (is_hovered) ui.fill_glass_row(surface, rect, 4);
 
                     const visible = ui.truncate(font, label, 13, rect.w - 24);
                     const text_y = rect.y + @divTrunc(rect.h - font.line_height(13), 2);

@@ -23,6 +23,7 @@ test {
     _ = @import("lib").localtime;
     _ = @import("lib").events;
     _ = @import("lib").window;
+    _ = @import("lib").prefs;
     _ = @import("lib").rng;
     _ = @import("lib").url;
     _ = @import("lib").http;
@@ -37,6 +38,7 @@ test {
     _ = @import("servers/display/render.zig");
     _ = @import("servers/display/parallel.zig");
     _ = @import("servers/display/surfaces.zig");
+    _ = @import("servers/display/backdrop.zig");
     _ = @import("servers/filesystem/format.zig");
 
 }

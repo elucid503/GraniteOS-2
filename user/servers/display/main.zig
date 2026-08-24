@@ -16,6 +16,7 @@ const damage_module = @import("damage.zig");
 const parallel = @import("parallel.zig");
 const render = @import("render.zig");
 const surfaces_module = @import("surfaces.zig");
+const backdrop = @import("backdrop.zig");
 
 const Handle = cap.Handle;
 const Manager = manager_module.Manager;
@@ -86,6 +87,7 @@ var back: draw.Surface = undefined;
 
 var manager = Manager{};
 var surfaces = surfaces_module.Store(manager_module.max_windows){};
+var backdrops: [manager_module.max_windows]backdrop.Cache = [_]backdrop.Cache{.{}} ** manager_module.max_windows;
 
 // Per-client event rings, keyed by the badge the name service minted for the client.
 
@@ -710,6 +712,7 @@ fn destroy_window(badge: u64, id: u64) i64 {
 
     release_grabs(window.id);
     surfaces.release(slot);
+    backdrops[slot].release();
     resize_damage[slot] = Rect.empty;
     caret_rects[slot] = Rect.empty;
 
@@ -741,6 +744,7 @@ fn destroy_owner_windows(owner: u64) void {
         if (manager.focus == window.id) focus_changed = true;
 
         surfaces.release(index);
+        backdrops[index].release();
         resize_damage[index] = Rect.empty;
         caret_rects[index] = Rect.empty;
 
@@ -813,6 +817,8 @@ fn resize_window(badge: u64, in: *const Message, out: *Message) i64 {
     const changed = manager.resize_window(window, @max(manager_module.min_content, width), @max(manager_module.min_content, height));
 
     resize_damage[slot] = resize_damage[slot].cover(changed);
+
+    backdrops[slot].valid = false;
 
     _ = surfaces.allocate(slot, window.width, window.height, window_format(window)) catch return -3;
 
@@ -1102,6 +1108,7 @@ fn subscribe_list(badge: u64, in: *const Message, out: *Message) i64 {
 fn notify_prefs_changed() i64 {
 
     load_compositor_theme();
+    invalidate_all_backdrops();
     broadcast_prefs_changed();
     add_damage(screen_bounds());
 
@@ -1687,6 +1694,13 @@ fn handle_mode_change() void {
 
 fn add_damage(rect: Rect) void {
 
+    add_damage_raw(rect);
+    invalidate_backdrops(rect, 0);
+
+}
+
+fn add_damage_raw(rect: Rect) void {
+
     const clipped = rect.intersect(screen_bounds());
 
     if (clipped.is_empty()) return;
@@ -1697,7 +1711,51 @@ fn add_damage(rect: Rect) void {
 
 fn add_surface_damage(window: *const Window, rect: Rect) void {
 
-    add_window_damage(window, rect);
+    add_damage_raw(rect);
+
+    if (!window.is_backdrop()) invalidate_backdrops(rect, window.id);
+
+}
+
+fn invalidate_backdrops(rect: Rect, except_id: u32) void {
+
+    var index: usize = 0;
+
+    while (index < manager.count) : (index += 1) {
+
+        const window = manager.stacked(index);
+
+        if (window.id == except_id) continue;
+        if (window.flags & proto.window.flag_minimized != 0) continue;
+        if (window_hidden(window)) continue;
+
+        if (window.is_backdrop()) {
+
+            const frame = window.frame();
+
+            if (frame.intersect(rect).is_empty()) continue;
+
+            backdrops[slot_of(window)].valid = false;
+            add_damage_raw(frame);
+
+        } else if (window.decorated() and lib.prefs.quartz_on()) {
+
+            const bar = window.title_bar();
+
+            if (bar.intersect(rect).is_empty()) continue;
+
+            backdrops[slot_of(window)].valid = false;
+            add_damage_raw(bar);
+
+        }
+
+    }
+
+}
+
+fn invalidate_all_backdrops() void {
+
+    for (&backdrops) |*cache| cache.valid = false;
 
 }
 
@@ -2061,6 +2119,7 @@ fn composite() !void {
 
             if (candidate.flags & proto.window.flag_minimized != 0) continue;
             if (window_hidden(candidate)) continue;
+            if (candidate.is_backdrop()) continue;
             if (!covers(candidate.content(), paint_region)) continue;
             if (!surfaces.covers(slot_of(candidate), candidate.content(), paint_region)) continue;
 
@@ -2130,9 +2189,7 @@ fn covers(outer: Rect, inner: Rect) bool {
 
 fn window_format(window: *const Window) draw.Format {
 
-    _ = window;
-
-    return .xrgb;
+    return if (window.is_backdrop()) .alpha else .xrgb;
 
 }
 
@@ -2143,16 +2200,21 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     if (window.decorated()) {
 
-        const face: ?*const draw.text.Face = if (title_font) |*f| f else null;
         const focused = manager.focus == window.id;
-        const colors = chrome_colors();
-        render.draw_title_bar(&view, window, focused, colors, face);
+        const tint = if (focused) theme.title_focused else theme.title_blurred;
+
+        apply_material(slot, window.title_bar(), clip, tint, .top);
+
+        const face: ?*const draw.text.Face = if (title_font) |*f| f else null;
+        render.draw_title_bar_overlay(&view, window, chrome_colors(), face);
 
     }
 
     // A stale surface (the client has not yet reallocated after a resize) is skipped, never misread.
 
     const surface = surfaces.surface_of(slot) orelse return;
+
+    if (window.is_backdrop()) apply_material(slot, window.content(), clip, theme.title_blurred, .all);
 
     render.blit_content(&back, window, &surface, clip, theme.border);
 
@@ -2162,6 +2224,90 @@ fn draw_window(window: *Window, clip: Rect) void {
 
         if (drag_id == 0 and resize_id == 0) render.draw_resize_grip(&view, window, theme.title_blurred);
         render.draw_frame_border(&view, window, theme.border);
+
+    }
+
+}
+
+const GlassEdges = enum {
+
+    all,
+    top,
+
+};
+
+fn glass_look(color: draw.Color) backdrop.Look {
+
+    return .{
+
+        .color = color,
+        .cover = lib.prefs.quartz_cover(),
+        .shine = lib.prefs.quartz_shine(),
+
+    };
+
+}
+
+fn apply_material(slot: usize, rect: Rect, clip: Rect, tint: draw.Color, edges: GlassEdges) void {
+
+    const view = back.clipped(clip);
+
+    if (!lib.prefs.quartz_on()) {
+
+        switch (edges) {
+
+            .all => draw.round.fill_round_rect(&view, rect, backdrop.corner_radius, tint),
+            .top => draw.round.fill_round_top_rect(&view, rect, backdrop.corner_radius, tint),
+
+        }
+
+        return;
+
+    }
+
+    const cache = &backdrops[slot];
+    const complete = covers(clip, rect);
+    const width: u32 = if (rect.w > 0) @intCast(rect.w) else 0;
+    const height: u32 = if (rect.h > 0) @intCast(rect.h) else 0;
+    const look = glass_look(tint);
+
+    if (!cache.valid or cache.width != width or cache.height != height) {
+
+        if (!complete) {
+
+            const area = rect.intersect(clip);
+
+            if (!area.is_empty()) back.fill_rect_alpha(area, tint, look.cover);
+
+            return;
+
+        }
+
+        if (!backdrop.ensure(cache, width, height)) {
+
+            back.fill_rect_alpha(rect.intersect(clip), tint, look.cover);
+
+            return;
+
+        }
+
+        if (cache.surface()) |material| {
+
+            backdrop.make_glass(&back, rect, &material, look, edges == .all);
+            cache.valid = true;
+
+        }
+
+    }
+
+    if (cache.surface()) |material| {
+
+        switch (edges) {
+
+            .all => backdrop.blit_round(&back, &material, rect, clip),
+            .top => backdrop.blit_round_top(&back, &material, rect, clip),
+
+        }
 
     }
 

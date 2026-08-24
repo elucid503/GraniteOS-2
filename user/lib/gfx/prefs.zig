@@ -76,6 +76,61 @@ pub const TempUnit = enum(u8) {
 
 pub var temp_unit: TempUnit = .celsius;
 
+/// How strongly Quartz covers the wallpaper. Off paints solid chrome and skips glass.
+pub const Quartz = enum(u8) {
+
+    off = 0,
+    light = 1,
+    medium = 2,
+    heavy = 3,
+
+};
+
+pub const quartz_count: usize = 4;
+
+pub const quartz_names = [_][]const u8{
+
+    "Off",
+    "Light",
+    "Medium",
+    "Heavy",
+
+};
+
+pub var quartz: Quartz = .medium;
+
+pub fn quartz_on() bool {
+
+    return quartz != .off;
+
+}
+
+pub fn quartz_cover() u8 {
+
+    return switch (quartz) {
+
+        .off => 255,
+        .light => 172,
+        .medium => 214,
+        .heavy => 236,
+
+    };
+
+}
+
+pub fn quartz_shine() u8 {
+
+    return switch (quartz) {
+
+        .off => 0,
+        .light => 16,
+        .medium => 8,
+        .heavy => 4,
+
+    };
+
+}
+
 var loaded_generation: u64 = 0;
 
 const Palette = struct {
@@ -317,11 +372,12 @@ pub fn save() void {
 
     var buffer: [512]u8 = undefined;
     const stamp = loaded_generation +% 1;
-    const head = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\ntemp={d}\nstamp={d}\n", .{
+    const head = std.fmt.bufPrint(&buffer, "theme={d}\ntz={d}\ntemp={d}\nquartz={d}\nstamp={d}\n", .{
 
         @intFromEnum(active_theme),
         tz_offset_minutes,
         @intFromEnum(temp_unit),
+        @intFromEnum(quartz),
         stamp,
 
     }) catch return;
@@ -346,6 +402,7 @@ pub fn changed_event() events.Event {
 
     const bits: u64 =
         @as(u64, @intFromEnum(active_theme)) |
+        (@as(u64, @intFromEnum(quartz)) << 8) |
         (@as(u64, @intFromEnum(temp_unit)) << 16);
 
     return .{
@@ -370,9 +427,11 @@ pub fn apply_event(event: events.Event) bool {
 
     const bits: u64 = @bitCast(event.value);
     const theme_value: u8 = @truncate(bits & 0xff);
+    const quartz_value: u8 = @truncate((bits >> 8) & 0xff);
     const temp_value: u8 = @truncate((bits >> 16) & 0xff);
 
     if (theme_value < theme_count) apply_theme(@enumFromInt(theme_value));
+    if (quartz_value <= @intFromEnum(Quartz.heavy)) quartz = @enumFromInt(quartz_value);
     if (temp_value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(temp_value);
 
     tz_offset_minutes = event.x;
@@ -928,6 +987,18 @@ fn parse_config(text: []const u8) void {
 
             if (value <= @intFromEnum(TempUnit.fahrenheit)) temp_unit = @enumFromInt(value);
 
+        } else if (std.mem.startsWith(u8, line, "quartz=")) {
+
+            const value = std.fmt.parseInt(u8, line[7..], 10) catch continue;
+
+            if (value <= @intFromEnum(Quartz.heavy)) quartz = @enumFromInt(value);
+
+        } else if (std.mem.startsWith(u8, line, "frost=")) {
+
+            const value = std.fmt.parseInt(u8, line[6..], 10) catch continue;
+
+            if (value <= @intFromEnum(Quartz.heavy)) quartz = @enumFromInt(value);
+
         } else if (std.mem.startsWith(u8, line, "open.")) {
 
             handler.apply_config_line(line);
@@ -935,5 +1006,23 @@ fn parse_config(text: []const u8) void {
         }
 
     }
+
+}
+
+test "Quartz off paints solid chrome and medium matches the default cover" {
+
+    const previous = quartz;
+    defer quartz = previous;
+
+    quartz = .off;
+
+    try std.testing.expect(!quartz_on());
+    try std.testing.expectEqual(@as(u8, 255), quartz_cover());
+
+    quartz = .medium;
+
+    try std.testing.expect(quartz_on());
+    try std.testing.expectEqual(@as(u8, 214), quartz_cover());
+    try std.testing.expectEqual(@as(u8, 8), quartz_shine());
 
 }

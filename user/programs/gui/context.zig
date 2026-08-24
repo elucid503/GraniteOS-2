@@ -60,9 +60,8 @@ const pin_menu_actions = [_]?MenuAction{.remove_pin};
 
 const prompt_width: i32 = 300;
 const prompt_height: i32 = 120;
-// Must outlast the open fade: restore focuses the menu and blurs the desktop.
-const menu_fade_ms: u64 = 120;
-const blur_guard_ms: u64 = menu_fade_ms + 150;
+// Restore focuses the menu and blurs the desktop; ignore that blur for a beat.
+const blur_guard_ms: u64 = 270;
 const event_batch_max = 32;
 
 const pin_cell_w: i32 = 96;
@@ -435,33 +434,12 @@ fn open_menu(x: i32, y: i32, pin_index: ?usize) void {
 
     lib.wm.move_window(&connection, window.id, placement.x, placement.y) catch {};
 
-    // Fade in on open; restore focus once and ignore desktop blur until blur_guard_ms.
     paint_context_menu_content();
     gfx.fence();
     lib.wm.restore(&connection, window.id) catch {};
     window.present_all() catch {};
 
-    const start = menu_opened_ms;
-    var last_alpha: u8 = menu_fade_alpha();
-
-    while (true) {
-
-        if (lib.time.now_ms() -% start >= menu_fade_ms) break;
-
-        lib.time.sleep_ms(8);
-
-        const alpha = menu_fade_alpha();
-
-        if (alpha == last_alpha) continue;
-
-        last_alpha = alpha;
-        paint_context_menu_content();
-        gfx.fence();
-        window.present_all() catch {};
-
-    }
-
-    // Blur from the open focus shift may still be queued; restart the guard now.
+    // Focus shift from restore may still be queued; restart the dismiss guard now.
     menu_opened_ms = lib.time.now_ms();
     paint_desktop();
 
@@ -494,7 +472,7 @@ fn ensure_context_menu_window() !void {
 
     }
 
-    const window = try connection.create_window(width, height, proto.window.flag_undecorated, "context-menu");
+    const window = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_backdrop, "context-menu");
 
     try lib.wm.minimize(&connection, window.id);
 
@@ -824,33 +802,10 @@ fn paint_context_menu_content() void {
 
     const window = context_menu_window orelse return;
     const surface = &window.surface;
-    const fade = menu_fade_alpha();
 
     surface.fill(lib.draw.transparent);
-
-    const fill = lib.draw.with_alpha(ui.theme.surface, fade);
-
-    lib.draw.round.fill_round_rect(surface, surface.bounds(), 6, fill);
-    ui.stroke_round_rect(surface, surface.bounds(), 6, 1, lib.draw.with_alpha(ui.theme.border, fade));
+    ui.stroke_round_rect(surface, surface.bounds(), 6, 1, ui.theme.border);
     menu.paint_content(surface, &font);
-
-}
-
-fn menu_fade_alpha() u8 {
-
-    if (menu_fade_ms == 0) return 255;
-
-    const elapsed = lib.time.now_ms() -% menu_opened_ms;
-
-    if (elapsed >= menu_fade_ms) return 255;
-
-    return @intCast(@divTrunc(elapsed * 255, menu_fade_ms));
-
-}
-
-fn scale_u8(value: u8, amount: u8) u8 {
-
-    return @intCast((@as(u32, value) * @as(u32, amount) + 127) / 255);
 
 }
 

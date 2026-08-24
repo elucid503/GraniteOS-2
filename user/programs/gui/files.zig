@@ -1085,7 +1085,7 @@ fn ensure_menu_window() !void {
 
     }
 
-    const popup = try connection.create_window(width, height, proto.window.flag_undecorated, "files-menu");
+    const popup = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_backdrop, "files-menu");
 
     try lib.wm.minimize(&connection, popup.id);
 
@@ -2796,7 +2796,6 @@ fn paint_menu(surface: *const gfx.Surface) void {
     };
 
     surface.fill(lib.draw.transparent);
-    lib.draw.round.fill_round_rect(surface, bounds, 6, ui.theme.surface);
     ui.stroke_round_rect(surface, bounds, 6, 1, ui.theme.border);
 
     var cursor_y = menu_y + menu_inset;
@@ -2811,7 +2810,7 @@ fn paint_menu(surface: *const gfx.Surface) void {
                 const hovered = menu_hover != null and menu_hover.? == index;
                 const danger = action == .delete_item;
 
-                if (hovered) ui.fill_round_rect(surface, rect, 4, ui.theme.hover);
+                if (hovered) ui.fill_glass_row(surface, rect, 4);
 
                 const color = if (danger) ui.theme.warn else ui.theme.text;
                 const label = menu_label(action);
