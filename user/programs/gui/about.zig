@@ -71,7 +71,7 @@ fn run() !void {
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
-    window = try connection.create_window(440, 320, 0, "About GraniteOS 2");
+    window = try connection.create_window(440, 320, proto.window.flag_backdrop, "About GraniteOS 2");
 
     if (lib.fs.Client.connect(cap.memory)) |opened| {
 
@@ -279,7 +279,7 @@ fn paint(repaint_all: bool) void {
 
 fn paint_background(surface: *const gfx.Surface) void {
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
 
 }
 

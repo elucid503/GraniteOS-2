@@ -15,18 +15,27 @@ const Surface = draw.Surface;
 
 const round = draw.round;
 
-pub const downsample: i32 = 4;
 pub const default_alpha: u8 = 172;
 pub const default_haze: u8 = 16;
 pub const corner_radius: i32 = 8;
 
-const max_small: u32 = 64 * 1024;
+/// How hard the rim bends the picture behind the glass. 4 is the previous look; 5 is a little stronger.
+pub const bend_amount: u32 = 5;
+
+const max_small: u32 = 128 * 1024;
 
 pub const Look = struct {
 
     color: Color,
     cover: u8,
     shine: u8,
+
+};
+
+const Point = struct {
+
+    x: u32,
+    y: u32,
 
 };
 
@@ -105,23 +114,14 @@ pub fn ensure(cache: *Cache, width: u32, height: u32) bool {
 
 }
 
-/// Paint Quartz glass for `src_rect` into `dst`. `bend_bottom` is false for title bars,
-/// which sit on the window body and should not fold the wallpaper at that join.
+/// Paints Quartz glass for `src_rect` into `dst`.
 pub fn make_glass(src: *const Surface, src_rect: Rect, dst: *const Surface, look: Look, bend_bottom: bool) void {
 
     make_glass_into(src, src_rect, dst, look, bend_bottom, &scratch_a, &scratch_b);
 
 }
 
-pub fn make_glass_into(
-    src: *const Surface,
-    src_rect: Rect,
-    dst: *const Surface,
-    look: Look,
-    bend_bottom: bool,
-    small_a: []u32,
-    small_b: []u32,
-) void {
+pub fn make_glass_into(src: *const Surface, src_rect: Rect, dst: *const Surface, look: Look, bend_bottom: bool, small_a: []u32, small_b: []u32) void {
 
     const dest = src_rect.intersect(src.bounds()).intersect(Rect{
 
@@ -136,11 +136,12 @@ pub fn make_glass_into(
 
     const width: u32 = @intCast(dest.w);
     const height: u32 = @intCast(dest.h);
-    const small_w: u32 = @max(1, (width + @as(u32, downsample) - 1) / @as(u32, downsample));
-    const small_h: u32 = @max(1, (height + @as(u32, downsample) - 1) / @as(u32, downsample));
-    const too_large = small_w * small_h > small_a.len or small_w * small_h > small_b.len;
+    const limit = @min(small_a.len, small_b.len);
+    const step: u32 = if (fits_small(width, height, 2, limit)) 2 else 4;
+    const small_w: u32 = @max(1, (width + step - 1) / step);
+    const small_h: u32 = @max(1, (height + step - 1) / step);
 
-    if (too_large or width < 2 or height < 2) {
+    if (width < 2 or height < 2 or small_w * small_h > limit) {
 
         tint_rect(src, dest, dst, dest.translated(-src_rect.x, -src_rect.y), look);
 
@@ -179,9 +180,11 @@ pub fn blit_round(back: *const Surface, src: *const Surface, dest: Rect, clip: R
     };
 
     const r = radius;
+
     const top = Rect{ .x = dest.x + r, .y = dest.y, .w = dest.w - 2 * r, .h = r };
-    const body = Rect{ .x = dest.x, .y = dest.y + r, .w = dest.w, .h = dest.h - 2 * r };
     const bottom = Rect{ .x = dest.x + r, .y = dest.y + dest.h - r, .w = dest.w - 2 * r, .h = r };
+
+    const body = Rect{ .x = dest.x, .y = dest.y + r, .w = dest.w, .h = dest.h - 2 * r };
 
     for ([_]Rect{ top, body, bottom }) |part| {
 
@@ -281,6 +284,69 @@ pub fn blit_round_top(back: *const Surface, src: *const Surface, dest: Rect, cli
 
 }
 
+/// Decorated window bodies: round the bottom corners only so they meet the title bar flush.
+pub fn blit_round_bottom(back: *const Surface, src: *const Surface, dest: Rect, clip: Rect) void {
+
+    const visible = dest.intersect(clip);
+
+    if (visible.is_empty()) return;
+
+    const radius = corner_radius;
+
+    if (dest.w <= 2 * radius or dest.h <= radius) {
+
+        back.blit(visible.x, visible.y, src, visible.translated(-dest.x, -dest.y));
+
+        return;
+
+    }
+
+    const masks = round.masks_for(radius) orelse {
+
+        back.blit(visible.x, visible.y, src, visible.translated(-dest.x, -dest.y));
+
+        return;
+
+    };
+
+    const r = radius;
+    const body = Rect{ .x = dest.x, .y = dest.y, .w = dest.w, .h = dest.h - r };
+    const bottom = Rect{ .x = dest.x + r, .y = dest.y + dest.h - r, .w = dest.w - 2 * r, .h = r };
+
+    for ([_]Rect{ body, bottom }) |part| {
+
+        const part_visible = part.intersect(clip);
+
+        if (part_visible.is_empty()) continue;
+
+        back.blit(part_visible.x, part_visible.y, src, part_visible.translated(-dest.x, -dest.y));
+
+    }
+
+    const side: u32 = @intCast(r);
+    const bottom_y = dest.y + dest.h - r;
+
+    const Corner = struct { rect: Rect, mask: []const u8, opaque_rows: []const bool };
+
+    const corners = [_]Corner{
+
+        .{ .rect = .{ .x = dest.x, .y = bottom_y, .w = r, .h = r }, .mask = masks.bl, .opaque_rows = masks.bl_opaque },
+        .{ .rect = .{ .x = dest.x + dest.w - r, .y = bottom_y, .w = r, .h = r }, .mask = masks.br, .opaque_rows = masks.br_opaque },
+
+    };
+
+    for (corners) |corner| {
+
+        if (corner.rect.intersect(clip).is_empty()) continue;
+
+        const view = back.clipped(clip);
+
+        view.blit_masked(corner.rect.x, corner.rect.y, src, corner.rect.translated(-dest.x, -dest.y), corner.mask, side, corner.opaque_rows);
+
+    }
+
+}
+
 fn tint_rect(src: *const Surface, src_rect: Rect, dst: *const Surface, dst_rect: Rect, look: Look) void {
 
     var y: i32 = 0;
@@ -306,6 +372,7 @@ fn downsample_rect(src: *const Surface, src_rect: Rect, small: []u32, small_w: u
 
     const src_w: u32 = @intCast(src_rect.w);
     const src_h: u32 = @intCast(src_rect.h);
+    const inside = covers_bounds(src.bounds(), src_rect);
 
     var sy: u32 = 0;
 
@@ -332,16 +399,37 @@ fn downsample_rect(src: *const Surface, src_rect: Rect, small: []u32, small_w: u
 
             while (y < y_end) : (y += 1) {
 
-                var x = x0;
+                if (inside) {
 
-                while (x < x_end) : (x += 1) {
+                    const row = @as(u32, @intCast(y)) * src.stride + @as(u32, @intCast(x0));
+                    var x: u32 = 0;
+                    const span: u32 = @intCast(x_end - x0);
 
-                    const pixel = sample_pixel(src, x, y, 0);
+                    while (x < span) : (x += 1) {
 
-                    r += draw.red(pixel);
-                    g += draw.green(pixel);
-                    b += draw.blue(pixel);
-                    count += 1;
+                        const pixel = src.pixels[row + x];
+
+                        r += draw.red(pixel);
+                        g += draw.green(pixel);
+                        b += draw.blue(pixel);
+                        count += 1;
+
+                    }
+
+                } else {
+
+                    var x = x0;
+
+                    while (x < x_end) : (x += 1) {
+
+                        const pixel = sample_pixel(src, x, y, 0);
+
+                        r += draw.red(pixel);
+                        g += draw.green(pixel);
+                        b += draw.blue(pixel);
+                        count += 1;
+
+                    }
 
                 }
 
@@ -358,6 +446,12 @@ fn downsample_rect(src: *const Surface, src_rect: Rect, small: []u32, small_w: u
         }
 
     }
+
+}
+
+fn covers_bounds(outer: Rect, inner: Rect) bool {
+
+    return outer.x <= inner.x and outer.y <= inner.y and outer.x + outer.w >= inner.x + inner.w and outer.y + outer.h >= inner.y + inner.h;
 
 }
 
@@ -411,23 +505,25 @@ fn enlarge_glass(small: []const u32, small_w: u32, small_h: u32, dst: *const Sur
     const width: u32 = @intCast(dest.w);
     const height: u32 = @intCast(dest.h);
     const band = edge_band(width, height);
-    const pull = if (band == 0) 0 else @max(@as(u32, 1), (band * 2) / 3);
+    const pull = scaled_pull(band);
 
     var y: u32 = 0;
 
     while (y < height) : (y += 1) {
 
+        const out_row = @as(u32, @intCast(dest.y + @as(i32, @intCast(y)))) * dst.stride + @as(u32, @intCast(dest.x));
         var x: u32 = 0;
 
         while (x < width) : (x += 1) {
 
             const from = pull_inward(x, y, width, height, band, pull, bend_bottom);
-            const sample = sample_small(small, small_w, small_h, from.x, from.y, width, height);
-            var color = shine(draw.mix(sample, look.color, look.cover), look.shine);
+            const sample = sample_bent(small, small_w, small_h, x, y, from, width, height);
+            var color = draw.mix(sample, look.color, look.cover);
+
+            if (look.shine != 0) color = shine(color, look.shine);
 
             color = rim_light(color, x, y, width, height, bend_bottom);
-
-            dst.put_pixel(dest.x + @as(i32, @intCast(x)), dest.y + @as(i32, @intCast(y)), color);
+            dst.pixels[out_row + x] = color;
 
         }
 
@@ -442,12 +538,24 @@ fn edge_band(width: u32, height: u32) u32 {
 
     if (shortest < 8) return 0;
 
-    return @min(@as(u32, 14), shortest / 3);
+    const base = @min(@as(u32, 14), shortest / 3);
+
+    return @max(@as(u32, 1), base * bend_amount / 4);
+
+}
+
+fn scaled_pull(band: u32) u32 {
+
+    if (band == 0) return 0;
+
+    const base = @max(@as(u32, 1), (band * 2) / 3);
+
+    return @max(@as(u32, 1), base * bend_amount / 4);
 
 }
 
 /// Near the rim, look toward the middle of the panel. Strongest at the very edge, none inside.
-fn pull_inward(x: u32, y: u32, width: u32, height: u32, band: u32, pull: u32, bend_bottom: bool) struct { x: u32, y: u32 } {
+fn pull_inward(x: u32, y: u32, width: u32, height: u32, band: u32, pull: u32, bend_bottom: bool) Point {
 
     if (band == 0 or pull == 0) return .{ .x = x, .y = y };
 
@@ -489,20 +597,63 @@ fn pull_inward(x: u32, y: u32, width: u32, height: u32, band: u32, pull: u32, be
 
 }
 
+/// On a bent pixel, red looks one step farther in and blue one step less far (a tiny prism).
+/// Interior pixels (no bend) keep a single lookup.
+fn sample_bent(
+    small: []const u32,
+    small_w: u32,
+    small_h: u32,
+    x: u32,
+    y: u32,
+    from: Point,
+    dst_w: u32,
+    dst_h: u32,
+) Color {
+
+    const mid = sample_small(small, small_w, small_h, from.x, from.y, dst_w, dst_h);
+
+    if (from.x == x and from.y == y) return mid;
+
+    const red = sample_small(small, small_w, small_h, nudge(from.x, x, dst_w, 1), nudge(from.y, y, dst_h, 1), dst_w, dst_h);
+    const blue = sample_small(small, small_w, small_h, nudge(from.x, x, dst_w, -1), nudge(from.y, y, dst_h, -1), dst_w, dst_h);
+
+    return draw.rgb(draw.red(red), draw.green(mid), draw.blue(blue));
+
+}
+
+fn nudge(from: u32, origin: u32, limit: u32, step: i32) u32 {
+
+    if (from == origin or limit == 0) return from;
+
+    const along: i32 = if (from > origin) 1 else -1;
+    const next: i32 = @as(i32, @intCast(from)) + along * step;
+
+    if (next < 0) return 0;
+
+    return @min(@as(u32, @intCast(next)), limit - 1);
+
+}
+
+fn fits_small(width: u32, height: u32, step: u32, limit: usize) bool {
+
+    const small_w: u32 = @max(1, (width + step - 1) / step);
+    const small_h: u32 = @max(1, (height + step - 1) / step);
+
+    return small_w * small_h <= limit;
+
+}
+
 fn sample_small(small: []const u32, small_w: u32, small_h: u32, x: u32, y: u32, dst_w: u32, dst_h: u32) Color {
 
-    const fx = if (dst_w <= 1 or small_w <= 1) 0 else @divTrunc(x * (small_w - 1) * 256, dst_w - 1);
-    const fy = if (dst_h <= 1 or small_h <= 1) 0 else @divTrunc(y * (small_h - 1) * 256, dst_h - 1);
-    const x0 = fx >> 8;
-    const y0 = fy >> 8;
-    const tx: u8 = @truncate(fx);
-    const ty: u8 = @truncate(fy);
-    const x1 = @min(x0 + 1, small_w - 1);
-    const y1 = @min(y0 + 1, small_h - 1);
-    const top = draw.mix(small[y0 * small_w + x0], small[y0 * small_w + x1], tx);
-    const bottom = draw.mix(small[y1 * small_w + x0], small[y1 * small_w + x1], tx);
+    if (dst_w == 0 or dst_h == 0 or small_w == 0 or small_h == 0) return 0;
 
-    return draw.mix(top, bottom, ty);
+    const sx = @min(x * small_w / dst_w, small_w - 1);
+    const sy = @min(y * small_h / dst_h, small_h - 1);
+    const sx1 = @min(sx + 1, small_w - 1);
+    const row = sy * small_w;
+    const t: u8 = @intCast(@min(@as(u32, 255), (x * small_w % dst_w) * 255 / dst_w));
+
+    return draw.mix(small[row + sx], small[row + sx1], t);
 
 }
 
@@ -590,13 +741,13 @@ test "rim looks inward so the edge picks up interior colour" {
 
     var src_pixels = [_]u32{draw.rgb(200, 0, 0)} ** (32 * 32);
     var dst_pixels = [_]u32{0} ** (32 * 32);
-    var work_a: [64]u32 = undefined;
-    var work_b: [64]u32 = undefined;
+    var work_a: [256]u32 = undefined;
+    var work_b: [256]u32 = undefined;
 
     const src = Surface.from_pixels(&src_pixels, 32, 32);
     const dst = Surface.from_pixels(&dst_pixels, 32, 32);
 
-    src.fill_rect(.{ .x = 6, .y = 0, .w = 2, .h = 32 }, draw.rgb(0, 200, 0));
+    src.fill_rect(.{ .x = 8, .y = 0, .w = 4, .h = 32 }, draw.rgb(0, 200, 0));
 
     make_glass_into(&src, src.bounds(), &dst, Look{ .color = draw.rgb(0, 0, 0), .cover = 0, .shine = 0 }, true, &work_a, &work_b);
 

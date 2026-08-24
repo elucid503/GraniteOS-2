@@ -87,7 +87,8 @@ var back: draw.Surface = undefined;
 
 var manager = Manager{};
 var surfaces = surfaces_module.Store(manager_module.max_windows){};
-var backdrops: [manager_module.max_windows]backdrop.Cache = [_]backdrop.Cache{.{}} ** manager_module.max_windows;
+var glass_body: [manager_module.max_windows]backdrop.Cache = [_]backdrop.Cache{.{}} ** manager_module.max_windows;
+var glass_title: [manager_module.max_windows]backdrop.Cache = [_]backdrop.Cache{.{}} ** manager_module.max_windows;
 
 // Per-client event rings, keyed by the badge the name service minted for the client.
 
@@ -712,7 +713,8 @@ fn destroy_window(badge: u64, id: u64) i64 {
 
     release_grabs(window.id);
     surfaces.release(slot);
-    backdrops[slot].release();
+    glass_body[slot].release();
+    glass_title[slot].release();
     resize_damage[slot] = Rect.empty;
     caret_rects[slot] = Rect.empty;
 
@@ -744,7 +746,8 @@ fn destroy_owner_windows(owner: u64) void {
         if (manager.focus == window.id) focus_changed = true;
 
         surfaces.release(index);
-        backdrops[index].release();
+        glass_body[index].release();
+        glass_title[index].release();
         resize_damage[index] = Rect.empty;
         caret_rects[index] = Rect.empty;
 
@@ -818,7 +821,8 @@ fn resize_window(badge: u64, in: *const Message, out: *Message) i64 {
 
     resize_damage[slot] = resize_damage[slot].cover(changed);
 
-    backdrops[slot].valid = false;
+    glass_body[slot].valid = false;
+    glass_title[slot].valid = false;
 
     _ = surfaces.allocate(slot, window.width, window.height, window_format(window)) catch return -3;
 
@@ -1695,7 +1699,7 @@ fn handle_mode_change() void {
 fn add_damage(rect: Rect) void {
 
     add_damage_raw(rect);
-    invalidate_backdrops(rect, 0);
+    invalidate_glass(rect, 0, 0);
 
 }
 
@@ -1713,15 +1717,40 @@ fn add_surface_damage(window: *const Window, rect: Rect) void {
 
     add_damage_raw(rect);
 
-    if (!window.is_backdrop()) invalidate_backdrops(rect, window.id);
+    if (!window.is_backdrop()) invalidate_glass(rect, window.id, window.id);
 
 }
 
-fn invalidate_backdrops(rect: Rect, except_id: u32) void {
+fn stack_index_of(id: u32) ?usize {
 
     var index: usize = 0;
 
     while (index < manager.count) : (index += 1) {
+
+        if (manager.stacked(index).id == id) return index;
+
+    }
+
+    return null;
+
+}
+
+fn invalidate_glass(rect: Rect, except_id: u32, source_id: u32) void {
+
+    // Mark glass stale, but do not grow damage to each panel's full frame. The
+    // mover already damaged its new rectangle, so it rebuilds live; everyone
+    // else keeps the last picture until their whole surface is painted again.
+
+    const floor = if (source_id != 0) stack_index_of(source_id) else null;
+    var index: usize = 0;
+
+    while (index < manager.count) : (index += 1) {
+
+        if (floor) |start| {
+
+            if (index < start) continue;
+
+        }
 
         const window = manager.stacked(index);
 
@@ -1735,8 +1764,8 @@ fn invalidate_backdrops(rect: Rect, except_id: u32) void {
 
             if (frame.intersect(rect).is_empty()) continue;
 
-            backdrops[slot_of(window)].valid = false;
-            add_damage_raw(frame);
+            glass_body[slot_of(window)].valid = false;
+            if (window.decorated()) glass_title[slot_of(window)].valid = false;
 
         } else if (window.decorated() and lib.prefs.quartz_on()) {
 
@@ -1744,8 +1773,7 @@ fn invalidate_backdrops(rect: Rect, except_id: u32) void {
 
             if (bar.intersect(rect).is_empty()) continue;
 
-            backdrops[slot_of(window)].valid = false;
-            add_damage_raw(bar);
+            glass_title[slot_of(window)].valid = false;
 
         }
 
@@ -1755,7 +1783,8 @@ fn invalidate_backdrops(rect: Rect, except_id: u32) void {
 
 fn invalidate_all_backdrops() void {
 
-    for (&backdrops) |*cache| cache.valid = false;
+    for (&glass_body) |*cache| cache.valid = false;
+    for (&glass_title) |*cache| cache.valid = false;
 
 }
 
@@ -1779,14 +1808,17 @@ fn add_movement_damage(window: *const Window, before: Rect, after: Rect) void {
 
     if (rect_area(covered) <= rect_area(before) + rect_area(after)) {
 
-        add_window_damage(window, covered);
+        add_damage_raw(covered);
+        invalidate_glass(covered, 0, window.id);
 
         return;
 
     }
 
-    add_window_damage(window, before);
-    add_window_damage(window, after);
+    add_damage_raw(before);
+    add_damage_raw(after);
+    invalidate_glass(before, 0, window.id);
+    invalidate_glass(after, 0, window.id);
 
 }
 
@@ -2203,7 +2235,7 @@ fn draw_window(window: *Window, clip: Rect) void {
         const focused = manager.focus == window.id;
         const tint = if (focused) theme.title_focused else theme.title_blurred;
 
-        apply_material(slot, window.title_bar(), clip, tint, .top);
+        apply_material(&glass_title[slot], window.title_bar(), clip, glass_look(tint, false), .top);
 
         const face: ?*const draw.text.Face = if (title_font) |*f| f else null;
         render.draw_title_bar_overlay(&view, window, chrome_colors(), face);
@@ -2214,7 +2246,13 @@ fn draw_window(window: *Window, clip: Rect) void {
 
     const surface = surfaces.surface_of(slot) orelse return;
 
-    if (window.is_backdrop()) apply_material(slot, window.content(), clip, theme.title_blurred, .all);
+    if (window.is_backdrop()) {
+
+        const edges: GlassEdges = if (window.decorated()) .bottom else .all;
+
+        apply_material(&glass_body[slot], window.content(), clip, glass_look(theme.title_blurred, window.decorated()), edges);
+
+    }
 
     render.blit_content(&back, window, &surface, clip, theme.border);
 
@@ -2233,22 +2271,35 @@ const GlassEdges = enum {
 
     all,
     top,
+    bottom,
 
 };
 
-fn glass_look(color: draw.Color) backdrop.Look {
+fn glass_look(color: draw.Color, strong: bool) backdrop.Look {
+
+    var cover = lib.prefs.quartz_cover();
+    var tint = color;
+    var shine = lib.prefs.quartz_shine();
+
+    if (strong) {
+
+        tint = draw.mix(color, draw.rgb(0, 0, 0), 96);
+        if (cover < 236) cover += 18;
+        if (shine > 4) shine -= 4;
+
+    }
 
     return .{
 
-        .color = color,
-        .cover = lib.prefs.quartz_cover(),
-        .shine = lib.prefs.quartz_shine(),
+        .color = tint,
+        .cover = cover,
+        .shine = shine,
 
     };
 
 }
 
-fn apply_material(slot: usize, rect: Rect, clip: Rect, tint: draw.Color, edges: GlassEdges) void {
+fn apply_material(cache: *backdrop.Cache, rect: Rect, clip: Rect, look: backdrop.Look, edges: GlassEdges) void {
 
     const view = back.clipped(clip);
 
@@ -2256,8 +2307,9 @@ fn apply_material(slot: usize, rect: Rect, clip: Rect, tint: draw.Color, edges: 
 
         switch (edges) {
 
-            .all => draw.round.fill_round_rect(&view, rect, backdrop.corner_radius, tint),
-            .top => draw.round.fill_round_top_rect(&view, rect, backdrop.corner_radius, tint),
+            .all => draw.round.fill_round_rect(&view, rect, backdrop.corner_radius, look.color),
+            .top => draw.round.fill_round_top_rect(&view, rect, backdrop.corner_radius, look.color),
+            .bottom => draw.round.fill_round_rect(&view, rect, backdrop.corner_radius, look.color),
 
         }
 
@@ -2265,36 +2317,34 @@ fn apply_material(slot: usize, rect: Rect, clip: Rect, tint: draw.Color, edges: 
 
     }
 
-    const cache = &backdrops[slot];
     const complete = covers(clip, rect);
     const width: u32 = if (rect.w > 0) @intCast(rect.w) else 0;
     const height: u32 = if (rect.h > 0) @intCast(rect.h) else 0;
-    const look = glass_look(tint);
 
     if (!cache.valid or cache.width != width or cache.height != height) {
 
-        if (!complete) {
+        if (complete) {
 
-            const area = rect.intersect(clip);
+            if (!backdrop.ensure(cache, width, height)) {
 
-            if (!area.is_empty()) back.fill_rect_alpha(area, tint, look.cover);
+                back.fill_rect_alpha(rect.intersect(clip), look.color, look.cover);
+
+                return;
+
+            }
+
+            if (cache.surface()) |material| {
+
+                backdrop.make_glass(&back, rect, &material, look, edges != .top);
+                cache.valid = true;
+
+            }
+
+        } else if (cache.surface() == null or cache.width != width or cache.height != height) {
+
+            back.fill_rect_alpha(rect.intersect(clip), look.color, look.cover);
 
             return;
-
-        }
-
-        if (!backdrop.ensure(cache, width, height)) {
-
-            back.fill_rect_alpha(rect.intersect(clip), tint, look.cover);
-
-            return;
-
-        }
-
-        if (cache.surface()) |material| {
-
-            backdrop.make_glass(&back, rect, &material, look, edges == .all);
-            cache.valid = true;
 
         }
 
@@ -2306,6 +2356,7 @@ fn apply_material(slot: usize, rect: Rect, clip: Rect, tint: draw.Color, edges: 
 
             .all => backdrop.blit_round(&back, &material, rect, clip),
             .top => backdrop.blit_round_top(&back, &material, rect, clip),
+            .bottom => backdrop.blit_round_bottom(&back, &material, rect, clip),
 
         }
 
