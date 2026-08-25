@@ -209,7 +209,7 @@ fn paint() void {
     const surface = &window.surface;
     const width: i32 = @intCast(surface.width);
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
 
     tab_strip.paint(surface, &font, width, if (mode == .clock) 0 else 1);
 

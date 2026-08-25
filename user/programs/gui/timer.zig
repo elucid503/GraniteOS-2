@@ -405,7 +405,7 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
 
     regions.reset();
     tab_strip.paint(surface, &font, width, if (mode == .stopwatch) 0 else 1);

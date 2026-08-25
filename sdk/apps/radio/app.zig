@@ -1536,7 +1536,7 @@ fn paint() void {
 
     const surface = &window.surface;
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
     regions.reset();
 
     paint_toolbar(surface);

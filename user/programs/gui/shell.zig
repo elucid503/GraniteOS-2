@@ -954,7 +954,7 @@ var snapshot: [max_rows * max_cols]u8 = undefined;
 
 fn paint() void {
 
-    const bg = ui.theme.window_bg;
+    const bg = lib.draw.transparent;
     const fg = ui.theme.text;
     const cursor_color = ui.theme.accent;
 

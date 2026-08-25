@@ -363,7 +363,7 @@ fn paint() void {
     focus_rect = gfx.Rect.empty;
     end_rect = gfx.Rect.empty;
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
     font.draw(surface, pad, 16, 22, "Active Processes", ui.theme.text);
 
     if (!have_snapshot) {

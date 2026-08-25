@@ -1832,7 +1832,7 @@ fn ensure_notification_popup() !void {
 
     }
 
-    const window = try connection.create_window(width, height, proto.window.flag_undecorated, "notifications");
+    const window = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_backdrop, "notifications");
     try lib.wm.minimize(&connection, window.id);
     notification_popup = window;
 
@@ -1842,7 +1842,7 @@ fn ensure_notification_toast() !void {
 
     if (notification_toast != null) return;
 
-    const window = try connection.create_window(notification_popup_width(), notification_toast_h, proto.window.flag_undecorated, "notification");
+    const window = try connection.create_window(notification_popup_width(), notification_toast_h, proto.window.flag_undecorated | proto.window.flag_backdrop, "notification");
     try lib.wm.minimize(&connection, window.id);
     notification_toast = window;
 
@@ -4255,7 +4255,7 @@ fn notification_panel(surface: *const gfx.Surface) void {
 
     const rect = surface.bounds();
 
-    lib.draw.round.fill_round_rect(surface, rect, dock_radius(), ui.theme.surface);
+    surface.fill(lib.draw.transparent);
     ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
 
 }

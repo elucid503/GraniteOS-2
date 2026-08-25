@@ -2235,7 +2235,7 @@ fn draw_window(window: *Window, clip: Rect) void {
         const focused = manager.focus == window.id;
         const tint = if (focused) theme.title_focused else theme.title_blurred;
 
-        apply_material(&glass_title[slot], window.title_bar(), clip, glass_look(tint, false), .top);
+        apply_material(&glass_title[slot], window.title_bar(), clip, glass_look(tint, false), .top, window.id, pane_of(window, .title));
 
         const face: ?*const draw.text.Face = if (title_font) |*f| f else null;
         render.draw_title_bar_overlay(&view, window, chrome_colors(), face);
@@ -2250,7 +2250,7 @@ fn draw_window(window: *Window, clip: Rect) void {
 
         const edges: GlassEdges = if (window.decorated()) .bottom else .all;
 
-        apply_material(&glass_body[slot], window.content(), clip, glass_look(theme.title_blurred, window.decorated()), edges);
+        apply_material(&glass_body[slot], window.content(), clip, glass_look(theme.title_blurred, window.decorated()), edges, window.id, pane_of(window, .body));
 
     }
 
@@ -2274,6 +2274,25 @@ const GlassEdges = enum {
     bottom,
 
 };
+
+const PanePart = enum { title, body };
+
+fn pane_of(window: *const Window, part: PanePart) backdrop.Pane {
+
+    if (!window.decorated()) return .{};
+
+    const frame = window.frame();
+
+    return .{
+
+        .width = @intCast(frame.w),
+        .height = @intCast(frame.h),
+        .x = 0,
+        .y = if (part == .body) @as(u32, @intCast(manager_module.title_height)) else 0,
+
+    };
+
+}
 
 fn glass_look(color: draw.Color, strong: bool) backdrop.Look {
 
@@ -2299,7 +2318,7 @@ fn glass_look(color: draw.Color, strong: bool) backdrop.Look {
 
 }
 
-fn apply_material(cache: *backdrop.Cache, rect: Rect, clip: Rect, look: backdrop.Look, edges: GlassEdges) void {
+fn apply_material(cache: *backdrop.Cache, rect: Rect, clip: Rect, look: backdrop.Look, edges: GlassEdges, seed: u32, pane: backdrop.Pane) void {
 
     const view = back.clipped(clip);
 
@@ -2321,7 +2340,10 @@ fn apply_material(cache: *backdrop.Cache, rect: Rect, clip: Rect, look: backdrop
     const width: u32 = if (rect.w > 0) @intCast(rect.w) else 0;
     const height: u32 = if (rect.h > 0) @intCast(rect.h) else 0;
 
-    if (!cache.valid or cache.width != width or cache.height != height) {
+    const pane_w = if (pane.width == 0) width else pane.width;
+    const pane_h = if (pane.height == 0) height else pane.height;
+
+    if (!cache.valid or cache.width != width or cache.height != height or cache.seed != seed or cache.pane_w != pane_w or cache.pane_h != pane_h) {
 
         if (complete) {
 
@@ -2335,12 +2357,15 @@ fn apply_material(cache: *backdrop.Cache, rect: Rect, clip: Rect, look: backdrop
 
             if (cache.surface()) |material| {
 
-                backdrop.make_glass(&back, rect, &material, look, edges != .top);
+                backdrop.make_glass(&back, rect, &material, look, seed, edges != .top, pane);
+                cache.seed = seed;
+                cache.pane_w = pane_w;
+                cache.pane_h = pane_h;
                 cache.valid = true;
 
             }
 
-        } else if (cache.surface() == null or cache.width != width or cache.height != height) {
+        } else if (cache.surface() == null or cache.width != width or cache.height != height or cache.seed != seed or cache.pane_w != pane_w or cache.pane_h != pane_h) {
 
             back.fill_rect_alpha(rect.intersect(clip), look.color, look.cover);
 

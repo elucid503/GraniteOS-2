@@ -472,7 +472,7 @@ fn paint_tabs_only() void {
     const surface = &window.surface;
     const region = tab_bar_rect();
 
-    surface.fill_rect(region, ui.theme.window_bg);
+    surface.fill_rect(region, lib.draw.transparent);
     paint_tabs(surface);
 
     window.present(region) catch {};
@@ -483,7 +483,7 @@ fn paint() void {
 
     const surface = &window.surface;
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
 
     paint_tabs(surface);
 

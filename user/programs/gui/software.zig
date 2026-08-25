@@ -303,7 +303,7 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
     regions.reset();
 
     paint_header(surface, width);

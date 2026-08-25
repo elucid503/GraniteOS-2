@@ -2129,7 +2129,7 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
 
     paint_banner(surface, width);
 
@@ -2467,7 +2467,7 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
     const gutter = ui.scrollbar_width;
     const content_w = width - gutter;
 
-    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
+    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, lib.draw.transparent);
 
     if (t.entry_count == 0) {
 
@@ -2518,7 +2518,7 @@ fn paint_grid(surface: *const gfx.Surface, height: i32) void {
     const gutter = ui.scrollbar_width;
     const content_w = width - gutter;
 
-    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
+    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, lib.draw.transparent);
 
     if (t.entry_count == 0) {
 

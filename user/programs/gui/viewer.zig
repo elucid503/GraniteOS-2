@@ -433,7 +433,7 @@ fn paint() void {
     const width = win_w();
     const height = win_h();
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
 
     // Toolbar.
     surface.fill_rect(.{ .x = 0, .y = 0, .w = width, .h = toolbar_h }, ui.theme.surface);

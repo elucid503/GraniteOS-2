@@ -259,7 +259,7 @@ pub fn open_main(connection: *window.Connection, width: u32, height: u32, title:
 
     }
 
-    const result = try connection.create_window(create_w, create_h, 0, title);
+    const result = try connection.create_window(create_w, create_h, proto.window.flag_backdrop, title);
 
     if (restore_pos) |saved| {
 

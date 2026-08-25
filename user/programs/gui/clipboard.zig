@@ -89,7 +89,7 @@ fn run(args: []const []const u8) !void {
 
     clipboard.load(&history);
 
-    window = try connection.create_window(@intCast(popup_width), @intCast(popup_height()), proto.window.flag_undecorated, "Clipboard");
+    window = try connection.create_window(@intCast(popup_width), @intCast(popup_height()), proto.window.flag_undecorated | proto.window.flag_backdrop, "Clipboard");
 
     reveal();
 
@@ -456,7 +456,7 @@ fn paint() void {
 
     regions.reset();
 
-    surface.fill(ui.theme.window_bg);
+    surface.fill(lib.draw.transparent);
     ui.stroke_round_rect(surface, bounds, corner, 1, ui.theme.border);
 
     paint_header(surface);
@@ -534,7 +534,7 @@ fn paint_row(surface: *const gfx.Surface, position: usize, index: usize) void {
 
     regions.add(row_id, rect);
 
-    const fill = if (active) ui.theme.surface else ui.theme.window_bg;
+    const fill = if (active) ui.theme.surface else lib.draw.transparent;
 
     ui.fill_round_rect(surface, rect, row_radius, fill);
 
