@@ -1,5 +1,4 @@
 // Quartz: a cached crystal pane for chrome (launcher, menus, taskbar, title bars).
-// Light frost plus sharp internal cleavage; outer corners stay rounded.
 
 const std = @import("std");
 
@@ -24,8 +23,9 @@ const max_small: u32 = 128 * 1024;
 const max_planes: u32 = 5;
 const max_regions: u32 = 1 << max_planes;
 const prism_spread: i32 = 2;
+
 /// Shard lighting, lips, and prism only. Glass tint (Look.cover) is separate.
-const effect_cover: u8 = 92;
+const effect_cover: u8 = 128;
 
 pub const Look = struct {
 
@@ -741,17 +741,7 @@ fn displace(x: u32, y: u32, width: u32, height: u32, dx: i8, dy: i8) Point {
 }
 
 /// Interior facets are one lookup. Pixels on a cleavage get a bilinear red/blue split.
-fn sample_facet(
-    small: []const u32,
-    small_w: u32,
-    small_h: u32,
-    x: u32,
-    y: u32,
-    from: Point,
-    dst_w: u32,
-    dst_h: u32,
-    cover: u8,
-) Color {
+fn sample_facet(small: []const u32, small_w: u32, small_h: u32, x: u32, y: u32, from: Point, dst_w: u32, dst_h: u32, cover: u8) Color {
 
     const mid = sample_small(small, small_w, small_h, from.x, from.y, dst_w, dst_h);
 
