@@ -29,9 +29,17 @@ pub const SpinLock = struct {
     /// Spin for the lock alone; the caller already runs with interrupts disabled.
     pub fn lock(self: *SpinLock) void {
 
-        while (@atomicRmw(u32, &self.locked, .Xchg, 1, .acquire) != 0) {
+        while (true) {
 
-            std.atomic.spinLoopHint();
+            if (@atomicRmw(u32, &self.locked, .Xchg, 1, .acquire) == 0) return;
+
+            // Retrying the exchange bounces the line between every waiter; a shared read does not.
+
+            while (@atomicLoad(u32, &self.locked, .monotonic) != 0) {
+
+                std.atomic.spinLoopHint();
+
+            }
 
         }
 

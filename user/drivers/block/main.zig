@@ -187,18 +187,7 @@ fn run() !void {
 
     log_one("Block: virtio-blk driver ... Loaded\n");
 
-    var in = Message.zeroed;
-
-    while (true) {
-
-        const badge = try sys.receive(cap.driver.endpoint, &in);
-
-        var out = Message.zeroed;
-        out.data[0] = @bitCast(dispatch(badge, in.data[0], &in, &out));
-
-        sys.reply(in.reply, &out) catch {};
-
-    }
+    ipc.serve_with(cap.driver.endpoint, dispatch, .{});
 
 }
 
@@ -290,10 +279,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
 
 fn identify(out: *Message) i64 {
 
-    out.data[1] = proto.block.interface_id;
-    out.data[2] = proto.block.version;
-
-    return 0;
+    return ipc.identify(out, proto.block.interface_id, proto.block.version);
 
 }
 

@@ -71,7 +71,7 @@ fn run() !void {
 
     connection = try lib.desktop.connect(cap.memory);
     ready = connection.ready;
-    window = try connection.create_window(440, 320, proto.window.flag_backdrop, "About GraniteOS 2");
+    window = try connection.create_window(440, 320, 0, "About GraniteOS 2");
 
     if (lib.fs.Client.connect(cap.memory)) |opened| {
 
@@ -279,7 +279,7 @@ fn paint(repaint_all: bool) void {
 
 fn paint_background(surface: *const gfx.Surface) void {
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
 
 }
 
@@ -367,13 +367,7 @@ fn format_uptime(buffer: []u8) []const u8 {
 
 fn start_worker() !void {
 
-    const stack = try sys.create(.region, worker_stack_pages * page_size, cap.memory);
-    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
-    const thread = try sys.create_thread(@intFromPtr(&worker), base + worker_stack_pages * page_size);
-
-    sys.close(stack) catch {};
-
-    try sys.start(thread);
+    try lib.ipc.spawn_thread(&worker, cap.memory, worker_stack_pages);
 
 }
 

@@ -416,6 +416,10 @@ fn steal_from_peers(core: *Core) ?*Thread {
 
         if (!@atomicLoad(bool, &peer.online, .acquire)) continue;
 
+        // Published depth first: an empty peer costs one read instead of a contended lock round-trip.
+
+        if (normal_depth(peer) == 0) continue;
+
         peer.lock.lock();
 
         const stolen = blk: {
@@ -789,6 +793,28 @@ export fn kernel_thread_return() callconv(.c) noreturn {
 
 }
 
+// Every idle used to lock all four cores twice to answer these; the published depths answer them with reads.
+
+fn queued_depth(core: *Core) u32 {
+
+    return core.driver_queue.count() + normal_depth(core);
+
+}
+
+fn normal_depth(core: *Core) u32 {
+
+    var total: u32 = 0;
+
+    for (&core.levels) |*level| {
+
+        total += level.count();
+
+    }
+
+    return total;
+
+}
+
 fn peer_has_queued_work(core: *Core) bool {
 
     for (cores[0..core_count]) |*peer| {
@@ -796,25 +822,7 @@ fn peer_has_queued_work(core: *Core) bool {
         if (peer.id == core.id) continue;
         if (!@atomicLoad(bool, &peer.online, .acquire)) continue;
 
-        peer.lock.lock();
-
-        const found = blk: {
-
-            if (!peer.driver_queue.is_empty()) break :blk true;
-
-            for (&peer.levels) |*level| {
-
-                if (!level.is_empty()) break :blk true;
-
-            }
-
-            break :blk false;
-
-        };
-
-        peer.lock.unlock();
-
-        if (found) return true;
+        if (queued_depth(peer) != 0) return true;
 
     }
 
@@ -824,18 +832,7 @@ fn peer_has_queued_work(core: *Core) bool {
 
 fn core_has_queued_work(core: *Core) bool {
 
-    core.lock.lock();
-    defer core.lock.unlock();
-
-    if (!core.driver_queue.is_empty()) return true;
-
-    for (&core.levels) |*level| {
-
-        if (!level.is_empty()) return true;
-
-    }
-
-    return false;
+    return queued_depth(core) != 0;
 
 }
 
@@ -845,7 +842,7 @@ fn system_has_runnable_work() bool {
 
         if (!@atomicLoad(bool, &core.online, .acquire)) continue;
 
-        if (core.current != null) return true;
+        if (@atomicLoad(?*Thread, &core.current, .monotonic) != null) return true;
         if (core_has_queued_work(core)) return true;
 
     }

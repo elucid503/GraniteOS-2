@@ -1536,7 +1536,7 @@ fn paint() void {
 
     const surface = &window.surface;
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
     regions.reset();
 
     paint_toolbar(surface);
@@ -1963,11 +1963,7 @@ fn paint_transport(surface: *const gfx.Surface) void {
 
 fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, value: []const u8, color: gfx.Color) void {
 
-    const visible = ui.truncate(&font, value, size, rect.w);
-    const x = rect.x + @divTrunc(rect.w - font.text_width(visible, size), 2);
-    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
-
-    font.draw(surface, x, y, size, visible, color);
+    ui.label_in(surface, &font, rect, value, size, color);
 
 }
 

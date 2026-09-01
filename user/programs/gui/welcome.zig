@@ -1,4 +1,4 @@
-// The M9 welcome screen: a fullscreen Quartz window with the system title and a click-to-continue prompt.
+// The M9 welcome screen: a fullscreen window with the system title and a click-to-continue prompt.
 
 const lib = @import("lib");
 

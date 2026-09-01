@@ -42,7 +42,7 @@ var content_len: usize = 0;
 var cursor: usize = 0;
 var selection_anchor: ?usize = null;
 var selecting = false;
-var dragging_scrollbar = false;
+var scrollbar_drag = ui.ScrollBar{};
 var scroll_row: usize = 0;
 var dirty = false;
 
@@ -122,7 +122,7 @@ fn run(args: []const []const u8) !void {
                 if (event.code == events.button_left) {
 
                     selecting = false;
-                    dragging_scrollbar = false;
+                    scrollbar_drag.release();
 
                 }
 
@@ -524,11 +524,15 @@ fn row_len(target: usize) usize {
 
 fn mouse_down(x: i32, y: i32) void {
 
-    if (notepad_scrollbar_rect().contains(x, y) and total_rows() > visible_rows()) {
+    if (scrollbar_drag.press(notepad_scrollbar_rect(), scroll_model(), x, y)) |offset| {
 
-        dragging_scrollbar = true;
+        scroll_row = @intCast(offset);
+
+    }
+
+    if (scrollbar_drag.dragging) {
+
         selecting = false;
-        _ = drag_scrollbar(y);
         paint();
         return;
 
@@ -560,7 +564,7 @@ fn mouse_down(x: i32, y: i32) void {
 
 fn mouse_move(x: i32, y: i32) void {
 
-    if (dragging_scrollbar) {
+    if (scrollbar_drag.dragging) {
 
         const changed = drag_scrollbar(y);
         lib.cursor.set(&connection, .pointer);
@@ -718,7 +722,7 @@ fn paint() void {
     const surface = &window.surface;
     const width: i32 = @intCast(surface.width);
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
 
     paint_toolbar(surface, width);
 
@@ -838,12 +842,11 @@ fn scroll_model() ui.Scroll {
 
 fn drag_scrollbar(y: i32) bool {
 
-    const track = notepad_scrollbar_rect();
-    const before = scroll_row;
+    const next = scrollbar_drag.drag(notepad_scrollbar_rect(), scroll_model(), y) orelse return false;
 
-    scroll_row = @intCast(scroll_model().offset_at(track.h, y - track.y));
+    scroll_row = @intCast(next);
 
-    return scroll_row != before;
+    return true;
 
 }
 
@@ -868,21 +871,12 @@ fn paint_toolbar(surface: *const gfx.Surface, width: i32) void {
 
 fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, value: []const u8, color: gfx.Color) void {
 
-    const inner = rect.inset(inset);
-    const clipped = surface.clipped(inner);
-    const visible = ui.truncate(&font, value, size, inner.w);
-    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
-
-    font.draw(&clipped, inner.x, y, size, visible, color);
+    ui.label_left(surface, &font, rect, inset, value, size, color);
 
 }
 
 fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, value: []const u8, color: gfx.Color) void {
 
-    const visible = ui.truncate(&font, value, size, rect.w);
-    const x = rect.x + @divTrunc(rect.w - font.text_width(visible, size), 2);
-    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
-
-    font.draw(surface, x, y, size, visible, color);
+    ui.label_in(surface, &font, rect, value, size, color);
 
 }

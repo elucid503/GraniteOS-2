@@ -342,15 +342,14 @@ fn unmap(space_raw: u64, address: u64) Error!u64 {
 
 fn send(endpoint_raw: u64, message_ptr: u64) Error!u64 {
 
-    const handle = handle_from(@truncate(endpoint_raw));
-    const endpoint = try current_process().handles.resolve_as(handle, .endpoint);
+    const target = try resolve_endpoint_badged(endpoint_raw);
 
     const caller = current_thread();
-    caller.send_badge = try current_process().handles.badge_of(handle);
+    caller.send_badge = target.badge;
     caller.message_buffer = message_ptr;
 
     try read_message(caller, message_ptr);
-    try transfer.send(caller, endpoint);
+    try transfer.send(caller, target.endpoint);
 
     return 0;
 
@@ -384,15 +383,14 @@ fn receive(endpoint_raw: u64, message_ptr: u64, flags: u64) Error!u64 {
 
 fn call(endpoint_raw: u64, message_ptr: u64) Error!u64 {
 
-    const handle = handle_from(@truncate(endpoint_raw));
-    const endpoint = try current_process().handles.resolve_as(handle, .endpoint);
+    const target = try resolve_endpoint_badged(endpoint_raw);
 
     const caller = current_thread();
-    caller.send_badge = try current_process().handles.badge_of(handle);
+    caller.send_badge = target.badge;
     caller.message_buffer = message_ptr;
 
     try read_message(caller, message_ptr);
-    try transfer.call(caller, endpoint);
+    try transfer.call(caller, target.endpoint);
 
     // The reply landed in the caller's staged envelope while it was blocked; hand it back to user space.
 
@@ -566,6 +564,18 @@ fn resolve_as(raw: u64, comptime kind: object.Kind) Error!*object.TypeOf(kind) {
 
 }
 
+// Endpoint and badge under a single table lock: `send` and `call` want both on every message.
+
+fn resolve_endpoint_badged(raw: u64) Error!struct { endpoint: *Endpoint, badge: u64 } {
+
+    const resolved = try current_process().handles.resolve_with_badge(handle_from(@truncate(raw)));
+
+    if (resolved.target.kind != .endpoint) return error.WrongType;
+
+    return .{ .endpoint = object.container(Endpoint, resolved.target), .badge = resolved.badge };
+
+}
+
 // permissions: bit0 read, bit1 write, bit2 execute (03-syscall-abi.md Memory). User mappings are always EL0-visible.
 
 fn decode_permissions(bits: u64) arch.Permissions {
@@ -583,14 +593,61 @@ fn decode_permissions(bits: u64) arch.Permissions {
 
 // User copies via arch.translate so buffers may straddle page boundaries.
 
+// The envelope is copied on every send, receive, call, and reply; caching its frame spares a page-table walk each time.
+
+fn message_frame(owner: *Thread, va: VirtAddr) ?arch.PhysAddr {
+
+    const page = va & ~(page_size - 1);
+
+    if (page != (va + @sizeOf(Message) - 1) & ~(page_size - 1)) return null;
+
+    const generation = owner.process.address_space.generation();
+
+    if (owner.message_phys != 0 and owner.message_page == page and owner.message_generation == generation) {
+
+        return owner.message_phys;
+
+    }
+
+    const physical = arch.translate(owner.process.address_space.root, page) orelse return null;
+
+    owner.message_page = page;
+    owner.message_phys = physical;
+    owner.message_generation = generation;
+
+    return physical;
+
+}
+
 fn read_message(into: *Thread, message_ptr: VirtAddr) Error!void {
 
-    try copy_from_user_of(into, message_ptr, std.mem.asBytes(&into.staged));
+    if (message_frame(into, message_ptr)) |physical| {
+
+        const source: [*]const u8 = @ptrFromInt(physical + (message_ptr & (page_size - 1)));
+
+        @memcpy(std.mem.asBytes(&into.staged), source[0..@sizeOf(Message)]);
+
+    } else {
+
+        try copy_from_user_of(into, message_ptr, std.mem.asBytes(&into.staged));
+
+    }
+
     if (into.staged.handle_count > config.message_handle_slots) return error.Invalid;
 
 }
 
 fn write_message(from: *Thread, message_ptr: VirtAddr) Error!void {
+
+    if (message_frame(from, message_ptr)) |physical| {
+
+        const destination: [*]u8 = @ptrFromInt(physical + (message_ptr & (page_size - 1)));
+
+        @memcpy(destination[0..@sizeOf(Message)], std.mem.asBytes(&from.staged));
+
+        return;
+
+    }
 
     try copy_to_user_of(from, message_ptr, std.mem.asBytes(&from.staged));
 

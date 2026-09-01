@@ -91,27 +91,7 @@ fn run() !void {
 
     try sys.configure(cap.self_thread, .bound_notification, wake);
 
-    var in = Message.zeroed;
-
-    while (true) {
-
-        const badge = sys.receive(cap.server.endpoint, &in) catch continue;
-
-        if (badge == cap.notification_wake) {
-
-            pump();
-            continue;
-
-        }
-
-        var out = Message.zeroed;
-        out.data[0] = @bitCast(dispatch(badge, in.data[0], &in, &out));
-
-        sys.reply(in.reply, &out) catch {};
-
-        pump();
-
-    }
+    ipc.serve_with(cap.server.endpoint, dispatch, .{ .on_wake = pump, .after_reply = pump });
 
 }
 
@@ -219,10 +199,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
 
 fn identify(out: *Message) i64 {
 
-    out.data[1] = proto.socket.interface_id;
-    out.data[2] = proto.socket.version;
-
-    return 0;
+    return ipc.identify(out, proto.socket.interface_id, proto.socket.version);
 
 }
 
@@ -419,15 +396,6 @@ fn owned(badge: u64, sid: u64) ?u16 {
 
 fn session_span(session: *Session, offset: u64, length: u64) ?[]u8 {
 
-    if (session.base == 0) return null;
-
-    const start: usize = @intCast(offset);
-    const len: usize = @intCast(length);
-
-    if (start > session.capacity or len > session.capacity - start) return null;
-
-    const bytes: [*]u8 = @ptrFromInt(session.base);
-
-    return bytes[start .. start + len];
+    return session.span(offset, length);
 
 }

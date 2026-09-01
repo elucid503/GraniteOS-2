@@ -136,20 +136,7 @@ fn run() !void {
 
     lib.log.fmt("Rng: virtio-rng driver ... Loaded\n", .{});
 
-    var in = Message.zeroed;
-
-    while (true) {
-
-        const badge = try sys.receive(cap.driver.endpoint, &in);
-
-        if (badge == cap.notification_wake) continue;
-
-        var out = Message.zeroed;
-        out.data[0] = @bitCast(dispatch(in.data[0], &in, &out));
-
-        sys.reply(in.reply, &out) catch {};
-
-    }
+    ipc.serve_with(cap.driver.endpoint, dispatch, .{});
 
 }
 
@@ -201,7 +188,7 @@ fn init_device() !void {
 
 }
 
-fn dispatch(method: u64, in: *const Message, out: *Message) i64 {
+fn dispatch(_: u64, method: u64, in: *const Message, out: *Message) i64 {
 
     return switch (method) {
 
@@ -218,10 +205,7 @@ fn dispatch(method: u64, in: *const Message, out: *Message) i64 {
 
 fn identify(out: *Message) i64 {
 
-    out.data[1] = proto.entropy.interface_id;
-    out.data[2] = proto.entropy.version;
-
-    return 0;
+    return ipc.identify(out, proto.entropy.interface_id, proto.entropy.version);
 
 }
 

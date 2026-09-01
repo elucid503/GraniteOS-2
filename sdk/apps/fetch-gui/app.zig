@@ -148,8 +148,8 @@ var keyboard = lib.keymap.Keyboard{};
 
 var scroll_row: usize = 0;
 var body_scroll: usize = 0;
-var dragging_scrollbar = false;
-var dragging_body_scrollbar = false;
+var scrollbar_drag = ui.ScrollBar{};
+var body_scrollbar_drag = ui.ScrollBar{};
 var dragging_field = false;
 var pointer_x: i32 = 0;
 var pointer_y: i32 = 0;
@@ -270,8 +270,8 @@ fn run(args: []const []const u8) !void {
 
                     if (event.code == events.button_left) {
 
-                        dragging_scrollbar = false;
-                        dragging_body_scrollbar = false;
+                        scrollbar_drag.release();
+                        body_scrollbar_drag.release();
                         dragging_field = false;
 
                     }
@@ -283,11 +283,11 @@ fn run(args: []const []const u8) !void {
                     pointer_x = event.x;
                     pointer_y = event.y;
 
-                    if (dragging_scrollbar) {
+                    if (scrollbar_drag.dragging) {
 
                         if (drag_scrollbar(event.y)) dirty = true;
 
-                    } else if (dragging_body_scrollbar) {
+                    } else if (body_scrollbar_drag.dragging) {
 
                         if (drag_body_scrollbar(event.y)) dirty = true;
 
@@ -423,25 +423,25 @@ fn mouse_down(x: i32, y: i32) bool {
     pointer_x = x;
     pointer_y = y;
 
-    const body_track = body_scrollbar_rect();
+    if (body_scrollbar_drag.press(body_scrollbar_rect(), body_scroll_model(), x, y)) |offset| {
 
-    if (body_track.contains(x, y) and body_scroll_model().overflowing()) {
+        body_scroll = @intCast(offset);
 
-        dragging_body_scrollbar = true;
-
-        return drag_body_scrollbar(y);
+        return true;
 
     }
 
-    const track = scrollbar_rect();
+    if (body_scrollbar_drag.dragging) return false;
 
-    if (track.contains(x, y) and scroll_model().overflowing()) {
+    if (scrollbar_drag.press(scrollbar_rect(), scroll_model(), x, y)) |offset| {
 
-        dragging_scrollbar = true;
+        scroll_row = @intCast(offset);
 
-        return drag_scrollbar(y);
+        return true;
 
     }
+
+    if (scrollbar_drag.dragging) return false;
 
     const id = regions.hit(x, y);
 
@@ -631,23 +631,21 @@ fn wheel(delta: i64) bool {
 
 fn drag_scrollbar(y: i32) bool {
 
-    const track = scrollbar_rect();
-    const before = scroll_row;
+    const next = scrollbar_drag.drag(scrollbar_rect(), scroll_model(), y) orelse return false;
 
-    scroll_row = @intCast(scroll_model().offset_at(track.h, y - track.y));
+    scroll_row = @intCast(next);
 
-    return scroll_row != before;
+    return true;
 
 }
 
 fn drag_body_scrollbar(y: i32) bool {
 
-    const track = body_scrollbar_rect();
-    const before = body_scroll;
+    const next = body_scrollbar_drag.drag(body_scrollbar_rect(), body_scroll_model(), y) orelse return false;
 
-    body_scroll = @intCast(body_scroll_model().offset_at(track.h, y - track.y));
+    body_scroll = @intCast(next);
 
-    return body_scroll != before;
+    return true;
 
 }
 
@@ -1184,7 +1182,7 @@ fn paint() void {
     const surface = &window.surface;
     const width: i32 = @intCast(surface.width);
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
     regions.reset();
 
     paint_methods(surface);

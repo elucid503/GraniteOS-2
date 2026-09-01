@@ -472,7 +472,7 @@ fn paint_tabs_only() void {
     const surface = &window.surface;
     const region = tab_bar_rect();
 
-    surface.fill_rect(region, lib.draw.transparent);
+    surface.fill_rect(region, ui.theme.window_bg);
     paint_tabs(surface);
 
     window.present(region) catch {};
@@ -483,7 +483,7 @@ fn paint() void {
 
     const surface = &window.surface;
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
 
     paint_tabs(surface);
 
@@ -915,12 +915,7 @@ fn draw_text(surface: *const gfx.Surface, x: i32, y: i32, size: u32, content: []
 
 fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, content: []const u8, color: gfx.Color) void {
 
-    const inner = rect.inset(inset);
-    const clipped = surface.clipped(inner);
-    const visible = ui.truncate(&font, content, size, inner.w);
-    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
-
-    font.draw(&clipped, inner.x, y, size, visible, color);
+    ui.label_left(surface, &font, rect, inset, content, size, color);
 
 }
 

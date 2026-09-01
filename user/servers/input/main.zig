@@ -226,30 +226,9 @@ fn run() !void {
 
     try sys.configure(cap.self_thread, .bound_notification, wake);
 
-    var in = Message.zeroed;
+    // Requests and interrupts share the endpoint; `after_reply` sweeps for events a wake may have raced past.
 
-    while (true) {
-
-        const badge = sys.receive(cap.server.endpoint, &in) catch continue;
-
-        if (badge == cap.notification_wake) {
-
-            drain_devices();
-
-            continue;
-
-        }
-
-        var out = Message.zeroed;
-        out.data[0] = @bitCast(dispatch(in.data[0], &in, &out));
-
-        sys.reply(in.reply, &out) catch {};
-
-        // Requests and interrupts share the endpoint; sweep for events the wake may have raced past.
-
-        drain_devices();
-
-    }
+    ipc.serve_with(cap.server.endpoint, dispatch, .{ .on_wake = drain_devices, .after_reply = drain_devices });
 
 }
 
@@ -391,7 +370,7 @@ fn read_abs_info(device: *Device) void {
 
 }
 
-fn dispatch(method: u64, in: *const Message, out: *Message) i64 {
+fn dispatch(_: u64, method: u64, in: *const Message, out: *Message) i64 {
 
     return switch (method) {
 
@@ -406,10 +385,7 @@ fn dispatch(method: u64, in: *const Message, out: *Message) i64 {
 
 fn identify(out: *Message) i64 {
 
-    out.data[1] = proto.input.interface_id;
-    out.data[2] = proto.input.version;
-
-    return 0;
+    return ipc.identify(out, proto.input.interface_id, proto.input.version);
 
 }
 

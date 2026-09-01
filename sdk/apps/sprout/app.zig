@@ -2354,7 +2354,7 @@ fn paint() void {
 
     const surface = &window.surface;
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
 
     if (screen == .setup) {
 

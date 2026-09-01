@@ -239,10 +239,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
 
 fn identify(out: *Message) i64 {
 
-    out.data[1] = proto.filesystem.interface_id;
-    out.data[2] = proto.filesystem.version;
-
-    return 0;
+    return ipc.identify(out, proto.filesystem.interface_id, proto.filesystem.version);
 
 }
 
@@ -518,6 +515,8 @@ fn path_call(badge: u64, in: *const Message, kind: format.Kind, action: *const f
 
 // Session plumbing
 
+
+
 fn session_for(badge: u64) ?*Session {
 
     return sessions.find(badge);
@@ -538,12 +537,7 @@ fn file_for(badge: u64, id: u64) ?*OpenFile {
 
 fn session_span(session: *Session, offset: u64, length: u64) ?[]u8 {
 
-    if (session.base == 0) return null;
-    if (offset > session.capacity or length > session.capacity - offset) return null;
-
-    const bytes: [*]u8 = @ptrFromInt(session.base);
-
-    return bytes[@intCast(offset)..@intCast(offset + length)];
+    return session.span(offset, length);
 
 }
 

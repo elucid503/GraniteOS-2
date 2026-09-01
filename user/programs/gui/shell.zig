@@ -77,7 +77,7 @@ var scrollback_head: usize = 0;
 var scrollback_count: usize = 0;
 var scroll_row: usize = 0;
 var follow_bottom: bool = true;
-var dragging_scrollbar = false;
+var scrollbar_drag = ui.ScrollBar{};
 
 fn cell_at(row: usize, col: usize) usize {
 
@@ -319,13 +319,12 @@ fn drag_scrollbar(y: i32) bool {
     screen_lock.acquire();
     defer screen_lock.release();
 
-    const track = scrollbar_rect();
-    const before = scroll_row;
+    const next = scrollbar_drag.drag(scrollbar_rect(), scroll_model(), y) orelse return false;
 
-    scroll_row = @intCast(scroll_model().offset_at(track.h, y - track.y));
+    scroll_row = @intCast(next);
     follow_bottom = at_bottom();
 
-    return scroll_row != before;
+    return true;
 
 }
 
@@ -405,13 +404,20 @@ fn handle(event: events.Event) bool {
 
             if (event.code == events.button_left) {
 
-                if (scrollbar_rect().contains(event.x, event.y) and max_scroll() > 0) {
+                screen_lock.acquire();
 
-                    dragging_scrollbar = true;
-                    _ = drag_scrollbar(event.y);
-                    paint();
+                if (scrollbar_drag.press(scrollbar_rect(), scroll_model(), event.x, event.y)) |offset| {
+
+                    scroll_row = @intCast(offset);
+                    follow_bottom = at_bottom();
 
                 }
+
+                const started = scrollbar_drag.dragging;
+
+                screen_lock.release();
+
+                if (started) paint();
 
             }
 
@@ -419,13 +425,13 @@ fn handle(event: events.Event) bool {
 
         events.kind_button_up => {
 
-            if (event.code == events.button_left) dragging_scrollbar = false;
+            if (event.code == events.button_left) scrollbar_drag.release();
 
         },
 
         events.kind_pointer_move => {
 
-            if (dragging_scrollbar) {
+            if (scrollbar_drag.dragging) {
 
                 if (drag_scrollbar(event.y)) paint();
                 lib.cursor.set(&connection, .pointer);
@@ -954,7 +960,7 @@ var snapshot: [max_rows * max_cols]u8 = undefined;
 
 fn paint() void {
 
-    const bg = lib.draw.transparent;
+    const bg = ui.theme.window_bg;
     const fg = ui.theme.text;
     const cursor_color = ui.theme.accent;
 
@@ -1219,12 +1225,6 @@ fn stop_workers() void {
 
 fn start_thread(entry: *const fn () callconv(.c) noreturn) !void {
 
-    const stack = try sys.create(.region, worker_stack_pages * page_size, cap.memory);
-    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
-    const thread = try sys.create_thread(@intFromPtr(entry), base + worker_stack_pages * page_size);
-
-    sys.close(stack) catch {};
-
-    try sys.start(thread);
+    try lib.ipc.spawn_thread(entry, cap.memory, worker_stack_pages);
 
 }

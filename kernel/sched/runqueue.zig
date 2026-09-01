@@ -14,6 +14,9 @@ pub const RunQueue = struct {
     head: ?*Thread = null,
     tail: ?*Thread = null,
 
+    // Published atomically so a peer core can size this queue without taking the lock that guards it.
+    depth: u32 = 0,
+
     pub fn push(self: *RunQueue, thread: *Thread) void {
 
         thread.queue_link = .{ .next = null, .prev = self.tail };
@@ -29,6 +32,8 @@ pub const RunQueue = struct {
         }
 
         self.tail = thread;
+
+        @atomicStore(u32, &self.depth, self.depth + 1, .monotonic);
 
     }
 
@@ -49,6 +54,8 @@ pub const RunQueue = struct {
 
         thread.queue_link = .{};
 
+        @atomicStore(u32, &self.depth, self.depth - 1, .monotonic);
+
     }
 
     pub fn is_empty(self: *const RunQueue) bool {
@@ -57,19 +64,10 @@ pub const RunQueue = struct {
 
     }
 
+    /// Depth without walking the list; readable from a core that does not hold this queue's lock.
     pub fn count(self: *const RunQueue) u32 {
 
-        var total: u32 = 0;
-        var link = self.head;
-
-        while (link) |thread| {
-
-            total += 1;
-            link = thread.queue_link.next;
-
-        }
-
-        return total;
+        return @atomicLoad(u32, &self.depth, .monotonic);
 
     }
 

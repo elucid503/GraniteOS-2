@@ -121,10 +121,7 @@ fn detach(badge: u64) i64 {
 
 fn identify(out: *Message) i64 {
 
-    out.data[1] = proto.stream.interface_id;
-    out.data[2] = proto.stream.version;
-
-    return 0;
+    return ipc.identify(out, proto.stream.interface_id, proto.stream.version);
 
 }
 
@@ -272,12 +269,7 @@ fn session_span(badge: u64, offset: u64, length: u64) ?[]u8 {
 
     const session = session_for(badge) orelse return null;
 
-    if (session.base == 0) return null;
-    if (offset > session.capacity or length > session.capacity - offset) return null;
-
-    const buffer: [*]u8 = @ptrFromInt(session.base);
-
-    return buffer[@intCast(offset)..@intCast(offset + length)];
+    return session.span(offset, length);
 
 }
 
@@ -286,6 +278,8 @@ fn session_for(badge: u64) ?*Session {
     return sessions.find(badge);
 
 }
+
+
 
 // Hardware access
 

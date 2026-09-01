@@ -395,7 +395,7 @@ fn run() !void {
     window_list = try lib.wm.List.init(&connection, cap.memory);
     try window_list.subscribe();
 
-    bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel | proto.window.flag_backdrop, "taskbar");
+    bar = try connection.create_window(0, @intCast(bar_height()), proto.window.flag_panel, "taskbar");
 
     reload_apps();
     build_categories();
@@ -1629,9 +1629,9 @@ fn ensure_menu() !void {
     menu_row_limit = menu_rows_for_screen(screen.height);
 
     const height = menu_height();
-    var menu_window = try connection.create_window(menu_width(), height, proto.window.flag_undecorated | proto.window.flag_backdrop, "menu");
+    var menu_window = try connection.create_window(menu_width(), height, proto.window.flag_undecorated, "menu");
 
-    menu_window.surface.fill(lib.draw.transparent);
+    menu_window.surface.fill(ui.theme.window_bg);
 
     try lib.wm.minimize(&connection, menu_window.id);
 
@@ -1719,9 +1719,9 @@ fn ensure_pin_menu() !void {
 
     if (pin_menu != null) return;
 
-    var window = try connection.create_window(pin_menu_width(), pin_menu_height(), proto.window.flag_undecorated | proto.window.flag_backdrop, "pin-menu");
+    var window = try connection.create_window(pin_menu_width(), pin_menu_height(), proto.window.flag_undecorated, "pin-menu");
 
-    window.surface.fill(lib.draw.transparent);
+    window.surface.fill(ui.theme.surface);
 
     try lib.wm.minimize(&connection, window.id);
 
@@ -1832,7 +1832,7 @@ fn ensure_notification_popup() !void {
 
     }
 
-    const window = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_backdrop, "notifications");
+    const window = try connection.create_window(width, height, proto.window.flag_undecorated, "notifications");
     try lib.wm.minimize(&connection, window.id);
     notification_popup = window;
 
@@ -1842,7 +1842,7 @@ fn ensure_notification_toast() !void {
 
     if (notification_toast != null) return;
 
-    const window = try connection.create_window(notification_popup_width(), notification_toast_h, proto.window.flag_undecorated | proto.window.flag_backdrop, "notification");
+    const window = try connection.create_window(notification_popup_width(), notification_toast_h, proto.window.flag_undecorated, "notification");
     try lib.wm.minimize(&connection, window.id);
     notification_toast = window;
 
@@ -2118,9 +2118,8 @@ fn paint_pin_menu_content() void {
     const window = pin_menu orelse return;
     const surface = &window.surface;
 
-    surface.fill(lib.draw.transparent);
-    ui.stroke_round_rect(surface, surface.bounds(), 6, 1, ui.theme.border);
-    pin_menu_widget.paint_content(surface, &font);
+    surface.fill(ui.theme.surface);
+    pin_menu_widget.paint(surface, &font);
 
 }
 
@@ -2233,9 +2232,9 @@ fn ensure_weather_popup() !void {
 
     }
 
-    var window = try connection.create_window(calendar_width(), weather_height(), proto.window.flag_undecorated | proto.window.flag_backdrop, "weather");
+    var window = try connection.create_window(calendar_width(), weather_height(), proto.window.flag_undecorated, "weather");
 
-    window.surface.fill(lib.draw.transparent);
+    window.surface.fill(ui.theme.surface);
 
     try lib.wm.minimize(&connection, window.id);
 
@@ -2252,9 +2251,9 @@ fn ensure_calendar() !void {
 
     }
 
-    var window = try connection.create_window(calendar_width(), calendar_height(), proto.window.flag_undecorated | proto.window.flag_backdrop, "calendar");
+    var window = try connection.create_window(calendar_width(), calendar_height(), proto.window.flag_undecorated, "calendar");
 
-    window.surface.fill(lib.draw.transparent);
+    window.surface.fill(ui.theme.surface);
 
     try lib.wm.minimize(&connection, window.id);
 
@@ -2392,7 +2391,7 @@ fn paint_weather_content() void {
     const window = weather_popup orelse return;
     const surface = &window.surface;
 
-    panel(surface, surface.bounds());
+    panel(surface, surface.bounds(), ui.theme.surface);
 
     const pad = calendar_pad();
     const rect = Rect{
@@ -2466,7 +2465,7 @@ fn paint_calendar_content() void {
     const surface = &window.surface;
     const pad = calendar_pad();
 
-    panel(surface, surface.bounds());
+    panel(surface, surface.bounds(), ui.theme.surface);
 
     const grid_rect = Rect{
 
@@ -2892,7 +2891,7 @@ fn paint_bar_content(surface: *const gfx.Surface) void {
 
     const width: i32 = @intCast(surface.width);
 
-    panel(surface, surface.bounds());
+    panel(surface, surface.bounds(), ui.theme.surface_alt);
 
     bar_regions.reset();
 
@@ -3138,23 +3137,33 @@ fn paint_controls_indicators(surface: *const gfx.Surface, width: i32) void {
 
 fn paint_controls_indicators_only() void {
 
-    const width: i32 = @intCast(bar.surface.width);
+    const surface = &bar.surface;
+    const width: i32 = @intCast(surface.width);
+    const rect = Rect{ .x = controls_origin(width), .y = 0, .w = controls_width(), .h = bar_height() };
 
-    paint_bar_damage(.{ .x = controls_origin(width), .y = 0, .w = controls_width(), .h = bar_height() });
+    surface.fill_rect(rect, ui.theme.surface_alt);
+    paint_controls_indicators(surface, width);
+    bar.present(rect) catch {};
 
 }
 
 fn paint_clock_only() void {
 
-    const width: i32 = @intCast(bar.surface.width);
+    const surface = &bar.surface;
+    const width: i32 = @intCast(surface.width);
+    const rect = Rect{ .x = width - tray_width() - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() };
 
-    paint_bar_damage(.{ .x = width - tray_width() - clock_width(), .y = 0, .w = clock_width(), .h = bar_height() });
+    surface.fill_rect(rect, ui.theme.surface_alt);
+
+    paint_clock(surface, width);
+
+    bar.present(rect) catch {};
 
 }
 
 fn paint_menu() void {
 
-    // Grow at most once for broad results; filtering must not churn Quartz surfaces.
+    // Grow at most once for broad results; filtering must not churn window surfaces.
     sync_menu_size(false);
     paint_menu_content();
 
@@ -3187,8 +3196,7 @@ fn paint_menu_surface(surface: *const gfx.Surface) void {
 
     const width: i32 = @intCast(surface.width);
 
-    surface.fill(lib.draw.transparent);
-    ui.stroke_round_rect(surface, surface.bounds(), dock_radius(), 1, ui.theme.border);
+    panel(surface, surface.bounds(), ui.theme.window_bg);
 
     menu_regions.reset();
 
@@ -3595,7 +3603,7 @@ fn ensure_controls() !void {
 
     }
 
-    controls = try connection.create_window(controls_popup_width(), controls_popup_height(), proto.window.flag_undecorated | proto.window.flag_backdrop, "controls");
+    controls = try connection.create_window(controls_popup_width(), controls_popup_height(), proto.window.flag_undecorated, "controls");
 
     if (controls) |*window| lib.wm.minimize(&connection, window.id) catch {};
 
@@ -3705,7 +3713,7 @@ fn paint_controls_surface(surface: *const gfx.Surface) void {
     const row_h: i32 = 34;
     const width: i32 = @intCast(surface.width);
 
-    panel(surface, surface.bounds());
+    panel(surface, surface.bounds(), ui.theme.surface);
     controls_regions.reset();
 
     var y: i32 = pad;
@@ -3799,7 +3807,7 @@ fn ensure_switcher() !void {
 
     if (switcher != null) return;
 
-    switcher = try connection.create_window(switcher_popup_width(), switcher_popup_height(), proto.window.flag_undecorated | proto.window.flag_backdrop, "switcher");
+    switcher = try connection.create_window(switcher_popup_width(), switcher_popup_height(), proto.window.flag_undecorated, "switcher");
 
     if (switcher) |*window| lib.wm.minimize(&connection, window.id) catch {};
 
@@ -4130,7 +4138,7 @@ fn paint_switcher_surface(surface: *const gfx.Surface) void {
     const pad: i32 = 12;
     const row_h: i32 = 40;
 
-    panel(surface, surface.bounds());
+    panel(surface, surface.bounds(), ui.theme.surface);
     switcher_regions.reset();
 
     const search_rect = Rect{ .x = pad, .y = pad, .w = width - pad * 2, .h = search_height() - 8 };
@@ -4225,28 +4233,19 @@ fn draw_text(surface: *const gfx.Surface, x: i32, y: i32, size: u32, content: []
 
 fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, content: []const u8, color: gfx.Color) void {
 
-    const inner = rect.inset(inset);
-    const clipped = surface.clipped(inner);
-    const visible = ui.truncate(&font, content, size, inner.w);
-    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
-
-    font.draw(&clipped, inner.x, y, size, visible, color);
+    ui.label_left(surface, &font, rect, inset, content, size, color);
 
 }
 
 fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, content: []const u8, color: gfx.Color) void {
 
-    const visible = ui.truncate(&font, content, size, rect.w);
-    const x = rect.x + @divTrunc(rect.w - font.text_width(visible, size), 2);
-    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
-
-    font.draw(surface, x, y, size, visible, color);
+    ui.label_in(surface, &font, rect, content, size, color);
 
 }
 
-fn panel(surface: *const gfx.Surface, rect: Rect) void {
+fn panel(surface: *const gfx.Surface, rect: Rect, color: gfx.Color) void {
 
-    surface.fill_rect(rect, lib.draw.transparent);
+    lib.draw.round.fill_round_rect(surface, rect, dock_radius(), color);
     ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
 
 }
@@ -4255,7 +4254,7 @@ fn notification_panel(surface: *const gfx.Surface) void {
 
     const rect = surface.bounds();
 
-    surface.fill(lib.draw.transparent);
+    lib.draw.round.fill_round_rect(surface, rect, dock_radius(), ui.theme.surface);
     ui.stroke_round_rect(surface, rect, dock_radius(), 1, ui.theme.border);
 
 }
@@ -4274,7 +4273,7 @@ fn hover_damage(regions: *const ui.HitRegions, previous: u32, current: u32) Rect
 
 fn row_hover(surface: *const gfx.Surface, rect: Rect) void {
 
-    ui.fill_glass_row(surface, rect, 6);
+    ui.fill_round_rect(surface, rect, 6, ui.theme.hover);
 
 }
 

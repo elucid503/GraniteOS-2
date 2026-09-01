@@ -216,13 +216,7 @@ fn decode_name(in: *const Message, out: *[proto.launch.max_length]u8) ?[]const u
 
 fn start_reaper() !void {
 
-    const stack = try sys.create(.region, worker_stack_pages * page_size, cap.memory);
-    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
-    const thread = try sys.create_thread(@intFromPtr(&reaper), base + worker_stack_pages * page_size);
-
-    sys.close(stack) catch {};
-
-    try sys.start(thread);
+    try lib.ipc.spawn_thread(&reaper, cap.memory, worker_stack_pages);
 
 }
 

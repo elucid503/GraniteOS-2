@@ -49,7 +49,7 @@ var pointer_x: i32 = -1;
 var pointer_y: i32 = -1;
 var focus_rect = gfx.Rect.empty;
 var end_rect = gfx.Rect.empty;
-var dragging_scrollbar = false;
+var scrollbar_drag = ui.ScrollBar{};
 
 pub fn main(args: []const []const u8) u8 {
 
@@ -108,7 +108,7 @@ fn run(args: []const []const u8) !void {
                 pointer_x = event.x;
                 pointer_y = event.y;
 
-                if (dragging_scrollbar) {
+                if (scrollbar_drag.dragging) {
 
                     if (drag_scrollbar(event.y)) paint();
                     continue;
@@ -129,19 +129,19 @@ fn run(args: []const []const u8) !void {
 
                 var changed = false;
 
-                if (scrollbar_rect().contains(event.x, event.y) and item_count() > visible_rows()) {
+                if (scrollbar_drag.press(scrollbar_rect(), scroll_model(), event.x, event.y)) |offset| {
 
-                    dragging_scrollbar = true;
-                    changed = drag_scrollbar(event.y);
+                    scroll_row = @intCast(offset);
+                    changed = true;
 
-                } else changed = click(event.x, event.y);
+                } else if (!scrollbar_drag.dragging) changed = click(event.x, event.y);
 
                 if (changed) paint();
 
             },
             events.kind_button_up => {
 
-                if (event.code == events.button_left) dragging_scrollbar = false;
+                if (event.code == events.button_left) scrollbar_drag.release();
 
             },
             events.kind_prefs_changed => {
@@ -363,7 +363,7 @@ fn paint() void {
     focus_rect = gfx.Rect.empty;
     end_rect = gfx.Rect.empty;
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
     font.draw(surface, pad, 16, 22, "Active Processes", ui.theme.text);
 
     if (!have_snapshot) {
@@ -498,12 +498,11 @@ fn scroll_model() ui.Scroll {
 
 fn drag_scrollbar(y: i32) bool {
 
-    const track = scrollbar_rect();
-    const before = scroll_row;
+    const next = scrollbar_drag.drag(scrollbar_rect(), scroll_model(), y) orelse return false;
 
-    scroll_row = @intCast(scroll_model().offset_at(track.h, y - track.y));
+    scroll_row = @intCast(next);
 
-    return scroll_row != before;
+    return true;
 
 }
 

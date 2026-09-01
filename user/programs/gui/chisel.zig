@@ -1117,7 +1117,7 @@ fn paint_full() void {
     const width = win_w();
     const height = win_h();
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
     paint_toolbar(surface, width);
 
     const origin = canvas_origin();

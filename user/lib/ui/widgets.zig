@@ -115,6 +115,9 @@ pub const ButtonState = struct {
     hovered: bool = false,
     selected: bool = false,
 
+    /// Inert: idle fill and faint label, ignoring hover and selection.
+    disabled: bool = false,
+
     /// Accent (accent_dim) fill when idle - primary actions, operator keys.
     accent: bool = false,
 
@@ -136,7 +139,7 @@ pub const ButtonStyle = struct {
 
 pub fn button(surface: *const Surface, font: *const Face, rect: Rect, label: []const u8, state: ButtonState, style: ButtonStyle) void {
 
-    const fill = if (state.selected) ui.theme.active else if (state.hovered) ui.theme.hover else if (state.accent) ui.theme.accent_dim else style.idle orelse ui.theme.surface_alt;
+    const fill = row_fill(state, style.idle);
 
     ui.fill_round_rect(surface, rect, style.radius, fill);
 
@@ -146,7 +149,34 @@ pub fn button(surface: *const Surface, font: *const Face, rect: Rect, label: []c
 
     }
 
-    label_in(surface, font, rect, label, style.size, style.color orelse ui.theme.text);
+    const tint = if (state.disabled) ui.theme.text_faint else style.color orelse ui.theme.text;
+
+    label_in(surface, font, rect, label, style.size, tint);
+
+}
+
+/// The state-to-theme fill ladder shared by buttons, chips, and list rows.
+pub fn row_fill(state: ButtonState, idle: ?Color) Color {
+
+    if (state.disabled) return idle orelse ui.theme.surface_alt;
+
+    if (state.selected) return ui.theme.active;
+    if (state.hovered) return ui.theme.hover;
+    if (state.accent) return ui.theme.accent_dim;
+
+    return idle orelse ui.theme.surface_alt;
+
+}
+
+/// Left-align `label` in `rect` inset by `inset`, clipped and vertically centered.
+pub fn label_left(surface: *const Surface, font: *const Face, rect: Rect, inset: i32, label: []const u8, size: u32, color: Color) void {
+
+    const inner = rect.inset(inset);
+    const clipped = surface.clipped(inner);
+    const visible = ui.truncate(font, label, size, inner.w);
+    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
+
+    font.draw(&clipped, inner.x, y, size, visible, color);
 
 }
 
@@ -445,7 +475,7 @@ pub const Menu = struct {
                     const rect = Rect{ .x = self.x + self.inset, .y = cursor_y, .w = self.width - 2 * self.inset, .h = self.row_height - 1 };
                     const is_hovered = self.hover != null and self.hover.? == index;
 
-                    if (is_hovered) ui.fill_glass_row(surface, rect, 4);
+                    if (is_hovered) ui.fill_round_rect(surface, rect, 4, ui.theme.hover);
 
                     const visible = ui.truncate(font, label, 13, rect.w - 24);
                     const text_y = rect.y + @divTrunc(rect.h - font.line_height(13), 2);

@@ -303,7 +303,7 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
     regions.reset();
 
     paint_header(surface, width);
@@ -475,10 +475,7 @@ fn paint_packages(surface: *const gfx.Surface, width: i32, height: i32) void {
 
 fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, text: []const u8, color: gfx.Color) void {
 
-    const x = rect.x + @divTrunc(rect.w - font.text_width(text, size), 2);
-    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
-
-    font.draw(surface, x, y, size, text, color);
+    ui.label_in(surface, &font, rect, text, size, color);
 
 }
 
@@ -493,13 +490,7 @@ fn set_message(text: []const u8) void {
 
 fn start_worker() !void {
 
-    const stack = try sys.create(.region, worker_stack_pages * page_size, cap.memory);
-    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
-    const thread = try sys.create_thread(@intFromPtr(&worker), base + worker_stack_pages * page_size);
-
-    sys.close(stack) catch {};
-
-    try sys.start(thread);
+    try lib.ipc.spawn_thread(&worker, cap.memory, worker_stack_pages);
 
 }
 

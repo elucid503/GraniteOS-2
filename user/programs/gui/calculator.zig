@@ -480,7 +480,7 @@ fn paint() void {
     const surface = &window.surface;
     const width: i32 = @intCast(surface.width);
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
 
     const display = Rect{ .x = pad, .y = pad, .w = width - 2 * pad, .h = display_h };
 

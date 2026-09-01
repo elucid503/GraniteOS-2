@@ -69,9 +69,60 @@ pub fn status_of(message: *const Message) i64 {
 
 }
 
+// Reply status words (05-server-protocol.md). Servers returned these as bare literals; `status` maps an Error onto them.
+
+pub const status_bad_handle: i64 = -1;
+pub const status_wrong_type: i64 = -2;
+pub const status_no_memory: i64 = -3;
+pub const status_not_allowed: i64 = -4;
+pub const status_would_block: i64 = -5;
+pub const status_not_found: i64 = -6;
+pub const status_invalid: i64 = -7;
+pub const status_gone: i64 = -8;
+
+/// The exact inverse of `decoded`: report the real failure instead of flattening everything to Invalid.
+pub fn status_for(err: Error) i64 {
+
+    return switch (err) {
+
+        error.BadHandle => status_bad_handle,
+        error.WrongType => status_wrong_type,
+        error.NoMemory => status_no_memory,
+        error.NotAllowed => status_not_allowed,
+        error.WouldBlock => status_would_block,
+        error.NotFound => status_not_found,
+        error.Gone => status_gone,
+
+        else => status_invalid,
+
+    };
+
+}
+
+/// The `proto.identify` reply every server and driver returns: interface id and version in words 1 and 2.
+pub fn identify(out: *Message, interface_id: u64, version: u64) i64 {
+
+    out.data[1] = interface_id;
+    out.data[2] = version;
+
+    return 0;
+
+}
+
 // One request handler: unpack the method from `in`, fill `out`'s result words, and return the status word.
 
 pub const Dispatch = *const fn (badge: u64, method: u64, in: *const Message, out: *Message) i64;
+
+/// Hooks for servers that share their endpoint with a bound notification.
+pub const ServeOptions = struct {
+
+    /// Run when the endpoint delivers an interrupt/notification wake instead of a request.
+    on_wake: ?*const fn () void = null,
+
+    /// Run after each reply; sweeps for work a wake may have raced past.
+    after_reply: ?*const fn () void = null,
+
+};
 
 /// The canonical single-threaded server loop (05-server-protocol.md): receive, dispatch, reply.
 pub fn serve(endpoint: Handle, dispatch: Dispatch) noreturn {
@@ -108,10 +159,23 @@ pub fn serve_pool(endpoint: Handle, workers: usize, dispatch: Dispatch) noreturn
 
 fn start_worker(authority: Handle) Error!void {
 
-    const stack = try sys.create(.region, worker_stack_pages * page_size, authority);
+    try spawn_thread(&worker_entry, authority, worker_stack_pages);
+
+}
+
+/// Spawn a thread on its own freshly mapped stack of `pages` pages, and start it.
+/// The region handle is closed once mapped: the mapping keeps the memory alive.
+/// `pages` is the caller's, not a shared default — TLS workers need far more stack than a reaper.
+pub fn spawn_thread(entry: *const fn () callconv(.c) noreturn, authority: Handle, pages: usize) Error!void {
+
+    const bytes = pages * page_size;
+
+    const stack = try sys.create(.region, bytes, authority);
     const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
 
-    const thread = try sys.create_thread(@intFromPtr(&worker_entry), base + worker_stack_pages * page_size);
+    const thread = try sys.create_thread(@intFromPtr(entry), base + bytes);
+
+    sys.close(stack) catch {};
 
     try sys.start(thread);
 
@@ -125,16 +189,33 @@ fn worker_entry() callconv(.c) noreturn {
 
 fn serve_loop(endpoint: Handle, dispatch: Dispatch) noreturn {
 
+    serve_with(endpoint, dispatch, .{});
+
+}
+
+/// `serve` plus the wake and post-reply hooks drivers and stateful servers need.
+pub fn serve_with(endpoint: Handle, dispatch: Dispatch, options: ServeOptions) noreturn {
+
     var in = Message.zeroed;
 
     while (true) {
 
         const badge = sys.receive(endpoint, &in) catch continue;
 
+        if (badge == cap.notification_wake) {
+
+            if (options.on_wake) |wake| wake();
+
+            continue;
+
+        }
+
         var out = Message.zeroed;
         out.data[0] = @bitCast(dispatch(badge, in.data[0], &in, &out));
 
         sys.reply(in.reply, &out) catch {};
+
+        if (options.after_reply) |sweep| sweep();
 
     }
 
@@ -145,19 +226,19 @@ pub const Lock = @import("../sync.zig").Mutex;
 
 fn decoded(message: Message) Error!Message {
 
-    const status = status_of(&message);
+    const code = status_of(&message);
 
-    if (status >= 0) return message;
+    if (code >= 0) return message;
 
-    return switch (status) {
+    return switch (code) {
 
-        -1 => error.BadHandle,
-        -2 => error.WrongType,
-        -3 => error.NoMemory,
-        -4 => error.NotAllowed,
-        -5 => error.WouldBlock,
-        -6 => error.NotFound,
-        -8 => error.Gone,
+        status_bad_handle => error.BadHandle,
+        status_wrong_type => error.WrongType,
+        status_no_memory => error.NoMemory,
+        status_not_allowed => error.NotAllowed,
+        status_would_block => error.WouldBlock,
+        status_not_found => error.NotFound,
+        status_gone => error.Gone,
 
         else => error.Invalid,
 
@@ -166,6 +247,43 @@ fn decoded(message: Message) Error!Message {
 }
 
 const testing = std.testing;
+
+test "status is the exact inverse of decoded" {
+
+    const cases = [_]struct { code: i64, err: Error }{
+
+        .{ .code = -1, .err = error.BadHandle },
+        .{ .code = -2, .err = error.WrongType },
+        .{ .code = -3, .err = error.NoMemory },
+        .{ .code = -4, .err = error.NotAllowed },
+        .{ .code = -5, .err = error.WouldBlock },
+        .{ .code = -6, .err = error.NotFound },
+        .{ .code = -7, .err = error.Invalid },
+        .{ .code = -8, .err = error.Gone },
+
+    };
+
+    for (cases) |case| {
+
+        var message = Message.zeroed;
+        message.data[0] = @bitCast(case.code);
+
+        try testing.expectError(case.err, decoded(message));
+        try testing.expectEqual(case.code, status_for(case.err));
+
+    }
+
+}
+
+test "identify fills the interface words and succeeds" {
+
+    var out = Message.zeroed;
+
+    try testing.expectEqual(@as(i64, 0), identify(&out, 7, 3));
+    try testing.expectEqual(@as(u64, 7), out.data[1]);
+    try testing.expectEqual(@as(u64, 3), out.data[2]);
+
+}
 
 test "the envelope matches the kernel layout" {
 

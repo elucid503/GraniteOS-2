@@ -133,10 +133,7 @@ fn dispatch(_: u64, method: u64, _: *const Message, out: *Message) i64 {
 
 fn identify(out: *Message) i64 {
 
-    out.data[1] = proto.metrics.interface_id;
-    out.data[2] = proto.metrics.version;
-
-    return 0;
+    return ipc.identify(out, proto.metrics.interface_id, proto.metrics.version);
 
 }
 

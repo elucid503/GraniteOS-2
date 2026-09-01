@@ -75,6 +75,12 @@ pub const Thread = struct {
 
     staged: Message,
     message_buffer: VirtAddr,
+
+    // Cached translation of the envelope's page, good while the address space generation still matches.
+    message_page: VirtAddr,
+    message_phys: PhysAddr,
+    message_generation: u64,
+
     send_badge: u64,
     observed_badge: u64,
     is_call: bool,
@@ -292,6 +298,11 @@ fn alloc(process: *Process) Error!*Thread {
 
         .staged = undefined,
         .message_buffer = 0,
+
+        .message_page = 0,
+        .message_phys = 0,
+        .message_generation = 0,
+
         .send_badge = 0,
         .observed_badge = 0,
         .is_call = false,

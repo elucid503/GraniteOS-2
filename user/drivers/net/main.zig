@@ -203,27 +203,7 @@ fn run() !void {
 
     log_one("Net: virtio-net driver ... Loaded\n");
 
-    var in = Message.zeroed;
-
-    while (true) {
-
-        const badge = sys.receive(cap.driver.endpoint, &in) catch continue;
-
-        if (badge == cap.notification_wake) {
-
-            drain_rx();
-            continue;
-
-        }
-
-        var out = Message.zeroed;
-        out.data[0] = @bitCast(dispatch(badge, in.data[0], &in, &out));
-
-        sys.reply(in.reply, &out) catch {};
-
-        drain_rx();
-
-    }
+    ipc.serve_with(cap.driver.endpoint, dispatch, .{ .on_wake = drain_rx, .after_reply = drain_rx });
 
 }
 
@@ -348,10 +328,7 @@ fn dispatch(badge: u64, method: u64, in: *const Message, out: *Message) i64 {
 
 fn identify(out: *Message) i64 {
 
-    out.data[1] = proto.net.interface_id;
-    out.data[2] = proto.net.version;
-
-    return 0;
+    return ipc.identify(out, proto.net.interface_id, proto.net.version);
 
 }
 

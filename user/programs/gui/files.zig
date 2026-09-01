@@ -1085,7 +1085,7 @@ fn ensure_menu_window() !void {
 
     }
 
-    const popup = try connection.create_window(width, height, proto.window.flag_undecorated | proto.window.flag_backdrop, "files-menu");
+    const popup = try connection.create_window(width, height, proto.window.flag_undecorated, "files-menu");
 
     try lib.wm.minimize(&connection, popup.id);
 
@@ -2129,7 +2129,7 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
 
     paint_banner(surface, width);
 
@@ -2467,7 +2467,7 @@ fn paint_list(surface: *const gfx.Surface, height: i32) void {
     const gutter = ui.scrollbar_width;
     const content_w = width - gutter;
 
-    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, lib.draw.transparent);
+    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
 
     if (t.entry_count == 0) {
 
@@ -2518,7 +2518,7 @@ fn paint_grid(surface: *const gfx.Surface, height: i32) void {
     const gutter = ui.scrollbar_width;
     const content_w = width - gutter;
 
-    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, lib.draw.transparent);
+    surface.fill_rect(.{ .x = 0, .y = content_top, .w = width, .h = height - content_top }, ui.theme.window_bg);
 
     if (t.entry_count == 0) {
 
@@ -2796,6 +2796,7 @@ fn paint_menu(surface: *const gfx.Surface) void {
     };
 
     surface.fill(lib.draw.transparent);
+    lib.draw.round.fill_round_rect(surface, bounds, 6, ui.theme.surface);
     ui.stroke_round_rect(surface, bounds, 6, 1, ui.theme.border);
 
     var cursor_y = menu_y + menu_inset;
@@ -2810,7 +2811,7 @@ fn paint_menu(surface: *const gfx.Surface) void {
                 const hovered = menu_hover != null and menu_hover.? == index;
                 const danger = action == .delete_item;
 
-                if (hovered) ui.fill_glass_row(surface, rect, 4);
+                if (hovered) ui.fill_round_rect(surface, rect, 4, ui.theme.hover);
 
                 const color = if (danger) ui.theme.warn else ui.theme.text;
                 const label = menu_label(action);
@@ -3055,23 +3056,13 @@ fn text(surface: *const gfx.Surface, x: i32, y: i32, size: u32, content: []const
 
 fn text_in(surface: *const gfx.Surface, rect: Rect, inset: i32, size: u32, content: []const u8, color: gfx.Color) void {
 
-    const inner = rect.inset(inset);
-    const clipped = surface.clipped(inner);
-    const visible = ui.truncate(&font, content, size, inner.w);
-    const y = inner.y + @divTrunc(inner.h - font.line_height(size), 2);
-
-    font.draw(&clipped, inner.x, y, size, visible, color);
+    ui.label_left(surface, &font, rect, inset, content, size, color);
 
 }
 
 fn text_centered(surface: *const gfx.Surface, rect: Rect, size: u32, content: []const u8, color: gfx.Color) void {
 
-    const visible = ui.truncate(&font, content, size, rect.w - 8);
-    const text_w = font.text_width(visible, size);
-    const x = rect.x + @divTrunc(rect.w - text_w, 2);
-    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
-
-    font.draw(surface, x, y, size, visible, color);
+    ui.label_in(surface, &font, rect, content, size, color);
 
 }
 

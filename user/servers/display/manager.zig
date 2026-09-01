@@ -96,12 +96,6 @@ pub const Window = struct {
 
     }
 
-    pub fn is_backdrop(self: *const Window) bool {
-
-        return self.flags & proto.window.flag_backdrop != 0;
-
-    }
-
     pub fn stack_kind(self: *const Window) StackKind {
 
         if (self.is_panel()) return .panel;
@@ -1221,7 +1215,7 @@ test "list_info skips undecorated chrome windows" {
     var manager = test_manager();
 
     _ = manager.create(1, 0, 44, proto.window.flag_panel, "taskbar").?;
-    _ = manager.create(1, 200, 200, proto.window.flag_undecorated | proto.window.flag_backdrop, "menu").?;
+    _ = manager.create(1, 200, 200, proto.window.flag_undecorated, "menu").?;
     const app = manager.create(1, 100, 100, 0, "app").?;
 
     var records: [max_windows]proto.window.WindowInfo = undefined;
@@ -1229,18 +1223,6 @@ test "list_info skips undecorated chrome windows" {
 
     try testing.expectEqual(@as(usize, 1), count);
     try testing.expectEqual(app.id, records[0].id);
-
-}
-
-test "backdrop chrome is undecorated and not taskbar listed" {
-
-    var manager = test_manager();
-
-    const menu = manager.create(1, 200, 120, proto.window.flag_undecorated | proto.window.flag_backdrop, "menu").?;
-
-    try testing.expect(menu.is_backdrop());
-    try testing.expect(!menu.decorated());
-    try testing.expect(!menu.is_taskbar_listed());
 
 }
 

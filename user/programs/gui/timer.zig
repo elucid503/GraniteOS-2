@@ -405,7 +405,7 @@ fn paint() void {
     const width: i32 = @intCast(surface.width);
     const height: i32 = @intCast(surface.height);
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
 
     regions.reset();
     tab_strip.paint(surface, &font, width, if (mode == .stopwatch) 0 else 1);
@@ -479,13 +479,7 @@ fn format_ms(ms: u64, buffer: []u8) []const u8 {
 
 fn start_worker() !void {
 
-    const stack = try sys.create(.region, worker_stack_pages * page_size, cap.memory);
-    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
-    const thread = try sys.create_thread(@intFromPtr(&worker), base + worker_stack_pages * page_size);
-
-    sys.close(stack) catch {};
-
-    try sys.start(thread);
+    try lib.ipc.spawn_thread(&worker, cap.memory, worker_stack_pages);
 
 }
 

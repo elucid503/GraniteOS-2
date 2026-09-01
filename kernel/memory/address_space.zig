@@ -40,6 +40,9 @@ pub const AddressSpace = struct {
     asid: u16,
     asid_generation: u64,
 
+    // Changes on every map and unmap, so a cached translation elsewhere can tell it went stale.
+    generation_counter: u64,
+
     pub fn create() Error!*AddressSpace {
 
         const root = try arch.new_table();
@@ -55,6 +58,9 @@ pub const AddressSpace = struct {
 
             .asid = 0,
             .asid_generation = 0,
+
+            .generation_counter = 0,
+
         };
 
         for (&space.mappings) |*mapping| {
@@ -105,6 +111,8 @@ pub const AddressSpace = struct {
 
         if (end > self.next_base) self.next_base = end;
 
+        self.bump_generation();
+
         return base;
 
     }
@@ -121,6 +129,8 @@ pub const AddressSpace = struct {
 
         arch.unmap_range(self.root, slot.base, slot.pages);
 
+        self.bump_generation();
+
         slot.active = false;
         slot.base = 0;
         slot.pages = 0;
@@ -132,6 +142,19 @@ pub const AddressSpace = struct {
             if (region.header.release()) object.destroy(&region.header);
 
         }
+
+    }
+
+    /// A counter that changes whenever this space's mappings change.
+    pub fn generation(self: *AddressSpace) u64 {
+
+        return @atomicLoad(u64, &self.generation_counter, .monotonic);
+
+    }
+
+    fn bump_generation(self: *AddressSpace) void {
+
+        _ = @atomicRmw(u64, &self.generation_counter, .Add, 1, .monotonic);
 
     }
 

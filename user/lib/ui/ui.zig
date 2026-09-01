@@ -21,6 +21,9 @@ pub const Slider = widgets.Slider;
 pub const ButtonState = widgets.ButtonState;
 pub const ButtonStyle = widgets.ButtonStyle;
 pub const button = widgets.button;
+pub const row_fill = widgets.row_fill;
+pub const label_in = widgets.label_in;
+pub const label_left = widgets.label_left;
 
 const Color = draw.Color;
 const Face = text_mod.Face;
@@ -843,13 +846,6 @@ pub fn fill_round_rect(surface: *const Surface, rect: Rect, radius: i32, color: 
 
 }
 
-/// A hover chip that lets Quartz glass show through.
-pub fn fill_glass_row(surface: *const Surface, rect: Rect, radius: i32) void {
-
-    draw.round.fill_round_rect_alpha(surface, rect, radius, theme.hover, 210);
-
-}
-
 pub fn stroke_round_rect(surface: *const Surface, rect: Rect, radius: i32, width: i32, color: Color) void {
 
     draw.round.stroke_round_rect(surface, rect, radius, width, color);
@@ -1359,6 +1355,51 @@ pub const Scroll = struct {
 
 };
 
+// Thumb dragging: the press/drag/release state each scrolling app used to keep for itself.
+
+pub const ScrollBar = struct {
+
+    dragging: bool = false,
+
+    /// The offset a pointer at `y` selects on `track`; null when the content fits or nothing moved.
+    pub fn offset_for(track: Rect, scroll: Scroll, y: i32) ?i32 {
+
+        if (!scroll.overflowing() or track.h <= 0) return null;
+
+        const next = scroll.offset_at(track.h, y - track.y);
+
+        return if (next == scroll.clamped()) null else next;
+
+    }
+
+    /// Begin a drag when the press lands on the bar; returns the offset it selects.
+    pub fn press(self: *ScrollBar, track: Rect, scroll: Scroll, x: i32, y: i32) ?i32 {
+
+        if (!scroll.overflowing() or !track.contains(x, y)) return null;
+
+        self.dragging = true;
+
+        return offset_for(track, scroll, y);
+
+    }
+
+    /// Continue an in-flight drag; null when idle or the offset did not change.
+    pub fn drag(self: *const ScrollBar, track: Rect, scroll: Scroll, y: i32) ?i32 {
+
+        if (!self.dragging) return null;
+
+        return offset_for(track, scroll, y);
+
+    }
+
+    pub fn release(self: *ScrollBar) void {
+
+        self.dragging = false;
+
+    }
+
+};
+
 /// A vertical scrollbar in `track`; draws nothing when the content fits.
 pub fn scrollbar(surface: *const Surface, track: Rect, scroll: Scroll) void {
 
@@ -1434,6 +1475,39 @@ test "typing and backspace replace the active selection" {
 
     try testing.expect(buffer.backspace());
     try testing.expectEqualStrings("e", buffer.slice());
+
+}
+
+test "a scrollbar drag only tracks the pointer between press and release" {
+
+    var bar = ScrollBar{};
+
+    const track = Rect{ .x = 0, .y = 0, .w = scrollbar_width, .h = 100 };
+    const model = Scroll{ .offset = 0, .content = 200, .viewport = 100 };
+
+    // Nothing moves until a press lands on the bar.
+    try testing.expect(bar.drag(track, model, 50) == null);
+
+    try testing.expectEqual(@as(?i32, 100), bar.press(track, model, 4, 100));
+    try testing.expect(bar.dragging);
+    try testing.expectEqual(@as(?i32, 100), bar.drag(track, model, 100));
+
+    bar.release();
+
+    try testing.expect(!bar.dragging);
+    try testing.expect(bar.drag(track, model, 100) == null);
+
+}
+
+test "a press misses a bar whose content already fits" {
+
+    var bar = ScrollBar{};
+
+    const track = Rect{ .x = 0, .y = 0, .w = scrollbar_width, .h = 100 };
+    const fits = Scroll{ .offset = 0, .content = 40, .viewport = 100 };
+
+    try testing.expect(bar.press(track, fits, 4, 50) == null);
+    try testing.expect(!bar.dragging);
 
 }
 

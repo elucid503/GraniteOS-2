@@ -21,6 +21,18 @@ pub fn Sessions(comptime Extra: type, comptime capacity: usize) type {
 
             extra: Extra = .{},
 
+            /// The shared-buffer slice for `offset`/`length`, or null when unattached or out of bounds.
+            pub fn span(self: *const @This(), offset: u64, length: u64) ?[]u8 {
+
+                if (self.base == 0) return null;
+                if (offset > self.capacity or length > self.capacity - offset) return null;
+
+                const buffer: [*]u8 = @ptrFromInt(self.base);
+
+                return buffer[@intCast(offset)..@intCast(offset + length)];
+
+            }
+
         };
 
         slots: [capacity]Session = [_]Session{.{}} ** capacity,

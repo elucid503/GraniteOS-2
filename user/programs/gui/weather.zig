@@ -96,7 +96,7 @@ var hover_hour: ?usize = null;
 var regions = ui.HitRegions{};
 
 var scroll: i32 = 0;
-var dragging_scrollbar = false;
+var scrollbar_drag = ui.ScrollBar{};
 
 var tick: u32 = 0;
 var running: u32 = 1;
@@ -171,7 +171,7 @@ fn run(args: []const []const u8) !void {
 
                 events.kind_button_up => {
 
-                    if (event.code == events.button_left) dragging_scrollbar = false;
+                    if (event.code == events.button_left) scrollbar_drag.release();
 
                 },
 
@@ -183,7 +183,7 @@ fn run(args: []const []const u8) !void {
 
                 events.kind_pointer_move => {
 
-                    if (dragging_scrollbar) {
+                    if (scrollbar_drag.dragging) {
 
                         if (drag_scrollbar(event.y)) dirty = true;
 
@@ -233,13 +233,15 @@ fn run(args: []const []const u8) !void {
 
 fn click(x: i32, y: i32) bool {
 
-    if (scrollbar_rect().contains(x, y) and max_scroll() > 0) {
+    if (scrollbar_drag.press(scrollbar_rect(), scroll_model(), x, y)) |offset| {
 
-        dragging_scrollbar = true;
+        scroll = @intCast(offset);
 
-        return drag_scrollbar(y);
+        return true;
 
     }
+
+    if (scrollbar_drag.dragging) return false;
 
     const id = regions.hit(x, y);
 
@@ -268,12 +270,11 @@ fn wheel(delta: i64) bool {
 
 fn drag_scrollbar(y: i32) bool {
 
-    const track = scrollbar_rect();
-    const before = scroll;
+    const next = scrollbar_drag.drag(scrollbar_rect(), scroll_model(), y) orelse return false;
 
-    scroll = @intCast(scroll_model().offset_at(track.h, y - track.y));
+    scroll = @intCast(next);
 
-    return scroll != before;
+    return true;
 
 }
 
@@ -421,7 +422,7 @@ fn paint() void {
 
     const surface = &window.surface;
 
-    surface.fill(lib.draw.transparent);
+    surface.fill(ui.theme.window_bg);
 
     regions.reset();
 
@@ -802,21 +803,13 @@ fn paint_range_labels(surface: *const gfx.Surface, inner: Rect, low: i32, high: 
 
 fn text_in(surface: *const gfx.Surface, rect: Rect, size: u32, value: []const u8, color: gfx.Color) void {
 
-    const clipped = surface.clipped(rect);
-    const visible = ui.truncate(&font, value, size, rect.w);
-    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
-
-    font.draw(&clipped, rect.x, y, size, visible, color);
+    ui.label_left(surface, &font, rect, 0, value, size, color);
 
 }
 
 fn text_center(surface: *const gfx.Surface, rect: Rect, size: u32, value: []const u8, color: gfx.Color) void {
 
-    const visible = ui.truncate(&font, value, size, rect.w);
-    const x = rect.x + @divTrunc(rect.w - font.text_width(visible, size), 2);
-    const y = rect.y + @divTrunc(rect.h - font.line_height(size), 2);
-
-    font.draw(surface, x, y, size, visible, color);
+    ui.label_in(surface, &font, rect, value, size, color);
 
 }
 
@@ -928,13 +921,7 @@ fn condition_icon(code: u32, day: bool) []const u8 {
 
 fn start_worker() !void {
 
-    const stack = try sys.create(.region, worker_stack_pages * page_size, cap.memory);
-    const base = try sys.map(cap.self_space, stack, 0, sys.read | sys.write);
-    const thread = try sys.create_thread(@intFromPtr(&worker), base + worker_stack_pages * page_size);
-
-    sys.close(stack) catch {};
-
-    try sys.start(thread);
+    try lib.ipc.spawn_thread(&worker, cap.memory, worker_stack_pages);
 
 }
 

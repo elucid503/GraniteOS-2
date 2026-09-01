@@ -287,8 +287,7 @@ pub const Window = struct {
 
         const region = reply.handles[0].handle;
         const base = try sys.map(cap.self_space, region, 0, sys.read | sys.write);
-        const format: gfx.Format = if (flags & proto.window.flag_backdrop != 0) .alpha else .xrgb;
-        const surface = gfx.Surface.from_base_format(base, width, height, stride, format);
+        const surface = gfx.Surface.from_base(base, width, height, stride);
 
         return .{
 
